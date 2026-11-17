@@ -193,7 +193,7 @@ fn the_first_players_found_lands_of_their_own_and_the_invited_join_them() {
     let scratch = Scratch::new("founders");
     let mut realm = eq_server::Realm::open(&eq_server::Config { seed: 4, bots: 6, founders: 2, data: Some(scratch.path().to_path_buf()) }).unwrap();
     assert_eq!(realm.game().population(), 6, "the bots are settled on the shoreline");
-    assert_eq!(realm.game().zones().len(), 1);
+    assert_eq!(realm.game().zones().len(), 2, "the shoreline and the Meeting Ground");
 
     let ada = realm.enter("Ada", "a", false).unwrap();
     assert!(told(&ada.deliveries, ada.who).contains("Nobody has stood here before you."));
@@ -208,7 +208,7 @@ fn the_first_players_found_lands_of_their_own_and_the_invited_join_them() {
     assert!(told(&cyd.deliveries, ada).contains("Cyd walks out of the tide"), "Ada sees her guest arrive");
     assert!(told(&cyd.deliveries, cyd.who).contains("The Salt March, founded by Ada of House Thorne."));
     assert_eq!(told(&cyd.deliveries, ben), "", "Ben is in another land");
-    assert_eq!(realm.game().zones().len(), 3);
+    assert_eq!(realm.game().zones().len(), 4, "the shoreline, the Meeting Ground, and a land each");
 
     // The lands, their names and who lives where all survive a restart.
     realm.close();

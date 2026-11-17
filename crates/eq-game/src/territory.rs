@@ -27,6 +27,50 @@ pub struct Territory {
     pub anchor: PlaceId,
 }
 
+impl Territory {
+    /// Adds the pass: the one way out of the territory, barred by a
+    /// sentinel. It lies beyond the place furthest from the haven that
+    /// has open ground beside it, so the way out is through the deep.
+    /// Returns the pass.
+    pub fn add_pass(&mut self) -> PlaceId {
+        let depth = |id: PlaceId| {
+            let mut steps = 0u32;
+            let mut at = id;
+            while at != self.anchor {
+                let Some(exit) = self.map.first_step(at, self.anchor, |_| true) else { break };
+                at = exit.to;
+                steps += 1;
+            }
+            steps
+        };
+        let taken: Vec<(i32, i32)> = self.map.places().map(|(_, place)| place.position).collect();
+        let mut furthest_first: Vec<(PlaceId, (i32, i32))> = self.map.places().map(|(id, place)| (id, place.position)).collect();
+        furthest_first.sort_by_key(|&(id, _)| (core::cmp::Reverse(depth(id)), id));
+        let (from, way, at) = furthest_first
+            .into_iter()
+            .find_map(|(id, at)| {
+                WAYS.iter().enumerate().map(|(way, (_, _, step))| (id, way, (at.0 + step.0, at.1 + step.1))).find(|(_, _, spot)| !taken.contains(spot))
+            })
+            .expect("a tree on a grid always has open ground beside it");
+        let pass = self.map.add_place(place(
+            "The Pass",
+            "A cleft between two shoulders of rock, the only way out of this land. Whatever lies beyond, something stands between you and it.",
+            Safety::Contested,
+            None,
+            at,
+            Some(CreatureKind::Sentinel),
+        ));
+        let (out, back, _) = WAYS[way];
+        self.map.connect_both(from, out, pass, back, Passage::Open).expect("both places are on the map");
+        // The map starts at its corner, so shift it if the pass fell outside.
+        let shift = (at.0.min(0), at.1.min(0));
+        for (_, data) in self.map.places_mut() {
+            data.position = (data.position.0 - shift.0, data.position.1 - shift.1);
+        }
+        pass
+    }
+}
+
 /// How many places a territory has besides its haven.
 pub const DEPOSITS: usize = 9;
 
@@ -240,6 +284,28 @@ mod tests {
                 let (_, back, _) = WAYS.iter().find(|(out, _, _)| *out == exit.label).copied().unwrap();
                 assert_eq!(territory.map.exit(exit.to, back).map(|way| way.to), Some(from), "seed {seed}");
             }
+        }
+    }
+
+    #[test]
+    fn a_pass_is_one_more_place_at_the_far_end_with_a_sentinel_in_it() {
+        for seed in 0..50 {
+            let mut territory = generate(seed);
+            let before = territory.clone();
+            let pass = territory.add_pass();
+            assert_eq!(territory.map.len(), DEPOSITS + 2, "seed {seed}");
+            let data = *territory.map.place(pass).unwrap();
+            assert_eq!((data.lair, data.safety, data.deposit), (Some(CreatureKind::Sentinel), Safety::Contested, None), "seed {seed}");
+            assert_eq!(territory.map.exits(pass).len(), 1, "seed {seed}: a pass has one way in");
+            let spots: BTreeSet<(i32, i32)> = places(&territory).iter().map(|place| place.position).collect();
+            assert_eq!(spots.len(), DEPOSITS + 2, "seed {seed}");
+            assert!(spots.iter().all(|&(x, y)| x >= 0 && y >= 0), "seed {seed}");
+            let inside = territory.map.exits(pass)[0].to;
+            let (a, b) = (data.position, territory.map.place(inside).unwrap().position);
+            assert_eq!((a.0 - b.0).abs() + (a.1 - b.1).abs(), 1, "seed {seed}");
+            // Everything else is as it was, give or take where the corner is.
+            assert_eq!(before.map.len() + 1, territory.map.len());
+            assert_eq!(before.anchor, territory.anchor);
         }
     }
 

@@ -111,6 +111,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::PassageChanged { .. } => None,
         Event::CreatureAppeared { place, being } if *place == here => Some(match being.kind {
             CreatureKind::Lurker => "The black water stirs. A lurker has come back.".into(),
+            CreatureKind::Sentinel => "Stone grinds on stone. A sentinel stands in the pass again.".into(),
             CreatureKind::BodyGuard => {
                 format!("{} rises and stands guard over what it dropped.", capitalise(&being_name(game, *being, viewer)))
             }
@@ -162,11 +163,18 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             died(game, &capitalise(&being_name(game, *being, viewer)), *place, *passing)
         }
         Outcome::NoSuchCreature => "There is nothing like that here to fight.".into(),
+        Outcome::HitCreature { being, damage: 0, .. } => format!(
+            "Your blow glances off {}. You are not strong enough to hurt it yet.",
+            being_name(game, *being, viewer),
+        ),
         Outcome::HitCreature { being, damage, left } => {
             format!("You strike {} for {damage}. It has {left} health left.", being_name(game, *being, viewer))
         }
         Outcome::Slew { being: Being { kind: CreatureKind::Lurker, .. } } => {
             "The lurker sinks back into the black water. In time another will come.".into()
+        }
+        Outcome::Slew { being: Being { kind: CreatureKind::Sentinel, .. } } => {
+            "The sentinel breaks and falls. The pass is open, until another rises to bar it.".into()
         }
         Outcome::Slew { being } => {
             format!("{} falls and is still. What it kept is there for the taking.", capitalise(&being_name(game, *being, viewer)))
@@ -433,9 +441,23 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
             lines.push(format!("{} has begun a rite here. It needs a second voice (rite).", name_of(game, beginner)));
         }
     }
+    // Ways that lead out of this land, or into one.
+    let zone = game.zone_at(character.place());
+    for exit in game.map().exits(character.place()).iter().filter(|exit| !zone.contains(exit.to)) {
+        let beyond = game.zone_at(exit.to);
+        lines.push(match beyond.founder() {
+            Some(_) => format!(
+                "The {} pass leads down into {}.",
+                exit.label,
+                beyond.name().map_or_else(|| "a land without a name".into(), String::from),
+            ),
+            None => format!("{} lies {}, where the lands meet.", place_name(game, exit.to), exit.label),
+        });
+    }
     for creature in game.creatures_at(character.place()) {
         lines.push(match creature.being.kind {
             CreatureKind::Lurker => format!("A lurker waits here, half in the water ({} health).", creature.health()),
+            CreatureKind::Sentinel => format!("A sentinel bars the pass, taller than you and in no hurry ({} health).", creature.health()),
             CreatureKind::BodyGuard => format!(
                 "{} stands guard here ({} health).",
                 capitalise(&being_name(game, creature.being, viewer)),
@@ -547,6 +569,7 @@ fn played(game: &Game, viewer: CharacterId) -> Duration {
 fn being_name(game: &Game, being: Being, viewer: CharacterId) -> String {
     match (being.kind, being.of) {
         (CreatureKind::Lurker, _) => "the lurker".into(),
+        (CreatureKind::Sentinel, _) => "the sentinel".into(),
         (CreatureKind::BodyGuard, Some(owner)) if owner == viewer => "your own body".into(),
         (CreatureKind::BodyGuard, Some(owner)) => format!("{}'s body", name_of(game, owner)),
         (CreatureKind::BodyGuard, None) => "a risen body".into(),

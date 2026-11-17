@@ -44,6 +44,9 @@ pub struct Game {
     seed: u64,
     /// How many territories may still be made for founders.
     founders_left: usize,
+    /// Where the passes out of the founders' lands all lead, if this is
+    /// a world for founders.
+    meeting_ground: Option<PlaceId>,
     /// Every place in the world. Each zone is a run of them.
     map: Graph<Place>,
     /// The world's territories, oldest first. There is always one.
@@ -87,6 +90,7 @@ impl Game {
             rng: Rng::from_seed(seed),
             seed,
             founders_left: 0,
+            meeting_ground: None,
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
             characters,
@@ -99,8 +103,7 @@ impl Game {
             relics: Vec::new(),
         };
         for lair in lairs {
-            let id = game.new_creature_id();
-            game.creatures.push(Creature::lurker(id, lair, Tick::ZERO));
+            game.settle_lair(lair);
         }
         game
     }
@@ -117,6 +120,13 @@ impl Game {
     pub fn new_world(seed: u64, founders: usize, settlers: &[&str]) -> Self {
         let mut game = Self::new(seed, settlers);
         game.founders_left = founders;
+        if founders > 0 {
+            // Where the lands meet. It is a zone of its own, with one place.
+            let ground = game.map.add_place(content::meeting_ground());
+            game.occupancy.grow(game.map.len());
+            game.zones.push(Zone::new(ground, 1, ground, None));
+            game.meeting_ground = Some(ground);
+        }
         game
     }
 
@@ -166,7 +176,11 @@ impl Game {
             return (self.found_territory(who), true);
         }
         let people = |zone: &Zone| self.characters.iter().filter(|character| zone.contains(character.home())).count();
-        let emptiest = (0..self.zones.len()).min_by_key(|&index| (people(&self.zones[index]), index));
+        // Nobody lives on the Meeting Ground.
+        let lived_in = |zone: &Zone| self.meeting_ground.is_none_or(|ground| !zone.contains(ground));
+        let emptiest = (0..self.zones.len())
+            .filter(|&index| lived_in(&self.zones[index]))
+            .min_by_key(|&index| (people(&self.zones[index]), index));
         (emptiest.unwrap_or(0), false)
     }
 
@@ -177,20 +191,34 @@ impl Game {
         // left alone and the lands come out the same on every replay.
         let number = self.zones.len() as u64;
         let seed = Rng::from_seed(self.seed).split(number).below(u64::MAX);
-        let territory = crate::territory::generate(seed);
+        let mut territory = crate::territory::generate(seed);
+        let pass = territory.add_pass();
         let places = territory.map.len();
         let first = self.map.absorb(territory.map);
         let anchor = PlaceId::new(first.get() + territory.anchor.get());
+        // The pass leads out to where every land's pass leads.
+        if let Some(ground) = self.meeting_ground {
+            let pass = PlaceId::new(first.get() + pass.get());
+            let founded = self.zones.iter().filter(|zone| zone.founder.is_some()).count();
+            let way_back = content::pass_label(founded);
+            self.map.connect_both(pass, "beyond", ground, &way_back, Passage::Open).expect("both places are on the map");
+        }
         self.occupancy.grow(self.map.len());
         let zone = Zone::new(first, places, anchor, Some(founder));
         let lairs: Vec<PlaceId> =
             zone.place_ids().filter(|&place| self.map.place(place).is_some_and(|data| data.lair.is_some())).collect();
         for lair in lairs {
-            let id = self.new_creature_id();
-            self.creatures.push(Creature::lurker(id, lair, Tick::ZERO));
+            self.settle_lair(lair);
         }
         self.zones.push(zone);
         self.zones.len() - 1
+    }
+
+    /// Puts into `lair` the creature that makes its home there.
+    fn settle_lair(&mut self, lair: PlaceId) {
+        let Some(kind) = self.map.place(lair).and_then(|data| data.lair) else { return };
+        let id = self.new_creature_id();
+        self.creatures.push(Creature::native(kind, id, lair, Tick::ZERO));
     }
 
     /// The territory the character at `index` founded, if they stand as
@@ -284,6 +312,12 @@ impl Game {
     /// The first territory's Contract Board.
     pub fn board(&self) -> &Board {
         self.zones[0].board()
+    }
+
+    /// Where the passes out of the founders' lands all lead, if this is
+    /// a world for founders.
+    pub const fn meeting_ground(&self) -> Option<PlaceId> {
+        self.meeting_ground
     }
 
     /// Every territory, oldest first.
@@ -1042,8 +1076,7 @@ impl Game {
             taint: striker.taint(),
             resilience: creature.resilience,
         };
-        let damage = blow.damage();
-        let left = creature.hurt(damage);
+        let (damage, left) = creature.hurt(blow.damage());
         creature.provoke(who);
         let being = creature.being;
         outcomes.push(Outcome::HitCreature { being, damage, left });
@@ -1065,7 +1098,10 @@ impl Game {
     fn remove_creature(&mut self, slot: usize, now: Tick, events: &mut Vec<Event>) {
         let creature = self.creatures.remove(slot);
         match creature.being {
-            Being { kind: CreatureKind::Lurker, .. } => self.empty_lairs.push((now + LURKER_RETURNS, creature.place)),
+            // Whatever makes its home in a place comes back to it in time.
+            Being { kind: CreatureKind::Lurker | CreatureKind::Sentinel, .. } => {
+                self.empty_lairs.push((now + LURKER_RETURNS, creature.place));
+            }
             Being { kind: CreatureKind::BodyGuard, of } => {
                 let still_guarded = self.creatures.iter().any(|other| other.being.of == of);
                 let bound = of.and_then(|owner| self.index_of(owner)).filter(|&owner| {
@@ -1149,9 +1185,10 @@ impl Game {
         self.empty_lairs.retain(|(at, _)| *at > now);
         for place in due {
             let id = self.new_creature_id();
-            let lurker = Creature::lurker(id, place, now);
-            events.push(Event::CreatureAppeared { place, being: lurker.being });
-            self.creatures.push(lurker);
+            let kind = self.map.place(place).and_then(|data| data.lair).unwrap_or(CreatureKind::Lurker);
+            let native = Creature::native(kind, id, place, now);
+            events.push(Event::CreatureAppeared { place, being: native.being });
+            self.creatures.push(native);
         }
     }
 
@@ -2716,7 +2753,7 @@ mod tests {
     #[test]
     fn each_founder_arrives_alone_in_a_land_of_their_own() {
         let game = two_founders();
-        assert_eq!(game.zones().len(), 3, "the shoreline and one land each");
+        assert_eq!(game.zones().len(), 4, "the shoreline, the Meeting Ground, and one land each");
         let (ash, bryn) = (game.character(ASH).unwrap(), game.character(BRYN).unwrap());
         let (hers, his) = (game.zone_at(ash.place()), game.zone_at(bryn.place()));
         assert_eq!((hers.founder(), his.founder()), (Some(ASH), Some(BRYN)));
@@ -2727,9 +2764,9 @@ mod tests {
 
         // The lands are different places, each whole, and nothing joins them.
         let names = |zone: &Zone| zone.place_ids().map(|place| game.map().place(place).unwrap().name).collect::<Vec<_>>();
-        assert_eq!((names(hers).len(), names(his).len()), (10, 10));
+        assert_eq!((names(hers).len(), names(his).len()), (11, 11), "a haven, nine places to work and a pass");
         assert_ne!(names(hers), names(his));
-        assert!(game.map().first_step(hers.anchor(), his.anchor(), |_| true).is_none());
+        assert!(game.map().first_step(hers.anchor(), game.anchor(), |_| true).is_none(), "nothing leads to the old shoreline");
         assert_eq!(game.creatures_at(game.map().places().find(|(id, place)| hers.contains(*id) && place.lair.is_some()).unwrap().0).count(), 1);
     }
 
@@ -2738,7 +2775,7 @@ mod tests {
         let places = |seed: u64| {
             let mut game = Game::new_world(seed, 1, &[]);
             game.apply(&Command::join(ASH, "Ash"), Tick::new(0), &mut Vec::new());
-            game.zones()[1].place_ids().map(|place| game.map().place(place).unwrap().position).collect::<Vec<_>>()
+            game.zone_of(ASH).unwrap().place_ids().map(|place| game.map().place(place).unwrap().position).collect::<Vec<_>>()
         };
         assert_eq!(places(4), places(4));
         assert_ne!(places(4), places(5));
@@ -2823,5 +2860,213 @@ mod tests {
         assert_eq!(game.zone_of(BRYN).unwrap().board().contracts().len(), 0);
         game.apply(&Command::accept(BRYN, ContractId::new(0)), Tick::new(now + 40), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::NoSuchContract }));
+    }
+
+    /// Walks `who` from where they stand to `target` by the shortest
+    /// way, a step every thirty ticks from `now`, with the world
+    /// ticking. Returns the tick they arrive at, or stop at if they die.
+    fn walk_to(game: &mut Game, who: CharacterId, target: PlaceId, mut now: u64) -> u64 {
+        let mut events = Vec::new();
+        while game.character(who).unwrap().place() != target && !game.character(who).unwrap().is_spirit() {
+            let here = game.character(who).unwrap().place();
+            let way = game.map().first_step(here, target, |_| true).expect("there is a way").label.clone();
+            game.apply(&Command::go(who, &way), Tick::new(now), &mut events);
+            let arrived = game.character(who).unwrap().place() != here;
+            // A flooded way is waited out.
+            let wait = if arrived { TRAVEL_TIME.as_ticks() } else { 60 };
+            ticks(game, now + 1, now + wait);
+            now += wait;
+        }
+        now
+    }
+
+    fn pass_of(game: &Game, who: CharacterId) -> PlaceId {
+        let land = game.zone_at(game.character(who).unwrap().home());
+        land.place_ids().find(|&place| game.map().place(place).unwrap().lair == Some(CreatureKind::Sentinel)).unwrap()
+    }
+
+    #[test]
+    fn every_land_has_a_pass_and_every_pass_leads_to_the_meeting_ground() {
+        let game = two_founders();
+        let ground = game.meeting_ground().unwrap();
+        assert_eq!(game.map().place(ground).map(|place| (place.name, place.safety)), Some(("The Meeting Ground", Safety::Contested)));
+        for (who, back) in [(ASH, "first"), (BRYN, "second")] {
+            let pass = pass_of(&game, who);
+            assert_eq!(game.map().exit(pass, "beyond").map(|exit| exit.to), Some(ground));
+            assert_eq!(game.map().exit(ground, back).map(|exit| exit.to), Some(pass));
+            assert_eq!(game.creatures_at(pass).map(|creature| creature.being.kind).collect::<Vec<_>>(), [CreatureKind::Sentinel]);
+        }
+        // So there is a way between the two lands now, and it runs through both passes.
+        let (hers, his) = (game.character(ASH).unwrap().home(), game.character(BRYN).unwrap().home());
+        assert!(game.map().first_step(hers, his, |_| true).is_some());
+        assert_eq!(game.zone_at(ground).founder(), None);
+        assert_eq!(game.occupants(ground), []);
+    }
+
+    #[test]
+    fn a_world_without_founders_has_no_meeting_ground() {
+        let game = Game::new(1, &["Ash"]);
+        assert_eq!((game.meeting_ground(), game.zones().len()), (None, 1));
+    }
+
+    #[test]
+    fn someone_new_cannot_get_past_a_sentinel() {
+        let mut game = two_founders();
+        let pass = pass_of(&game, ASH);
+        let mut now = walk_to(&mut game, ASH, pass, 1);
+        let sentinel = game.creatures_at(pass).next().map(|creature| creature.id);
+        let mut events = Vec::new();
+        // Whether or not the lurker on the way got her first, she fights
+        // whatever bars the pass for as long as she lives.
+        while !game.character(ASH).unwrap().is_spirit() && now < 3_000 {
+            if let Some(sentinel) = sentinel {
+                game.apply(&Command::fight(ASH, sentinel), Tick::new(now), &mut events);
+            }
+            ticks(&mut game, now + 1, now + ATTACK_TIME.as_ticks());
+            now += ATTACK_TIME.as_ticks();
+        }
+        assert!(game.character(ASH).unwrap().is_spirit(), "nobody new walks out of their land");
+        assert_eq!(game.occupants(game.meeting_ground().unwrap()), []);
+    }
+
+    /// Raises a character's Vigor and Resilience by working ore, far
+    /// from anything that could interrupt.
+    fn hardened(game: &mut Game, who: CharacterId, level: u32) {
+        let index = game.index_of(who).unwrap();
+        let mut outcomes = Vec::new();
+        while game.characters[index].attribute(Attribute::Vigor).level() < level
+            || game.characters[index].attribute(Attribute::Resilience).level() < level
+        {
+            game.characters[index].train(Resource::Ore, 12, &mut outcomes);
+        }
+    }
+
+    #[test]
+    fn someone_strong_enough_breaks_out_alone_and_the_pass_closes_behind_them() {
+        let mut game = two_founders();
+        hardened(&mut game, ASH, 75);
+        let pass = pass_of(&game, ASH);
+        // Go round the lurker if there is one on the way: start her at the place before the pass.
+        let before = game.map().exits(pass)[0].to;
+        let index = game.index_of(ASH).unwrap();
+        game.occupancy.leave(game.characters[index].place, ASH);
+        game.characters[index].place = before;
+        game.occupancy.enter(before, ASH);
+        for creature in game.creatures.iter().filter(|creature| creature.place == before).map(|creature| creature.id).collect::<Vec<_>>() {
+            game.creatures.retain(|other| other.id != creature);
+        }
+
+        let mut now = walk_to(&mut game, ASH, pass, 1);
+        let sentinel = game.creatures_at(pass).next().unwrap().id;
+        let mut events = Vec::new();
+        while game.creatures_at(pass).next().is_some() {
+            game.apply(&Command::fight(ASH, sentinel), Tick::new(now), &mut events);
+            ticks(&mut game, now + 1, now + ATTACK_TIME.as_ticks());
+            now += ATTACK_TIME.as_ticks();
+            assert!(!game.character(ASH).unwrap().is_spirit(), "she should be strong enough");
+        }
+        let being = Being { kind: CreatureKind::Sentinel, of: None };
+        assert!(events.contains(&Event::Character { who: ASH, outcome: Outcome::Slew { being } }));
+
+        game.apply(&Command::go(ASH, "beyond"), Tick::new(now), &mut events);
+        let ground = game.meeting_ground().unwrap();
+        assert_eq!(game.character(ASH).unwrap().place(), ground);
+        assert_eq!(game.character(ASH).unwrap().home(), game.zones()[2].anchor(), "her home is still her own land");
+
+        // In time another sentinel bars the pass.
+        let later = ticks(&mut game, now + 1, now + LURKER_RETURNS.as_ticks() + 10);
+        assert!(later.contains(&Event::CreatureAppeared { place: pass, being }));
+    }
+
+    #[test]
+    fn two_who_break_out_meet_on_ground_where_anyone_may_be_struck() {
+        let mut game = two_founders();
+        let ground = game.meeting_ground().unwrap();
+        for who in [ASH, BRYN] {
+            let index = game.index_of(who).unwrap();
+            game.occupancy.leave(game.characters[index].place, who);
+            game.characters[index].place = ground;
+            game.occupancy.enter(ground, who);
+        }
+        assert_eq!(game.occupants(ground), [ASH, BRYN]);
+        assert_eq!(game.can_attack(ASH, BRYN), Ok(()), "nobody is marked, but this is contested ground");
+
+        // Or they can work it together: it is the richest ground there is.
+        let mut events = Vec::new();
+        game.apply(&Command::gather(ASH), Tick::new(1), &mut events);
+        game.apply(&Command::gather(BRYN), Tick::new(1), &mut events);
+        assert!(game.character(ASH).unwrap().carried(Resource::Tideglass) > 0);
+        assert!(game.character(BRYN).unwrap().carried(Resource::Tideglass) > 0);
+
+        // Whoever dies here, alone, is pulled to the Meeting Ground's own anchor, and reborn at home.
+        let mut now = 10;
+        while !game.character(BRYN).unwrap().is_spirit() {
+            game.apply(&Command::attack(ASH, BRYN), Tick::new(now), &mut events);
+            now += ATTACK_TIME.as_ticks();
+            if game.character(ASH).unwrap().is_spirit() {
+                return;
+            }
+        }
+        game.apply(&Command::relinquish(BRYN), Tick::new(now), &mut events);
+        assert_eq!(game.character(BRYN).unwrap().place(), game.character(BRYN).unwrap().home());
+    }
+
+    /// How a party of `size`, each hardened to `level`, fares against a
+    /// sentinel: whether it fell, and how many of them died.
+    fn party_against_a_sentinel(size: u64, level: u32) -> (bool, usize) {
+        let mut game = Game::new_world(1, 1, &[]);
+        let mut events = Vec::new();
+        game.apply(&Command::join(ASH, "Ash"), Tick::new(0), &mut events);
+        let names = ["Bryn", "Cole", "Dara"];
+        for extra in 1..size {
+            game.apply(&Command::invite(ASH, names[extra as usize - 1]), Tick::new(0), &mut events);
+            game.apply(&Command::join(CharacterId::new(extra), names[extra as usize - 1]), Tick::new(0), &mut events);
+        }
+        let pass = pass_of(&game, ASH);
+        let party: Vec<CharacterId> = (0..size).map(CharacterId::new).collect();
+        for &who in &party {
+            hardened(&mut game, who, level);
+            let index = game.index_of(who).unwrap();
+            game.occupancy.leave(game.characters[index].place, who);
+            game.characters[index].place = pass;
+            game.occupancy.enter(pass, who);
+        }
+        let sentinel = game.creatures_at(pass).next().unwrap().id;
+        let mut now = 10;
+        while game.creatures_at(pass).next().is_some() && party.iter().any(|&who| !game.character(who).unwrap().is_spirit()) {
+            for &who in &party {
+                game.apply(&Command::fight(who, sentinel), Tick::new(now), &mut events);
+            }
+            ticks(&mut game, now + 1, now + ATTACK_TIME.as_ticks());
+            now += ATTACK_TIME.as_ticks();
+        }
+        let dead = party.iter().filter(|&&who| game.character(who).unwrap().is_spirit()).count();
+        let fell = game.creatures_at(pass).next().is_none();
+        (fell, dead)
+    }
+
+    #[test]
+    #[ignore = "prints a table for tuning"]
+    fn print_who_gets_past_a_sentinel() {
+        // The library has no standard output, so the table is the panic.
+        let mut table = alloc::string::String::new();
+        for size in 1..=4 {
+            for level in [0, 15, 30, 45, 60, 75, 90] {
+                table.push_str(&alloc::format!("{size}@{level}:{:?} ", party_against_a_sentinel(size, level)));
+            }
+            table.push('|');
+        }
+        panic!("{table}");
+    }
+
+    #[test]
+    fn the_pass_is_a_matter_of_strength_or_of_company() {
+        assert_eq!(party_against_a_sentinel(1, 0), (false, 1), "alone and new: no");
+        assert_eq!(party_against_a_sentinel(4, 0), (false, 4), "four who are new: no, their blows glance off");
+        assert_eq!(party_against_a_sentinel(1, 60), (false, 1), "alone and well grown: not yet");
+        assert_eq!(party_against_a_sentinel(1, 75), (true, 0), "alone and strong: yes");
+        assert_eq!(party_against_a_sentinel(2, 45), (true, 1), "two half-grown: yes, and it costs one of them");
+        assert_eq!(party_against_a_sentinel(2, 60), (true, 0), "two well grown: yes");
+        assert_eq!(party_against_a_sentinel(3, 30), (true, 1), "three part-grown: yes, and it costs one of them");
     }
 }

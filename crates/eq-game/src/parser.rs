@@ -130,7 +130,7 @@ pub fn parse(line: &str) -> Input {
             Some(label) => go(label),
             None => Input::Unknown("Go where? Try \"go north\".".into()),
         },
-        "north" | "south" | "east" | "west" | "up" | "down" | "cave" | "out" => go(verb),
+        "north" | "south" | "east" | "west" | "up" | "down" | "cave" | "out" | "beyond" => go(verb),
         "n" | "s" | "e" | "w" | "u" | "d" => go(verb),
         _ => Input::Unknown(alloc::format!("I don't know how to \"{verb}\". Type \"help\" for commands.")),
     }
