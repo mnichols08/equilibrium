@@ -145,6 +145,20 @@ pub enum Standing {
     Marked,
 }
 
+/// How a spirit stands to the body it left, decided at the moment of death.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Passing {
+    /// Someone else was near. The spirit stays by the body and can soon
+    /// return to it.
+    Tethered,
+    /// Nobody was near. The spirit is pulled to the zone's anchor and
+    /// must make its own way back.
+    Severed,
+    /// The zone had collapsed. The spirit is pulled to the anchor and
+    /// held there a while before it can go back.
+    Corrupted,
+}
+
 /// A resource node and what it gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deposit {

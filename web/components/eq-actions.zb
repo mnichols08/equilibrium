@@ -1,9 +1,10 @@
 <!--
   What you can do right now: walk out by an exit, gather, pick things up, challenge someone, or let time pass.
+  A spirit can only walk, return to its body, or give the body up.
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
   @prop {{ name: string }[]} targets - Everyone here you may attack right now.
   @prop {{ name: string }[]} sleepers - Everyone asleep here whose pack you may go through.
-  @prop {boolean} down - Whether you are down; if so only waiting is possible.
+  @prop {null | { place_name: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit.
   @fires command - A button was pressed; `detail` is the line to send to the game, such as "north" or "wait 10m".
 -->
 <script>
@@ -14,6 +15,8 @@
     { line: 'wait 10m', text: 'Wait 10 min' },
     { line: 'wait 1h', text: 'Wait 1 hour' },
   ]
+  const spirit = Boolean(body)
+  const canReturn = spirit && body.can_return
 </script>
 <style>
   :host { display: block; }
@@ -28,15 +31,25 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} down={false}>
+<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} body={null}>
+  <div zb-if={spirit} role="group" aria-label="Your body">
+    <button type="button" class="primary" disabled={!canReturn} onclick={() => emit('command', 'return')}>
+      Return to your body
+      <small>{canReturn ? "it lies here" : body.place_name}</small>
+    </button>
+    <button type="button" class="danger" onclick={() => emit('command', 'relinquish')}>
+      Give it up
+      <small>be reborn</small>
+    </button>
+  </div>
   <div zb-if={targets.length + sleepers.length > 0} role="group" aria-label="Others here">
     <zb-each items={targets} as="target" key={target.name}>
-      <button type="button" class="danger" disabled={down} onclick={() => emit('command', `attack ${target.name}`)}>
+      <button type="button" class="danger" onclick={() => emit('command', `attack ${target.name}`)}>
         Attack {target.name}
       </button>
     </zb-each>
     <zb-each items={sleepers} as="sleeper" key={sleeper.name}>
-      <button type="button" class="danger" disabled={down} onclick={() => emit('command', `rob ${sleeper.name}`)}>
+      <button type="button" class="danger" onclick={() => emit('command', `rob ${sleeper.name}`)}>
         Rob {sleeper.name}
         <small>asleep</small>
       </button>
@@ -44,17 +57,17 @@
   </div>
   <div role="group" aria-label="Go">
     <zb-each items={exits} as="exit" key={exit.label}>
-      <button type="button" disabled={!exit.open || down} onclick={() => emit('command', exit.label)}>
+      <button type="button" disabled={!exit.open} onclick={() => emit('command', exit.label)}>
         Go {exit.label}
         <small>{exit.open ? exit.to_name : "under water"}</small>
       </button>
     </zb-each>
   </div>
   <div role="group" aria-label="Do">
-    <button type="button" class="primary" disabled={!canGather || down} onclick={() => emit('command', 'gather')}>Gather</button>
-    <button zb-if={canTake} type="button" class="primary" disabled={down} onclick={() => emit('command', 'take')}>Take what's here</button>
+    <button type="button" class="primary" disabled={!canGather || spirit} onclick={() => emit('command', 'gather')}>Gather</button>
+    <button zb-if={canTake} type="button" class="primary" disabled={spirit} onclick={() => emit('command', 'take')}>Take what's here</button>
     <button type="button" onclick={() => emit('command', 'inspect')}>Inspect</button>
-    <button type="button" disabled={down} onclick={() => emit('command', 'sleep 8h')}>Sleep 8 hours</button>
+    <button type="button" disabled={spirit} onclick={() => emit('command', 'sleep 8h')}>Sleep 8 hours</button>
     <zb-each items={WAITS} as="wait" key={wait.line}>
       <button type="button" onclick={() => emit('command', wait.line)}>{wait.text}</button>
     </zb-each>

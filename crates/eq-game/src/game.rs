@@ -2,24 +2,25 @@
 
 use alloc::vec::Vec;
 
-use eq_clock::Tick;
+use eq_clock::{Duration, Tick};
 use eq_events::World;
 use eq_rng::Rng;
 use eq_world_graph::{Graph, PlaceId};
 
-use crate::character::{Character, CharacterId};
-use crate::combat::{may_attack, may_rob, Blow, Refusal, RobRefusal};
+use crate::character::{Character, CharacterId, Death};
+use crate::combat::{may_attack, may_rob, Blow, Refusal, ReturnRefusal, RobRefusal};
 use crate::command::{Action, Command};
 use crate::content::{
-    self, ATTACK_TIME, BASE_EFFORT, DAMAGE_SPREAD, DOWNED_TIME, EFFORT_SPREAD, GATHER_TIME, HAVEN_MENDING,
+    self, ATTACK_TIME, BASE_EFFORT, CORPSE_TIME, CORRUPTED_WAIT, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT,
+    EFFORT_SPREAD, GATHER_TIME, HAVEN_MENDING,
     HEALTH_MENDS_EVERY, MENDING, MIN_WORKABLE_STOCK, RESTED_LASTS, SETTLE_TIME, TAINT_FADES_EVERY, TAINT_FOR_ROBBING,
-    TAKE_TIME, TRAVEL_TIME,
+    TAKE_TIME, TETHERED_WAIT, TRAVEL_TIME,
 };
 use crate::rest::FULLY_RESTED;
 use crate::event::{Event, Outcome};
 use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
-use crate::types::{Attribute, Health, Place, Safety, Standing};
+use crate::types::{Attribute, Health, Passing, Place, Safety, Standing};
 use crate::zone::Zone;
 
 /// The whole world: one zone and the characters in it.
@@ -29,8 +30,11 @@ pub struct Game {
     zone: Zone,
     characters: Vec<Character>,
     occupancy: Occupancy,
-    /// Everyone who is down, so the tick need not search for them.
-    fallen: Vec<CharacterId>,
+    /// Every spirit with a body still lying somewhere, so the tick need
+    /// not search for them.
+    dead: Vec<CharacterId>,
+    /// Where severed spirits are pulled to and new lives begin.
+    anchor: PlaceId,
 }
 
 impl Game {
@@ -43,7 +47,7 @@ impl Game {
         for index in 0..characters.len() {
             occupancy.enter(start, id_at(index));
         }
-        Self { rng: Rng::from_seed(seed), zone: Zone::new(map), characters, occupancy, fallen: Vec::new() }
+        Self { rng: Rng::from_seed(seed), zone: Zone::new(map), characters, occupancy, dead: Vec::new(), anchor: start }
     }
 
     /// A character, if the id belongs to this world.
@@ -69,6 +73,27 @@ impl Game {
     /// Everyone in `place`, in id order.
     pub fn occupants(&self, place: PlaceId) -> &[CharacterId] {
         self.occupancy.at(place)
+    }
+
+    /// The zone's spirit anchor: where severed spirits are pulled to and
+    /// new lives begin.
+    pub const fn anchor(&self) -> PlaceId {
+        self.anchor
+    }
+
+    /// Everyone whose body lies in `place`, in the order they died.
+    pub fn bodies_at(&self, place: PlaceId) -> impl Iterator<Item = (CharacterId, &Character)> {
+        self.dead
+            .iter()
+            .filter_map(|&who| Some((who, self.character(who)?)))
+            .filter(move |(_, character)| character.death().is_some_and(|death| death.body == place))
+    }
+
+    /// Whether `viewer` can see `other`. The living cannot see spirits;
+    /// spirits see everyone.
+    pub fn can_see(&self, viewer: CharacterId, other: CharacterId) -> bool {
+        let is_spirit = |who| self.character(who).is_some_and(Character::is_spirit);
+        viewer == other || !is_spirit(other) || is_spirit(viewer)
     }
 
     /// The zone.
@@ -99,11 +124,8 @@ impl Game {
         let (Some(aggressor), Some(victim)) = (self.character(attacker), self.character(target)) else {
             return Err(Refusal::NotHere);
         };
-        if aggressor.place() != victim.place() {
+        if aggressor.place() != victim.place() || victim.is_spirit() {
             return Err(Refusal::NotHere);
-        }
-        if victim.is_down() {
-            return Err(Refusal::AlreadyDown);
         }
         let safety = self.place_of(attacker).map_or(Safety::Haven, |place| place.safety);
         may_attack(safety, victim.standing())
@@ -117,7 +139,7 @@ impl Game {
         let (Some(thief), Some(victim)) = (self.character(robber), self.character(target)) else {
             return Err(RobRefusal::NotHere);
         };
-        if thief.place() != victim.place() {
+        if thief.place() != victim.place() || victim.is_spirit() {
             return Err(RobRefusal::NotHere);
         }
         if !victim.is_asleep(now) {
@@ -148,39 +170,43 @@ impl Game {
         audience
     }
 
-    /// The actor always learns their own outcome. Bystanders see only
-    /// what is visible: coming, going, gathering, being marked, blows
-    /// landing, falling, rising, picking things up, lying down, waking
-    /// and going through a sleeper's pack.
+    /// The actor always learns their own outcome. Bystanders who can
+    /// see the actor learn of what is visible: coming, going, gathering,
+    /// being marked, blows landing, picking things up, lying down,
+    /// waking, going through a sleeper's pack, returning to a body and
+    /// being reborn. A death is seen by everyone where the body falls.
     fn audience_of_outcome(&self, who: CharacterId, outcome: &Outcome) -> Vec<CharacterId> {
         let mut audience = alloc::vec![who];
         let here = self.character(who).map(Character::place);
         match outcome {
             Outcome::Moved { from, to } => {
-                audience.extend_from_slice(self.occupants(*from));
-                audience.extend_from_slice(self.occupants(*to));
+                audience.extend(self.witnesses(*from, who));
+                audience.extend(self.witnesses(*to, who));
             }
+            Outcome::Died { place, .. } => audience.extend_from_slice(self.occupants(*place)),
             // The one who was struck hears of it as their own `Hurt`.
             Outcome::Struck { target, .. } => {
-                let bystanders = here.map_or(&[][..], |place| self.occupants(place));
-                audience.extend(bystanders.iter().filter(|&&other| other != *target));
+                audience.extend(here.into_iter().flat_map(|place| self.witnesses(place, who)).filter(|other| other != target));
             }
             Outcome::Gathered { .. }
             | Outcome::StandingChanged { to: Standing::Marked, .. }
-            | Outcome::Downed { .. }
-            | Outcome::Rose
             | Outcome::Took { .. }
             | Outcome::LayDown { .. }
-            | Outcome::Stole { .. } => {
-                audience.extend_from_slice(here.map_or(&[], |place| self.occupants(place)));
-            }
+            | Outcome::Stole { .. }
+            | Outcome::Returned
+            | Outcome::Reborn { .. } => audience.extend(here.into_iter().flat_map(|place| self.witnesses(place, who))),
             // Getting up before sleep came is nobody else's business.
             Outcome::Woke { slept, .. } if slept.as_ticks() > 0 => {
-                audience.extend_from_slice(here.map_or(&[], |place| self.occupants(place)));
+                audience.extend(here.into_iter().flat_map(|place| self.witnesses(place, who)));
             }
             _ => {}
         }
         audience
+    }
+
+    /// Everyone in `place` who can see `actor`.
+    fn witnesses(&self, place: PlaceId, actor: CharacterId) -> impl Iterator<Item = CharacterId> + '_ {
+        self.occupants(place).iter().copied().filter(move |&witness| self.can_see(witness, actor))
     }
 
     fn index_of(&self, who: CharacterId) -> Option<usize> {
@@ -188,8 +214,12 @@ impl Game {
     }
 
     fn act(&mut self, index: usize, action: &Action, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
-        if let Some(until) = self.characters[index].down_until() {
-            outcomes.push(Outcome::Down { until });
+        if self.characters[index].is_spirit() {
+            self.act_as_spirit(index, action, now, outcomes);
+            return;
+        }
+        if matches!(action, Action::Return | Action::Relinquish) {
+            outcomes.push(Outcome::NotDead);
             return;
         }
         // Waking is the one thing a sleeper, or someone settling, can do.
@@ -213,8 +243,50 @@ impl Game {
             Action::Take => self.take(index, now, outcomes),
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
-            Action::Wake => {}
+            Action::Wake | Action::Return | Action::Relinquish => {}
         }
+    }
+
+    /// A spirit can walk, go back into its body, or give the body up.
+    /// It has no hands for anything else.
+    fn act_as_spirit(&mut self, index: usize, action: &Action, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let busy_until = self.characters[index].busy_until();
+        if now < busy_until {
+            outcomes.push(Outcome::Busy { until: busy_until });
+            return;
+        }
+        match action {
+            Action::Go(label) => self.go(index, label, now, outcomes),
+            Action::Return => outcomes.push(self.return_to_body(index, now)),
+            Action::Relinquish => outcomes.push(self.rebirth(index, now)),
+            _ => outcomes.push(Outcome::Bodiless),
+        }
+    }
+
+    /// Puts a spirit back in its body, if it is there and allowed to yet.
+    fn return_to_body(&mut self, index: usize, now: Tick) -> Outcome {
+        let character = &mut self.characters[index];
+        let Some(death) = character.death().copied() else { return Outcome::NotDead };
+        if character.place() != death.body {
+            return Outcome::CannotReturn { why: ReturnRefusal::NotAtBody };
+        }
+        if now < death.ready_at {
+            return Outcome::CannotReturn { why: ReturnRefusal::TooSoon(death.ready_at) };
+        }
+        character.return_to_body();
+        self.dead.retain(|&who| who != id_at(index));
+        Outcome::Returned
+    }
+
+    /// Ends a spirit's tie to its body and starts a new life at the anchor.
+    fn rebirth(&mut self, index: usize, now: Tick) -> Outcome {
+        let who = id_at(index);
+        let character = &mut self.characters[index];
+        self.occupancy.leave(character.place(), who);
+        self.occupancy.enter(self.anchor, who);
+        character.be_reborn(self.anchor, now);
+        self.dead.retain(|&spirit| spirit != who);
+        Outcome::Reborn { life: character.life() }
     }
 
     /// Settles down. Sleep begins after a short while if nothing disturbs it.
@@ -301,19 +373,55 @@ impl Game {
         (damage, self.characters[struck].hurt(damage))
     }
 
-    /// Puts a character down: what they carried spills where they stand.
+    /// Kills a character. The body stays where it fell with everything
+    /// they carried beside it, and the spirit is left to find its way back.
     fn fell(&mut self, index: usize, by: CharacterId, now: Tick, events: &mut Vec<Event>) {
         let who = id_at(index);
+        let body = self.characters[index].place();
+        let passing = self.passing(who, by, body);
+        // A spirit worn by recent deaths is held back longer each time.
+        let worn = Duration::ticks(u64::from(self.characters[index].degradation()) * DEGRADATION_WAIT.as_ticks());
+        let held = match passing {
+            Passing::Tethered => TETHERED_WAIT,
+            Passing::Severed => Duration::ZERO,
+            Passing::Corrupted => CORRUPTED_WAIT,
+        };
+        let ready_at = now + held + worn;
+        let lost_at = now + CORPSE_TIME;
+
         let character = &mut self.characters[index];
-        let (dropped, cleansed) = character.fall(now + DOWNED_TIME);
-        if let Some(place) = self.zone.map_mut().place_mut(character.place()) {
+        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at });
+        if let Some(place) = self.zone.map_mut().place_mut(body) {
             for (lying, more) in place.spoils.iter_mut().zip(dropped) {
                 *lying += more;
             }
         }
-        self.fallen.push(who);
-        events.push(Event::Character { who, outcome: Outcome::Downed { by } });
+        // Only a tethered spirit stays by its body.
+        if passing != Passing::Tethered {
+            character.place = self.anchor;
+            self.occupancy.leave(body, who);
+            self.occupancy.enter(self.anchor, who);
+        }
+        self.zone.mourn();
+        self.dead.push(who);
+        events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
+    }
+
+    /// How a spirit will stand to its body: corrupted in a collapsed
+    /// zone, tethered if anyone but the killer stood by, severed if not.
+    fn passing(&self, who: CharacterId, by: CharacterId, place: PlaceId) -> Passing {
+        if self.zone.health() == Health::Collapsed {
+            return Passing::Corrupted;
+        }
+        let someone_stood_by = self.occupants(place).iter().any(|&other| {
+            other != who && other != by && self.character(other).is_some_and(|character| !character.is_spirit())
+        });
+        if someone_stood_by {
+            Passing::Tethered
+        } else {
+            Passing::Severed
+        }
     }
 
     fn take(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
@@ -335,39 +443,48 @@ impl Game {
         if !now.get().is_multiple_of(every) {
             return;
         }
-        for character in self.characters.iter_mut().filter(|character| !character.is_lying_down()) {
+        let up_and_about = |character: &&mut Character| !character.is_lying_down() && !character.is_spirit();
+        for character in self.characters.iter_mut().filter(up_and_about) {
             character.tire();
         }
     }
 
     /// Health mends slowly everywhere, and quickly in a haven or asleep.
-    /// Those who are down mend only by getting up.
+    /// Spirits have no body to mend.
     fn mend(&mut self, now: Tick) {
         if !now.get().is_multiple_of(HEALTH_MENDS_EVERY.as_ticks()) {
             return;
         }
         let map = self.zone.map();
-        for character in self.characters.iter_mut().filter(|character| !character.is_down()) {
+        for character in self.characters.iter_mut().filter(|character| !character.is_spirit()) {
             let in_haven = map.place(character.place()).is_some_and(|place| place.safety == Safety::Haven);
             let mending_well = in_haven || character.is_asleep(now);
             character.mend(if mending_well { HAVEN_MENDING } else { MENDING });
         }
     }
 
-    /// Gets everyone up whose time on the ground is over.
-    fn raise_the_fallen(&mut self, now: Tick, events: &mut Vec<Event>) {
-        let characters = &mut self.characters;
-        self.fallen.retain(|&who| {
-            let Some(character) = usize::try_from(who.get()).ok().and_then(|index| characters.get_mut(index)) else {
-                return false;
-            };
-            let still_down = character.down_until().is_some_and(|until| now < until);
-            if !still_down {
-                character.rise();
-                events.push(Event::Character { who, outcome: Outcome::Rose });
-            }
-            still_down
-        });
+    /// The wear of dying fades from every spirit, living or not.
+    fn recover_spirits(&mut self, now: Tick) {
+        if !now.get().is_multiple_of(DEGRADATION_FADES_EVERY.as_ticks()) {
+            return;
+        }
+        for character in &mut self.characters {
+            character.recover_spirit();
+        }
+    }
+
+    /// A body left too long is lost, and its spirit begins a new life.
+    fn lose_bodies(&mut self, now: Tick, events: &mut Vec<Event>) {
+        let overdue: Vec<usize> = self
+            .dead
+            .iter()
+            .filter_map(|&who| self.index_of(who))
+            .filter(|&index| self.characters[index].death().is_some_and(|death| death.lost_at <= now))
+            .collect();
+        for index in overdue {
+            let outcome = self.rebirth(index, now);
+            events.push(Event::Character { who: id_at(index), outcome });
+        }
     }
 
     fn go(&mut self, index: usize, label: &str, now: Tick, outcomes: &mut Vec<Outcome>) {
@@ -377,7 +494,8 @@ impl Game {
             outcomes.push(Outcome::NoSuchExit { label: label.into() });
             return;
         };
-        if !exit.passage.is_open(now) {
+        // The tide is nothing to a spirit: water can be walked.
+        if !character.is_spirit() && !exit.passage.is_open(now) {
             outcomes.push(Outcome::ExitClosed { label: label.into() });
             return;
         }
@@ -455,7 +573,8 @@ impl World for Game {
         self.fade_taint(now, events);
         self.tire(now);
         self.mend(now);
-        self.raise_the_fallen(now, events);
+        self.recover_spirits(now);
+        self.lose_bodies(now, events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
@@ -477,7 +596,7 @@ impl World for Game {
 mod tests {
     use super::*;
     use crate::types::Resource;
-    use eq_clock::Duration;
+    use eq_world_graph::PlaceId;
 
     const ASH: CharacterId = CharacterId::new(0);
     const BRYN: CharacterId = CharacterId::new(1);
@@ -528,10 +647,10 @@ mod tests {
         (game, now)
     }
 
-    /// Ash attacks Bryn until one of them is down. Returns every event.
+    /// Ash attacks Bryn until one of them is dead. Returns every event.
     fn fight_to_the_end(game: &mut Game, mut now: u64) -> (Vec<Event>, u64) {
         let mut events = Vec::new();
-        while !game.character(ASH).unwrap().is_down() && !game.character(BRYN).unwrap().is_down() {
+        while !game.character(ASH).unwrap().is_spirit() && !game.character(BRYN).unwrap().is_spirit() {
             game.apply(&Command::attack(ASH, BRYN), Tick::new(now), &mut events);
             now += ATTACK_TIME.as_ticks();
         }
@@ -583,8 +702,20 @@ mod tests {
         assert!(matches!(kinds[3], Event::Character { who: BRYN, outcome: Outcome::Struck { target: ASH, .. } }));
     }
 
+    const LEDGE: PlaceId = PlaceId::new(1);
+    const CAMP: PlaceId = PlaceId::new(0);
+
+    fn died(events: &[Event], who: CharacterId) -> Option<(Passing, Tick)> {
+        events.iter().find_map(|event| match event {
+            Event::Character { who: dead, outcome: Outcome::Died { passing, lost_at, .. } } if *dead == who => {
+                Some((*passing, *lost_at))
+            }
+            _ => None,
+        })
+    }
+
     #[test]
-    fn the_loser_goes_down_drops_everything_and_pays_off_the_mark() {
+    fn the_loser_dies_drops_everything_and_pays_off_the_mark() {
         let (mut game, now) = bryn_marked_on_the_ledge();
         let carried = game.character(BRYN).unwrap().carried(Resource::Ore);
         assert!(carried > 0);
@@ -592,18 +723,162 @@ mod tests {
         let (events, now) = fight_to_the_end(&mut game, now);
 
         let bryn = game.character(BRYN).unwrap();
-        assert!(bryn.is_down() && !game.character(ASH).unwrap().is_down(), "the clean challenger should win");
+        assert!(bryn.is_spirit() && !game.character(ASH).unwrap().is_spirit(), "the clean challenger should win");
         assert_eq!((bryn.carried_total(), bryn.taint(), bryn.standing()), (0, 0, Standing::Clean));
-        assert_eq!(game.place_of(BRYN).unwrap().spoils[Resource::Ore.index()], carried);
-        assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::Downed { by: ASH } }));
+        assert_eq!(game.map().place(LEDGE).unwrap().spoils[Resource::Ore.index()], carried);
+        assert!(died(&events, BRYN).is_some());
         let cleansed = Outcome::StandingChanged { from: Standing::Marked, to: Standing::Clean };
         assert!(events.contains(&Event::Character { who: BRYN, outcome: cleansed }));
+        assert_eq!(game.bodies_at(LEDGE).map(|(id, _)| id).collect::<Vec<_>>(), [BRYN]);
 
-        // Down means out of it: no acting, and no kicking them while down.
+        // A spirit has no hands, and the living cannot touch what they cannot see.
         let mut events = Vec::new();
         game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
-        assert!(matches!(outcome(&events), Some(Outcome::Down { .. })));
-        assert_eq!(game.can_attack(ASH, BRYN), Err(Refusal::AlreadyDown));
+        assert_eq!(outcome(&events), Some(&Outcome::Bodiless));
+        assert_eq!(game.can_attack(ASH, BRYN), Err(Refusal::NotHere));
+        assert!(!game.can_see(ASH, BRYN) && game.can_see(BRYN, ASH) && game.can_see(BRYN, BRYN));
+    }
+
+    #[test]
+    fn dying_alone_pulls_the_spirit_to_the_anchor_to_walk_back_and_return() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (events, now) = fight_to_the_end(&mut game, now);
+        assert_eq!(died(&events, BRYN).map(|(passing, _)| passing), Some(Passing::Severed));
+        assert_eq!((game.anchor(), game.character(BRYN).unwrap().place()), (CAMP, CAMP));
+        assert_eq!(game.occupants(CAMP), [BRYN]);
+
+        let mut events = Vec::new();
+        game.apply(&Command::return_to_body(BRYN), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::NotAtBody }));
+
+        game.apply(&Command::go(BRYN, "north"), Tick::new(now), &mut events);
+        let arrived = now + TRAVEL_TIME.as_ticks();
+        game.apply(&Command::return_to_body(BRYN), Tick::new(arrived), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Returned));
+
+        let bryn = game.character(BRYN).unwrap();
+        assert!(!bryn.is_spirit());
+        assert_eq!((bryn.place(), i64::from(bryn.health()), bryn.life()), (LEDGE, crate::content::HEALTH_ON_RETURN, 1));
+        assert_eq!(game.bodies_at(LEDGE).count(), 0);
+    }
+
+    #[test]
+    fn dying_with_someone_standing_by_keeps_the_spirit_close() {
+        let mut game = Game::new(1, &["Ash", "Bryn", "Cole"]);
+        let cole = CharacterId::new(2);
+        let mut events = Vec::new();
+        for who in [ASH, BRYN, cole] {
+            game.apply(&Command::go(who, "north"), Tick::new(0), &mut events);
+        }
+        let mut now = 30;
+        while game.character(BRYN).unwrap().standing() == Standing::Clean {
+            game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
+            now += GATHER_TIME.as_ticks();
+        }
+        let (events, now) = fight_to_the_end(&mut game, now);
+        assert_eq!(died(&events, BRYN).map(|(passing, _)| passing), Some(Passing::Tethered));
+        assert_eq!(game.character(BRYN).unwrap().place(), LEDGE);
+
+        let mut events = Vec::new();
+        game.apply(&Command::return_to_body(BRYN), Tick::new(now), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::CannotReturn { why: ReturnRefusal::TooSoon(_) })));
+        game.apply(&Command::return_to_body(BRYN), Tick::new(now + TETHERED_WAIT.as_ticks()), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Returned));
+    }
+
+    #[test]
+    fn a_body_left_too_long_is_lost_and_the_spirit_is_reborn_with_a_share_of_what_it_knew() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let mining_before = game.character(BRYN).unwrap().skill(crate::types::SkillKind::Mining).level();
+        assert!(mining_before >= 2, "Bryn should have learned something first: {mining_before}");
+        let (events, now) = fight_to_the_end(&mut game, now);
+        let lost_at = died(&events, BRYN).unwrap().1.get();
+
+        let before = ticks(&mut game, now, lost_at - 1);
+        assert!(game.character(BRYN).unwrap().is_spirit());
+        assert!(!before.iter().any(|event| matches!(event, Event::Character { outcome: Outcome::Reborn { .. }, .. })));
+
+        let after = ticks(&mut game, lost_at, lost_at);
+        assert!(after.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
+        let bryn = game.character(BRYN).unwrap();
+        assert!(!bryn.is_spirit());
+        assert_eq!((bryn.place(), bryn.health(), bryn.rested(), bryn.life()), (CAMP, 100, 100, 2));
+        let mining = bryn.skill(crate::types::SkillKind::Mining);
+        assert_eq!((mining.level(), mining.peak()), (mining_before * 15 / 100, mining_before * 15 / 100));
+        assert_eq!(game.bodies_at(LEDGE).count(), 0);
+    }
+
+    #[test]
+    fn dying_again_soon_holds_the_spirit_back_longer() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        assert_eq!(game.character(BRYN).unwrap().degradation(), 1);
+        let mut events = Vec::new();
+        game.apply(&Command::go(BRYN, "north"), Tick::new(now), &mut events);
+        let back = now + TRAVEL_TIME.as_ticks();
+        game.apply(&Command::return_to_body(BRYN), Tick::new(back), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Returned));
+
+        // The cave is contested ground: Ash needs no mark to strike there.
+        for (tick, exit) in [(back, "south"), (back + 30, "east"), (back + 60, "cave")] {
+            game.apply(&Command::go(ASH, exit), Tick::new(tick), &mut events);
+            game.apply(&Command::go(BRYN, exit), Tick::new(tick), &mut events);
+        }
+        let (events, _) = fight_to_the_end(&mut game, back + 90);
+        let died_at = events.iter().find_map(|event| match event {
+            Event::Character { who: BRYN, outcome: Outcome::Died { lost_at, .. } } => Some(*lost_at),
+            _ => None,
+        });
+        let death = *game.character(BRYN).unwrap().death().unwrap();
+        assert_eq!(Some(death.lost_at), died_at);
+        // One earlier death: held back three minutes from the moment of dying.
+        assert_eq!(death.ready_at + CORPSE_TIME, death.lost_at + DEGRADATION_WAIT);
+        assert_eq!(game.character(BRYN).unwrap().degradation(), 2);
+    }
+
+    #[test]
+    fn the_wear_of_dying_fades() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        ticks(&mut game, now, now + DEGRADATION_FADES_EVERY.as_ticks());
+        assert_eq!(game.character(BRYN).unwrap().degradation(), 0);
+    }
+
+    #[test]
+    fn a_spirit_can_give_up_its_body_and_the_living_cannot() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let mut events = Vec::new();
+        game.apply(&Command::relinquish(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NotDead));
+        game.apply(&Command::relinquish(BRYN), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Reborn { life: 2 }));
+        assert!(!game.character(BRYN).unwrap().is_spirit());
+    }
+
+    #[test]
+    fn the_tide_is_nothing_to_a_spirit() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, _) = fight_to_the_end(&mut game, now);
+        let mut events = Vec::new();
+        // High tide: the cave mouth is under water for the living.
+        game.apply(&Command::go(BRYN, "east"), Tick::new(700), &mut events);
+        game.apply(&Command::go(BRYN, "cave"), Tick::new(730), &mut events);
+        assert_eq!(game.place_of(BRYN).unwrap().name, "Tidal Cave");
+    }
+
+    #[test]
+    fn each_death_costs_the_zone_and_the_cost_fades() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        ticks(&mut game, now, now);
+        let before = game.vitality();
+        let (_, now) = fight_to_the_end(&mut game, now + 1);
+        ticks(&mut game, now, now);
+        assert_eq!(game.zone().corruption(), crate::content::CORRUPTION_PER_DEATH);
+        assert!(game.vitality() <= before - crate::content::CORRUPTION_PER_DEATH);
+
+        ticks(&mut game, now + 1, now + 6 * crate::content::CORRUPTION_FADES_EVERY.as_ticks());
+        assert_eq!(game.zone().corruption(), 0);
     }
 
     #[test]
@@ -619,25 +894,6 @@ mod tests {
 
         game.apply(&Command::take(ASH), Tick::new(now + TAKE_TIME.as_ticks()), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::NothingToTake));
-    }
-
-    #[test]
-    fn the_fallen_get_up_after_a_while_weak_but_standing() {
-        let (mut game, now) = bryn_marked_on_the_ledge();
-        let (_, now) = fight_to_the_end(&mut game, now);
-        let until = game.character(BRYN).unwrap().down_until().unwrap().get();
-
-        let mut events = Vec::new();
-        for tick in now..until {
-            game.tick(Tick::new(tick), &mut events);
-        }
-        assert!(game.character(BRYN).unwrap().is_down());
-        game.tick(Tick::new(until), &mut events);
-
-        let bryn = game.character(BRYN).unwrap();
-        assert!(!bryn.is_down());
-        assert_eq!(i64::from(bryn.health()), crate::content::HEALTH_ON_RISING);
-        assert_eq!(events.iter().filter(|event| matches!(event, Event::Character { outcome: Outcome::Rose, .. })).count(), 1);
     }
 
     #[test]

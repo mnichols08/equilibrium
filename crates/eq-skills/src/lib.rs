@@ -101,6 +101,13 @@ impl Proficiency {
         Practice { xp_gained, levels_gained }
     }
 
+    /// What carries over into a new life: `percent` of the level, rounded
+    /// down, with nothing banked and no memory of the old peak.
+    pub const fn reborn(&self, percent: u32) -> Self {
+        let level = self.level * percent / 100;
+        Self { level, progress: 0, peak: level }
+    }
+
     /// Drops up to `levels` levels, never below `floor`, and returns how
     /// many were lost. The peak is kept.
     pub fn lose(&mut self, levels: u32, floor: u32) -> u32 {
@@ -181,6 +188,16 @@ mod tests {
         let before = skill.progress();
         assert_eq!(skill.practice(50, &RULES).xp_gained, 35);
         assert!(skill.progress() > before || skill.level() > 20);
+    }
+
+    #[test]
+    fn a_new_life_keeps_a_share_of_the_level_and_forgets_the_peak() {
+        let mut skill = Proficiency::new();
+        skill.practice(u64::MAX, &Rules { cap: 40, ..RULES });
+        skill.lose(10, 0);
+        let reborn = skill.reborn(15);
+        assert_eq!((reborn.level(), reborn.peak(), reborn.progress()), (4, 4, 0));
+        assert_eq!(Proficiency::new().reborn(15), Proficiency::new());
     }
 
     #[test]

@@ -10,17 +10,32 @@ use eq_skills::Proficiency;
 use eq_world_graph::PlaceId;
 
 use crate::content::{
-    ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, HEALTH_ON_RISING, MAX_HEALTH, SKILL_RULES, SKILL_XP_PER_UNIT, STANDING_BANDS,
-    TIERS_PER_WHOLE,
+    ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, HEALTH_ON_RETURN, MAX_HEALTH, MOST_DEGRADATION, REBIRTH_CARRYOVER_PERCENT,
+    SKILL_RULES,
+    SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
 use crate::rest::{atrophy, atrophy_floor, rest_gained, with_rested_bonus, FULLY_RESTED};
-use crate::types::{Attribute, Resource, SkillKind, Standing};
+use crate::types::{Attribute, Passing, Resource, SkillKind, Standing};
 
 eq_ids::define_id!(
     /// Identifies a character within one [`Game`](crate::Game).
     CharacterId
 );
+
+/// A death: where the body lies and how long the spirit has to get back
+/// to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Death {
+    /// Where the body lies.
+    pub body: PlaceId,
+    /// How the spirit stands to the body.
+    pub passing: Passing,
+    /// The earliest the spirit may return.
+    pub ready_at: Tick,
+    /// When the body is lost and the spirit must be reborn.
+    pub lost_at: Tick,
+}
 
 /// One character in the world.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +48,11 @@ pub struct Character {
     pack: [u64; Resource::ALL.len()],
     taint: Meter,
     health: Meter,
-    down_until: Option<Tick>,
+    death: Option<Death>,
+    /// Which life this is, counting the first as 1.
+    life: u32,
+    /// How worn the spirit is by recent deaths. It outlasts rebirth.
+    degradation: Meter,
     rested: Meter,
     /// When sleep began, or will begin once they have settled.
     asleep_from: Option<Tick>,
@@ -53,7 +72,9 @@ impl Character {
             pack: [0; Resource::ALL.len()],
             taint: Meter::empty(0, 100),
             health: Meter::full(0, MAX_HEALTH),
-            down_until: None,
+            death: None,
+            life: 1,
+            degradation: Meter::empty(0, MOST_DEGRADATION),
             rested: Meter::full(0, FULLY_RESTED as i64),
             asleep_from: None,
         }
@@ -124,14 +145,31 @@ impl Character {
         self.health.value() as u32
     }
 
-    /// When the character will get back up, if they are down.
-    pub const fn down_until(&self) -> Option<Tick> {
-        self.down_until
+    /// The character's death, if they are a spirit.
+    pub const fn death(&self) -> Option<&Death> {
+        self.death.as_ref()
     }
 
-    /// Whether the character has lost a fight and not yet got up.
-    pub const fn is_down(&self) -> bool {
-        self.down_until.is_some()
+    /// Whether the character has died and not yet returned or been reborn.
+    /// A spirit walks the same places, unseen by the living.
+    pub const fn is_spirit(&self) -> bool {
+        self.death.is_some()
+    }
+
+    /// Which life this is, counting the first as 1.
+    pub const fn life(&self) -> u32 {
+        self.life
+    }
+
+    /// How many recent deaths still wear on the spirit.
+    pub const fn degradation(&self) -> u32 {
+        // The meter is bounded to a handful.
+        self.degradation.value() as u32
+    }
+
+    /// Lets one death's wear on the spirit fade.
+    pub(crate) fn recover_spirit(&mut self) {
+        self.degradation.adjust(-1);
     }
 
     /// Takes `damage` from health and returns what is left.
@@ -145,19 +183,37 @@ impl Character {
         self.health.adjust(points);
     }
 
-    /// Goes down until `until`, dropping everything carried and paying
-    /// off all taint. Returns what was dropped and, if the fall lifted
-    /// the land's mark, that change of standing.
-    pub(crate) fn fall(&mut self, until: Tick) -> ([u64; Resource::ALL.len()], Option<Outcome>) {
-        self.down_until = Some(until);
+    /// Dies, dropping everything carried and paying off all taint.
+    /// Returns what was dropped and, if dying lifted the land's mark,
+    /// that change of standing.
+    pub(crate) fn die(&mut self, death: Death) -> ([u64; Resource::ALL.len()], Option<Outcome>) {
+        self.death = Some(death);
+        self.degradation.adjust(1);
+        self.asleep_from = None;
         let cleansed = self.shift_taint(-i64::from(self.taint()));
         (core::mem::take(&mut self.pack), cleansed)
     }
 
-    /// Gets back up, weak but standing.
-    pub(crate) fn rise(&mut self) {
-        self.down_until = None;
-        self.health.set(HEALTH_ON_RISING);
+    /// Goes back into the body, weak but alive. Returns where the body lay.
+    pub(crate) fn return_to_body(&mut self) -> Option<PlaceId> {
+        let death = self.death.take()?;
+        self.place = death.body;
+        self.health.set(HEALTH_ON_RETURN);
+        Some(death.body)
+    }
+
+    /// Begins a new life at `place`: whole and rested, with a share of
+    /// what the last life learned and no memory of its peaks.
+    pub(crate) fn be_reborn(&mut self, place: PlaceId, now: Tick) {
+        self.death = None;
+        self.place = place;
+        self.busy_until = now;
+        self.life += 1;
+        self.health.set(MAX_HEALTH);
+        self.rested.set(i64::from(FULLY_RESTED));
+        for proficiency in self.skills.iter_mut().chain(&mut self.attributes) {
+            *proficiency = proficiency.reborn(REBIRTH_CARRYOVER_PERCENT);
+        }
     }
 
     /// What the character is called.

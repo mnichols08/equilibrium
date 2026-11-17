@@ -12,7 +12,9 @@ cargo run -p eq-cli
 
 One character on the Rocky Shoreline: a camp and nine places to gather, two of them cut off at high tide. The rules support many characters; the terminal plays one. Walk, gather, wait and watch what your choices do to the place.
 
-Over-harvesting marks whoever does it. A marked character can be attacked in the wilderness (`attack <name>`); the loser goes down for five minutes and drops everything they carry (`take`). Nobody can be harmed at camp, and anybody can in the cave, the grotto and on the reef.
+Over-harvesting marks whoever does it. A marked character can be attacked in the wilderness (`attack <name>`); the loser dies and drops everything they carry beside the body (`take`). Nobody can be harmed at camp, and anybody can in the cave, the grotto and on the reef.
+
+The dead walk as spirits the living cannot see. A spirit can only walk, `return` to its body or `relinquish` it. Die with someone standing by and you stay beside your body; die alone and you are pulled back to camp and must walk to it. Reach it within ten minutes and you stand up weak, with nothing in your pack. Miss it, or give it up, and you are reborn at camp with a sliver of what you knew. Each death soon after another holds the spirit back three minutes longer, and every death sickens the shoreline a little.
 
 Being up wears off your rested bonus, and the rested learn faster. `sleep` puts it back, but sleep is only safe at camp: anywhere else a sleeper can be robbed (`rob <name>`), and robbing someone the land has not marked marks the robber. Sleep for more than three days and the body starts to waste, though what it loses comes back four times faster than it was first learned. Type `help` in the game for commands.
 

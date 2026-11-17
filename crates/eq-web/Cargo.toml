@@ -21,3 +21,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Pinned: the wasm-bindgen CLI that CI downloads must be exactly this version.
 wasm-bindgen = "=0.2.130"
+
+[dev-dependencies]
+eq-events = { path = "../eq-events" }

@@ -11,10 +11,10 @@ use eq_clock::{Duration, Tick};
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
-use crate::combat::{Refusal, RobRefusal};
-use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, TIDE};
+use crate::combat::{Refusal, ReturnRefusal, RobRefusal};
+use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, TIDE};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
-use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
+use crate::types::{Attribute, Health, Passing, Resource, SkillKind, Standing};
 
 /// The command list.
 pub const HELP: &str = "\
@@ -27,6 +27,8 @@ Commands:
   take                 pick up what lies dropped on the ground
   sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
   rob <name>           go through the pack of someone asleep here
+  return               as a spirit, go back into your body
+  relinquish           as a spirit, give up your body and be reborn
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
   stats                show your skills and attributes
   pack (i)             show what you carry
@@ -37,7 +39,11 @@ has marked can be attacked. In contested places, anyone can.
 
 Sleep keeps you rested, and the rested learn faster. It is only safe in
 a haven: anywhere else a sleeper can be robbed. Sleep for more than a
-few days and the body starts to waste.";
+few days and the body starts to waste.
+
+If you are killed your body stays where it fell and you become a spirit.
+Get back to it within ten minutes and return, or be reborn at camp with
+a little of what you knew.";
 
 /// Shown when a view is asked for a character who is not in the world.
 const NOBODY: &str = "There is nobody by that name here.";
@@ -47,7 +53,7 @@ const NOBODY: &str = "There is nobody by that name here.";
 pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> {
     let here = game.character(viewer)?.place();
     match event {
-        Event::Character { who, outcome } if *who == viewer => Some(own(outcome, game)),
+        Event::Character { who, outcome } if *who == viewer => Some(own(outcome, game, viewer)),
         Event::Character { who, outcome } => witnessed(*who, outcome, game, viewer, here),
         Event::UnknownCharacter { .. } => None,
         Event::DepositChanged { place, resource, from, to } if *place == here => {
@@ -65,7 +71,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
 }
 
 /// What the viewer is told about their own action.
-fn own(outcome: &Outcome, game: &Game) -> String {
+fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
     match outcome {
         Outcome::Moved { to, .. } => format!("You make your way to {}.", place_name(game, *to)),
         Outcome::NoSuchExit { label } => format!("You can't go \"{label}\" from here."),
@@ -83,16 +89,26 @@ fn own(outcome: &Outcome, game: &Game) -> String {
         Outcome::AttributeRose { attribute, level } => {
             format!("You feel your {} grow to {level}.", attribute.name())
         }
-        Outcome::Down { .. } => "You are down and cannot do that yet. Wait until you are back on your feet.".into(),
+        Outcome::Bodiless => "You are a spirit. You have no hands for that.".into(),
+        Outcome::NotDead => "You are alive. There is no body to go back to or give up.".into(),
         Outcome::CannotAttack { target, why } => cannot_attack(name_of(game, *target), *why),
         Outcome::Struck { target, damage } => format!("You strike {} for {damage}.", name_of(game, *target)),
         Outcome::Hurt { by, damage, health } => {
             format!("{} strikes you for {damage}. You have {health} health left.", name_of(game, *by))
         }
-        Outcome::Downed { by } => {
-            format!("{} has put you down. Everything you carried spills onto the ground.", name_of(game, *by))
+        Outcome::Died { by, place, passing, .. } => died(game, *by, *place, *passing),
+        Outcome::CannotReturn { why: ReturnRefusal::NotAtBody } => {
+            let body = game.character(viewer).and_then(|you| you.death()).map(|death| death.body);
+            format!("Your body is not here. It lies at {}.", body.map_or("no place you know", |place| place_name(game, place)))
         }
-        Outcome::Rose => "You get back on your feet, weak but standing.".into(),
+        Outcome::CannotReturn { why: ReturnRefusal::TooSoon(ready_at) } => {
+            format!("Something still holds you back. You cannot return before {}.", time_of_day(*ready_at))
+        }
+        Outcome::Returned => "You are back in your body, weak but alive.".into(),
+        Outcome::Reborn { life } => format!(
+            "Your old body is gone. You walk out of the tide at {}, whole and rested, into life {life}. Little of what you knew has come with you.",
+            place_name(game, game.anchor()),
+        ),
         Outcome::Took { spoils } => format!("You take {} from the ground.", pile(spoils)),
         Outcome::NothingToTake => "There is nothing lying here to take.".into(),
         Outcome::Asleep => "You are asleep. Wake first.".into(),
@@ -116,6 +132,14 @@ fn own(outcome: &Outcome, game: &Game) -> String {
 fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: CharacterId, here: PlaceId) -> Option<String> {
     let actor = game.character(who)?;
     let name = actor.name();
+    // A death is seen by everyone where the body falls, though the spirit
+    // it leaves is not.
+    if let Outcome::Died { place, .. } = outcome {
+        return (*place == here).then(|| format!("{name} dies. What they carried lies beside the body."));
+    }
+    if !game.can_see(viewer, who) {
+        return None;
+    }
     match outcome {
         Outcome::Moved { from, to } if *to == here => {
             Some(format!("{name} arrives from {}.", place_name(game, *from)))
@@ -133,10 +157,8 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         Outcome::Struck { target, .. } if actor.place() == here && *target != viewer => {
             Some(format!("{name} strikes {}.", name_of(game, *target)))
         }
-        Outcome::Downed { .. } if actor.place() == here => {
-            Some(format!("{name} goes down. What they carried spills onto the ground."))
-        }
-        Outcome::Rose if actor.place() == here => Some(format!("{name} gets back up.")),
+        Outcome::Returned if actor.place() == here => Some(format!("{name}'s body stirs, and {name} stands.")),
+        Outcome::Reborn { .. } if actor.place() == here => Some(format!("{name} walks out of the tide, reborn.")),
         Outcome::LayDown { .. } if actor.place() == here => Some(format!("{name} settles down to sleep.")),
         Outcome::Woke { slept, .. } if actor.place() == here && slept.as_ticks() > 0 => {
             Some(format!("{name} wakes."))
@@ -159,6 +181,9 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     let mut lines = Vec::new();
     lines.push(format!("{} [{}]", here.name, here.safety.name()));
     lines.push(here.description.into());
+    if character.is_spirit() {
+        lines.push("You are a spirit. The living cannot see you, and the tide is nothing to you.".into());
+    }
     if let Some(deposit) = &here.deposit {
         lines.push(format!(
             "The {} here is {} and looks {}.",
@@ -170,7 +195,7 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     let others: Vec<String> = game
         .occupants(character.place())
         .iter()
-        .filter(|&&id| id != viewer)
+        .filter(|&&id| id != viewer && game.can_see(viewer, id))
         .filter_map(|&id| game.character(id))
         .map(|other| match condition(other, now) {
             Some(note) => format!("{} ({note})", other.name()),
@@ -179,6 +204,9 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         .collect();
     if !others.is_empty() {
         lines.push(format!("Also here: {}.", others.join(", ")));
+    }
+    for (id, body) in game.bodies_at(character.place()) {
+        lines.push(if id == viewer { "Your body lies here.".into() } else { format!("{}'s body lies here.", body.name()) });
     }
     if here.spoils.iter().any(|&amount| amount > 0) {
         lines.push(format!("Lying on the ground: {}.", pile(&here.spoils)));
@@ -229,6 +257,7 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
     for attribute in Attribute::ALL {
         lines.push(format!("  {:<11}{:>3}", attribute.name(), character.attribute(attribute).level()));
     }
+    lines.push(format!("Life         {:>3}", character.life()));
     lines.push(format!("Health       {:>3}", character.health()));
     lines.push(format!("Rested       {:>3}", character.rested()));
     let standing = match character.standing() {
@@ -267,8 +296,8 @@ fn name_of(game: &Game, who: CharacterId) -> &str {
 
 /// The one thing most worth knowing about someone at a glance.
 pub fn condition(character: &crate::Character, now: Tick) -> Option<&'static str> {
-    if character.is_down() {
-        Some("down")
+    if character.is_spirit() {
+        Some("spirit")
     } else if character.is_asleep(now) {
         Some("asleep")
     } else if character.standing() == Standing::Marked {
@@ -276,6 +305,33 @@ pub fn condition(character: &crate::Character, now: Tick) -> Option<&'static str
     } else {
         None
     }
+}
+
+/// What a character is told on dying, which depends on how their spirit
+/// stands to the body.
+fn died(game: &Game, by: CharacterId, place: PlaceId, passing: Passing) -> String {
+    let killed = format!("{} has killed you. What you carried lies beside your body.", name_of(game, by));
+    let anchor = place_name(game, game.anchor());
+    let body = place_name(game, place);
+    let limit = span(CORPSE_TIME);
+    let next = match passing {
+        Passing::Tethered => format!(
+            "Someone stood by, so your spirit stays close. Wait a moment, then return to your body. You have {limit} before it is lost."
+        ),
+        Passing::Severed => format!(
+            "You died alone, and your spirit is pulled to {anchor}. Get back to your body at {body} and return to it within {limit}, or be reborn."
+        ),
+        Passing::Corrupted => format!(
+            "The land here is failing, and it holds your spirit at {anchor} before you can start back to your body at {body}. You have {limit} before it is lost."
+        ),
+    };
+    format!("{killed} {next}")
+}
+
+/// World time as `h:mm:ss`, without the tide.
+fn time_of_day(now: Tick) -> String {
+    let seconds = now.get();
+    format!("{}:{:02}:{:02}", seconds / 3_600, seconds / 60 % 60, seconds % 60)
 }
 
 fn woke(slept: Duration, rested: u32, wasted: u32) -> String {
@@ -328,7 +384,6 @@ fn cannot_attack(name: &str, why: Refusal) -> String {
     match why {
         Refusal::Yourself => "You think better of it.".into(),
         Refusal::NotHere => format!("{name} is not here."),
-        Refusal::AlreadyDown => format!("{name} is already down."),
         Refusal::Haven => "Nobody can be harmed here.".into(),
         Refusal::Unmarked => {
             format!("{name} carries no mark. Out here you may only challenge those the land has marked.")
@@ -338,9 +393,8 @@ fn cannot_attack(name: &str, why: Refusal) -> String {
 
 /// World time and the state of the tide, for a prompt.
 pub fn clock(now: Tick) -> String {
-    let seconds = now.get();
     let tide = if TIDE.is_within(now, LOW_TIDE) { "low tide" } else { "high tide" };
-    format!("{}:{:02}:{:02} {tide}", seconds / 3_600, seconds / 60 % 60, seconds % 60)
+    format!("{} {tide}", time_of_day(now))
 }
 
 fn place_name(game: &Game, id: PlaceId) -> &'static str {

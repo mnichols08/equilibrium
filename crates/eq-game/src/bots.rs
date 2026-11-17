@@ -14,7 +14,7 @@ use eq_events::{Events, OutOfOrder, Session};
 use eq_nodes::Quality;
 
 use crate::content::{CIRCUIT, DEPOSIT_ROUTES, FULL_REST, MIN_WORKABLE_STOCK};
-use crate::{CharacterId, Command, Event, Game, Outcome, Safety, Standing};
+use crate::{Character, CharacterId, Command, Death, Event, Game, Outcome, Safety, Standing};
 
 /// A warden with less health than this leaves fighting to others.
 const HEALTH_TO_FIGHT: u32 = 40;
@@ -131,6 +131,8 @@ struct Bot {
     plan: Plan,
     step: usize,
     free_at: Tick,
+    /// The life the bot was last seen living, to notice a rebirth.
+    life: u32,
 }
 
 /// A set of bots and where each has got to in its plan.
@@ -142,7 +144,7 @@ pub struct Bots {
 impl Bots {
     /// Puts each named character under a plan.
     pub fn new(crew: impl IntoIterator<Item = (CharacterId, Plan)>) -> Self {
-        let bots = crew.into_iter().map(|(who, plan)| Bot { who, plan, step: 0, free_at: Tick::ZERO }).collect();
+        let bots = crew.into_iter().map(|(who, plan)| Bot { who, plan, step: 0, free_at: Tick::ZERO, life: 1 }).collect();
         Self { bots }
     }
 
@@ -190,12 +192,17 @@ impl Bots {
         // acted.
         events.extend(session.advance_to(now)?);
 
-        let (bot, world) = (&self.bots[index], session.world());
-        let who = bot.who;
-        if let Some(until) = world.character(who).and_then(|character| character.down_until()) {
-            self.bots[index].free_at = until.max(now + PAUSE);
-            return Ok(());
+        let who = self.bots[index].who;
+        let Some(me) = session.world().character(who) else { return Ok(()) };
+        // A new life starts at camp, so the plan starts again too.
+        if me.life() != self.bots[index].life {
+            self.bots[index].life = me.life();
+            self.bots[index].step = 0;
         }
+        if let Some(death) = me.death().copied() {
+            return self.haunt(index, &death, session, events, now);
+        }
+        let (bot, world) = (&self.bots[index], session.world());
         // The command to give, and the least time before the next turn.
         let choice = match sleep_duty(world, bot, now) {
             Sleep::Until(wake_at) => {
@@ -215,6 +222,33 @@ impl Bots {
         };
         events.extend(session.submit(now, command)?);
         self.bots[index].free_at = busy_until(session, who, now).max(now + pause);
+        Ok(())
+    }
+
+    /// A dead bot makes for its body by the shortest way and returns to
+    /// it as soon as it may. If it is too late, rebirth takes care of it.
+    fn haunt(&mut self, index: usize, death: &Death, session: &mut Session<Game>, events: &mut Events<Game>, now: Tick) -> Result<(), OutOfOrder> {
+        let who = self.bots[index].who;
+        let world = session.world();
+        let here = world.character(who).map(Character::place);
+        let command = if here == Some(death.body) {
+            if now < death.ready_at {
+                self.bots[index].free_at = death.ready_at;
+                return Ok(());
+            }
+            Some(Command::return_to_body(who))
+        } else {
+            // Water is nothing to a spirit, so every exit will do.
+            let step = here.and_then(|place| world.map().first_step(place, death.body, |_| true));
+            step.map(|exit| Command::go(who, &exit.label))
+        };
+        match command {
+            Some(command) => {
+                events.extend(session.submit(now, command)?);
+                self.bots[index].free_at = busy_until(session, who, now).max(now + PAUSE);
+            }
+            None => self.bots[index].free_at = now + IDLE,
+        }
         Ok(())
     }
 
@@ -313,8 +347,12 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
 mod tests {
     use super::*;
 
+    fn happened(events: &Events<Game>, wanted: impl Fn(&Event) -> bool) -> bool {
+        events.iter().any(|stamped| wanted(&stamped.value))
+    }
+
     #[test]
-    fn a_warden_puts_down_a_marked_bot_and_takes_what_it_drops() {
+    fn a_warden_kills_a_marked_bot_and_takes_what_it_drops() {
         let mut session = session(&["Ash", "Bryn"]);
         let ledge = DEPOSIT_ROUTES[0];
         let mut bots = Bots::new([
@@ -322,14 +360,45 @@ mod tests {
             (BRYN, Plan::camp(Policy::Greedy, ledge)),
         ]);
         let events = bots.run(&mut session, Tick::new(3_000)).unwrap();
-        let downed = Event::Character { who: BRYN, outcome: Outcome::Downed { by: ASH } };
-        assert!(events.iter().any(|stamped| stamped.value == downed), "Bryn was never put down");
-        assert!(events.iter().any(|stamped| {
-            matches!(stamped.value, Event::Character { who: ASH, outcome: Outcome::Took { .. } })
-        }));
-        assert!(!events.iter().any(|stamped| {
-            matches!(stamped.value, Event::Character { who: ASH, outcome: Outcome::Downed { .. } })
-        }));
+        assert!(
+            happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { by: ASH, .. } })),
+            "Bryn was never killed"
+        );
+        assert!(happened(&events, |event| matches!(event, Event::Character { who: ASH, outcome: Outcome::Took { .. } })));
+        assert!(!happened(&events, |event| matches!(event, Event::Character { who: ASH, outcome: Outcome::Died { .. } })));
+    }
+
+    #[test]
+    fn a_dead_bot_walks_back_to_its_body_and_returns_to_it() {
+        let mut session = session(&["Ash", "Bryn"]);
+        let ledge = DEPOSIT_ROUTES[0];
+        let mut bots = Bots::new([
+            (ASH, Plan::camp(Policy::Careful, ledge).as_warden()),
+            (BRYN, Plan::camp(Policy::Greedy, ledge)),
+        ]);
+        let events = bots.run(&mut session, Tick::new(3_000)).unwrap();
+        assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Returned })));
+        assert!(!happened(&events, |event| matches!(event, Event::Character { outcome: Outcome::Reborn { .. }, .. })));
+        assert_eq!(session.world().character(BRYN).unwrap().life(), 1);
+    }
+
+    #[test]
+    fn a_bot_whose_body_is_out_of_reach_in_time_is_reborn_and_starts_its_plan_again() {
+        // The grotto is five legs from camp: too far to walk back in ten minutes.
+        let mut session = session(&["Ash", "Bryn"]);
+        let grotto = DEPOSIT_ROUTES[6];
+        let mut bots = Bots::new([
+            (ASH, Plan::camp(Policy::Careful, grotto).as_warden()),
+            (BRYN, Plan::camp(Policy::Greedy, grotto)),
+        ]);
+        // Contested ground: the warden only strikes once Bryn is marked.
+        let events = bots.run(&mut session, Tick::new(6_000)).unwrap();
+        let died = happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { .. } }));
+        assert!(died, "Bryn was never killed");
+        let bryn = session.world().character(BRYN).unwrap();
+        assert!(bryn.life() >= 1);
+        // Whether Bryn made it back or was reborn, it ends up working the grotto again.
+        assert_eq!(session.world().place_of(BRYN).map(|place| place.name), Some("Deep Grotto"));
     }
 
     /// How long a bot stays up before it must sleep, with a little over.

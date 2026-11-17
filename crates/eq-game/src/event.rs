@@ -7,8 +7,8 @@ use eq_nodes::Quality;
 use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
-use crate::combat::{Refusal, RobRefusal};
-use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
+use crate::combat::{Refusal, ReturnRefusal, RobRefusal};
+use crate::types::{Attribute, Health, Passing, Resource, SkillKind, Standing};
 
 /// What came of one character's action.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,11 +65,10 @@ pub enum Outcome {
         /// The new level.
         level: u32,
     },
-    /// They are down and cannot act yet.
-    Down {
-        /// When they will get up.
-        until: Tick,
-    },
+    /// They are a spirit and have no hands for that.
+    Bodiless,
+    /// They are alive, so there is no body to return to or give up.
+    NotDead,
     /// They were not allowed to attack.
     CannotAttack {
         /// Who they meant to attack.
@@ -93,13 +92,30 @@ pub enum Outcome {
         /// The health they have left.
         health: u32,
     },
-    /// They lost a fight. Everything they carried is on the ground.
-    Downed {
-        /// Who put them down.
+    /// They died. Everything they carried is on the ground beside the
+    /// body, and they are a spirit now.
+    Died {
+        /// Who killed them.
         by: CharacterId,
+        /// Where the body lies.
+        place: PlaceId,
+        /// How the spirit stands to the body.
+        passing: Passing,
+        /// When the body will be lost if the spirit has not returned.
+        lost_at: Tick,
     },
-    /// They got back on their feet.
-    Rose,
+    /// They could not return to their body.
+    CannotReturn {
+        /// Why not.
+        why: ReturnRefusal,
+    },
+    /// They went back into their body, weak but alive.
+    Returned,
+    /// Their body was lost or given up, and they began a new life.
+    Reborn {
+        /// Which life this is, counting the first as 1.
+        life: u32,
+    },
     /// They picked up what lay on the ground.
     Took {
         /// How much of each resource, in pack order.

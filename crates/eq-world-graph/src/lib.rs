@@ -197,13 +197,50 @@ impl<P> Graph<P> {
         })
     }
 
+    /// The first exit to take on a shortest way from `from` to `to`,
+    /// walking only exits that `usable` allows.
+    ///
+    /// Returns `None` if `to` cannot be reached, or if `from` is already
+    /// `to`. Among equally short ways, the one found first in the order
+    /// exits were added wins, so the answer is always the same.
+    pub fn first_step(&self, from: PlaceId, to: PlaceId, usable: impl Fn(&Exit) -> bool) -> Option<&Exit> {
+        // For each place reached, the first exit that was taken out of
+        // `from` to get there.
+        let mut first: Vec<Option<&Exit>> = alloc::vec![None; self.entries.len()];
+        let mut reached = alloc::vec![false; self.entries.len()];
+        let mut queue = alloc::collections::VecDeque::new();
+        *reached.get_mut(index_of(from)?)? = true;
+        queue.push_back(from);
+
+        while let Some(place) = queue.pop_front() {
+            for exit in self.exits(place).iter().filter(|exit| usable(exit)) {
+                let next = index_of(exit.to)?;
+                if reached[next] {
+                    continue;
+                }
+                reached[next] = true;
+                first[next] = first[index_of(place)?].or(Some(exit));
+                if exit.to == to {
+                    return first[next];
+                }
+                queue.push_back(exit.to);
+            }
+        }
+        None
+    }
+
     fn entry(&self, id: PlaceId) -> Option<&Entry<P>> {
-        self.entries.get(usize::try_from(id.get()).ok()?)
+        self.entries.get(index_of(id)?)
     }
 
     fn entry_mut(&mut self, id: PlaceId) -> Option<&mut Entry<P>> {
-        self.entries.get_mut(usize::try_from(id.get()).ok()?)
+        self.entries.get_mut(index_of(id)?)
     }
+}
+
+/// Where a place sits in the graph's list, if its id fits a `usize`.
+fn index_of(id: PlaceId) -> Option<usize> {
+    usize::try_from(id.get()).ok()
 }
 
 #[cfg(test)]
@@ -258,6 +295,39 @@ mod tests {
         assert_eq!(map.connect(ghost, "x", a, Passage::Open), Err(UnknownPlace(ghost)));
         assert!(map.exits(a).is_empty());
         assert!(map.place(ghost).is_none());
+    }
+
+    /// camp - beach - shallows, with a tidal short cut from camp to shallows.
+    fn shore() -> (Graph<&'static str>, [PlaceId; 3]) {
+        let mut map = Graph::new();
+        let places = [map.add_place("camp"), map.add_place("beach"), map.add_place("shallows")];
+        let [camp, beach, shallows] = places;
+        map.connect_both(camp, "east", beach, "west", Passage::Open).unwrap();
+        map.connect_both(beach, "east", shallows, "west", Passage::Open).unwrap();
+        map.connect_both(camp, "wade", shallows, "wade", tide()).unwrap();
+        (map, places)
+    }
+
+    #[test]
+    fn first_step_takes_the_shortest_usable_way() {
+        let (map, [camp, beach, shallows]) = shore();
+        let label = |from, to, usable: fn(&Exit) -> bool| map.first_step(from, to, usable).map(|exit| exit.label.as_str());
+
+        assert_eq!(label(camp, shallows, |_| true), Some("wade"));
+        assert_eq!(label(camp, shallows, |exit| exit.passage == Passage::Open), Some("east"));
+        assert_eq!(label(shallows, camp, |exit| exit.passage == Passage::Open), Some("west"));
+        assert_eq!(label(camp, beach, |_| true), Some("east"));
+    }
+
+    #[test]
+    fn first_step_gives_up_when_there_is_no_way_or_nowhere_to_go() {
+        let (mut map, [camp, _, shallows]) = shore();
+        let island = map.add_place("island");
+        assert!(map.first_step(camp, island, |_| true).is_none());
+        assert!(map.first_step(camp, camp, |_| true).is_none());
+        assert!(map.first_step(camp, shallows, |_| false).is_none());
+        assert!(map.first_step(PlaceId::new(99), camp, |_| true).is_none());
+        assert!(map.first_step(camp, PlaceId::new(99), |_| true).is_none());
     }
 
     #[test]
