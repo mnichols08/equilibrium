@@ -9,13 +9,14 @@ use eq_world_graph::{Graph, PlaceId};
 
 use alloc::string::String;
 
-use crate::character::{Character, CharacterId, Death};
+use crate::character::{Character, CharacterId, Death, Rebirth};
 use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RobRefusal};
 use crate::command::{Action, Command};
 use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 use crate::content::{
     self, ATTACK_TIME, BASE_EFFORT, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
-    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, EFFORT_SPREAD, FADED_CARRYOVER_PERCENT, GATHER_TIME,
+    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, EFFORT_SPREAD,
+    FADED_CARRYOVER_PERCENT, GATHER_TIME,
     HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
     REBIRTH_CARRYOVER_PERCENT, REDEMPTION_CLOCK, RESTED_LASTS, SEEK_TIME, SETTLE_TIME, TAINT_FADES_EVERY,
     TAINT_FOR_ROBBING, TAKE_TIME, TETHERED_WAIT, TRAVEL_TIME,
@@ -361,6 +362,7 @@ impl Game {
         }
         match action {
             Action::Go(label) => self.go(index, label, now, outcomes),
+            Action::Gather => self.draw(index, now, outcomes),
             Action::Return => outcomes.push(self.return_to_body(index, now)),
             Action::Relinquish => outcomes.push(self.rebirth(index, now)),
             _ => outcomes.push(Outcome::Bodiless),
@@ -390,6 +392,7 @@ impl Game {
         }
         match action {
             Action::Go(label) => self.go(index, label, now, outcomes),
+            Action::Gather => self.draw(index, now, outcomes),
             Action::Seek => self.seek(index, now, outcomes),
             Action::Rest => {
                 character.forgotten_mut().expect("checked above").dormant = true;
@@ -399,6 +402,20 @@ impl Game {
             Action::Return | Action::Relinquish => outcomes.push(Outcome::CannotReturn { why: ReturnRefusal::NoBody }),
             _ => outcomes.push(Outcome::Bodiless),
         }
+    }
+
+    /// A spirit draws ectoplasm from any place the living can work.
+    fn draw(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let character = &mut self.characters[index];
+        let workable = self.zone.map().place(character.place()).is_some_and(|place| place.deposit.is_some());
+        if !workable {
+            return outcomes.push(Outcome::NothingToGather);
+        }
+        let mut risen = Vec::new();
+        let amount = character.draw(&mut risen);
+        character.busy_until = now + DRAW_TIME;
+        outcomes.push(Outcome::Drew { amount, held: character.ectoplasm() });
+        outcomes.append(&mut risen);
     }
 
     /// Searches a place for a memory. Each place with a deposit holds
@@ -416,7 +433,7 @@ impl Game {
         character.busy_until = now + SEEK_TIME;
         outcomes.push(Outcome::Remembered { found, needed: MEMORIES_TO_REDEEM });
         if redeemed {
-            let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT);
+            let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true);
             outcomes.push(Outcome::Redeemed { by: None, life });
         }
     }
@@ -437,7 +454,7 @@ impl Game {
         let Some(named) = self.index_of(target) else { return };
         self.characters[index].busy_until = now + NAME_TIME;
         outcomes.push(Outcome::Named { target });
-        let life = self.begin_life(named, now, REBIRTH_CARRYOVER_PERCENT);
+        let life = self.begin_life(named, now, REBIRTH_CARRYOVER_PERCENT, true);
         events.push(Event::Character { who: target, outcome: Outcome::Redeemed { by: Some(id_at(index)), life } });
     }
 
@@ -461,17 +478,24 @@ impl Game {
 
     /// Ends a spirit's tie to its body and starts a new life at the anchor.
     fn rebirth(&mut self, index: usize, now: Tick) -> Outcome {
-        Outcome::Reborn { life: self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT) }
+        Outcome::Reborn { life: self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true) }
     }
 
-    /// Starts a spirit's next life at the anchor, keeping `carryover`
-    /// percent of what it knew. Returns which life this is.
-    fn begin_life(&mut self, index: usize, now: Tick, carryover: u32) -> u32 {
+    /// Starts a spirit's next life at the anchor. It keeps `base`
+    /// percent of what it knew, more with Lineage and, if it may spend
+    /// it, ectoplasm. Returns which life this is.
+    fn begin_life(&mut self, index: usize, now: Tick, base: u32, spend_ectoplasm: bool) -> u32 {
         let who = id_at(index);
+        // Whoever died where something can be worked remembers that work best.
+        let favoured = self.characters[index]
+            .death()
+            .and_then(|death| self.zone.map().place(death.body))
+            .and_then(|place| place.deposit)
+            .map(|deposit| deposit.resource.attributes()[0]);
         let character = &mut self.characters[index];
         self.occupancy.leave(character.place(), who);
         self.occupancy.enter(self.anchor, who);
-        character.be_reborn(self.anchor, now, carryover);
+        character.be_reborn(self.anchor, now, Rebirth { base, favoured, spend_ectoplasm });
         self.dead.retain(|&spirit| spirit != who);
         self.forgotten.retain(|&spirit| spirit != who);
         character.life()
@@ -836,7 +860,7 @@ impl Game {
         for index in faded {
             let character = &self.characters[index];
             self.shrine.push(Epitaph { name: character.name().into(), life: character.life(), at: now });
-            let life = self.begin_life(index, now, FADED_CARRYOVER_PERCENT);
+            let life = self.begin_life(index, now, FADED_CARRYOVER_PERCENT, false);
             events.push(Event::Character { who: id_at(index), outcome: Outcome::Faded { life } });
         }
     }
@@ -877,8 +901,10 @@ impl Game {
             return;
         }
         let arrives_living = !character.is_spirit();
+        // A spirit past its first tier crosses the Spirit Layer faster.
+        let pace = if arrives_living { 1 } else { character.spirit_tier().pace() };
         character.place = exit.to;
-        character.busy_until = now + TRAVEL_TIME;
+        character.busy_until = now + Duration::ticks(TRAVEL_TIME.as_ticks() / pace);
         // Whatever lives there needs a moment to notice a newcomer.
         if arrives_living {
             let noticed_at = now + TRAVEL_TIME + CREATURE_BLOW_EVERY;
@@ -1122,7 +1148,7 @@ mod tests {
 
         // A spirit has no hands, and the living cannot touch what they cannot see.
         let mut events = Vec::new();
-        game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
+        game.apply(&Command::take(BRYN), Tick::new(now), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::Bodiless));
         assert_eq!(game.can_attack(ASH, BRYN), Err(Refusal::NotHere));
         assert!(!game.can_see(ASH, BRYN) && game.can_see(BRYN, ASH) && game.can_see(BRYN, BRYN));
@@ -1941,5 +1967,85 @@ mod tests {
         assert_eq!(game.relics_at(LEDGE).count(), 1);
         ticks(&mut game, relic.expires_at.get(), relic.expires_at.get() + 10);
         assert_eq!(game.relics_at(LEDGE).count(), 0);
+    }
+
+    /// Bryn dead on the Ore Ledge, Ash having killed them, with the
+    /// spirit walked back from camp to stand over its body.
+    fn bryn_a_spirit_on_the_ledge() -> (Game, u64) {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let mut events = Vec::new();
+        game.apply(&Command::go(BRYN, "north"), Tick::new(now), &mut events);
+        (game, now + TRAVEL_TIME.as_ticks())
+    }
+
+    #[test]
+    fn a_spirit_draws_ectoplasm_where_the_living_work_and_keeps_it_through_rebirth() {
+        let (mut game, mut now) = bryn_a_spirit_on_the_ledge();
+        let mut events = Vec::new();
+        for _ in 0..45 {
+            game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
+            now += DRAW_TIME.as_ticks();
+        }
+        assert_eq!(outcome(&events), Some(&Outcome::Drew { amount: 1, held: 45 }));
+        let mining = game.character(BRYN).unwrap().skill(SkillKind::Mining).level();
+
+        game.apply(&Command::relinquish(BRYN), Tick::new(now), &mut events);
+        let bryn = game.character(BRYN).unwrap();
+        // 45 ectoplasm buys two percent on top of the fifteen; five are left over.
+        assert_eq!((bryn.kept(), bryn.ectoplasm()), (17, 5));
+        assert_eq!(bryn.skill(SkillKind::Mining).level(), mining * 17 / 100);
+    }
+
+    #[test]
+    fn there_is_no_ectoplasm_at_camp_and_none_for_the_living() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let mut events = Vec::new();
+        game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NothingToGather), "severed spirits start at camp");
+        assert_eq!(game.character(ASH).unwrap().ectoplasm(), 0);
+    }
+
+    #[test]
+    fn enough_ectoplasm_makes_a_wandering_phantom_who_travels_twice_as_fast() {
+        let (mut game, mut now) = bryn_a_spirit_on_the_ledge();
+        let mut events = Vec::new();
+        for _ in 0..100 {
+            game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
+            now += DRAW_TIME.as_ticks();
+        }
+        let risen = Outcome::SpiritRose { tier: crate::spirit::SpiritTier::WanderingPhantom };
+        assert!(events.contains(&Event::Character { who: BRYN, outcome: risen }));
+        game.apply(&Command::go(BRYN, "north"), Tick::new(now), &mut events);
+        assert_eq!(game.character(BRYN).unwrap().busy_until(), Tick::new(now + TRAVEL_TIME.as_ticks() / 2));
+    }
+
+    #[test]
+    fn every_life_lived_adds_to_lineage() {
+        let (mut game, now) = bryn_a_spirit_on_the_ledge();
+        assert_eq!(game.character(BRYN).unwrap().attribute(Attribute::Lineage).level(), 0);
+        let mut events = Vec::new();
+        game.apply(&Command::relinquish(BRYN), Tick::new(now), &mut events);
+        assert_eq!(game.character(BRYN).unwrap().attribute(Attribute::Lineage).level(), 2);
+    }
+
+    #[test]
+    fn the_spirit_grows_as_the_body_wastes() {
+        let mut game = Game::new(1, &["Ash"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        let mut now = 30;
+        while game.character(ASH).unwrap().skill(SkillKind::Mining).level() < 6 {
+            game.tick(Tick::new(now), &mut events);
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += 1;
+        }
+        now += GATHER_TIME.as_ticks();
+        assert_eq!(game.character(ASH).unwrap().attribute(Attribute::Attunement).level(), 0);
+        game.apply(&Command::rest(ASH), Tick::new(now), &mut events);
+        game.apply(&Command::wake(ASH), Tick::new(now + Duration::days(10).as_ticks()), &mut events);
+        assert!(woke(&events).unwrap().2 > 0, "the body should have wasted");
+        assert!(game.character(ASH).unwrap().attribute(Attribute::Attunement).level() > 0);
     }
 }

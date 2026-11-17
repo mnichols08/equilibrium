@@ -31,6 +31,7 @@ Commands:
   rob <name>           go through the pack of someone asleep here
   return               as a spirit, go back into your body
   relinquish           as a spirit, give up your body and be reborn
+  gather               as a spirit, draw ectoplasm where the living would work
   seek                 as a forgotten spirit, search here for a memory
   name <name>          at camp, speak a forgotten spirit's name to redeem it
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
@@ -49,6 +50,11 @@ If you are killed your body stays where it fell and you become a spirit.
 Get back to it within ten minutes and return. Leave it longer and it
 rises as a guard over what you dropped; then you can only relinquish it
 and be reborn at camp with a little of what you knew.
+
+Ectoplasm is the one thing you keep through death. At rebirth it is
+spent, twenty for each extra percent of the old life you keep, up to
+fifteen. Your Lineage grows with every life and raises it further. Die
+where something can be worked and you remember that work best.
 
 What the dead drop lies in a relic. Common things anyone can take. A
 relic holding tide-glass is sealed to all but its owner until the body
@@ -113,6 +119,9 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::AttributeRose { attribute, level } => {
             format!("You feel your {} grow to {level}.", attribute.name())
         }
+        Outcome::Drew { amount: 0, .. } => "You can hold no more ectoplasm.".into(),
+        Outcome::Drew { amount, held } => format!("You draw {amount} ectoplasm from this place. You hold {held}."),
+        Outcome::SpiritRose { tier } => format!("Your spirit has grown. You are a {} now.", tier.name()),
         Outcome::Bodiless => "You are a spirit. You have no hands for that.".into(),
         Outcome::NotDead => "You are alive. There is no body to go back to or give up.".into(),
         Outcome::CannotAttack { target, why } => cannot_attack(name_of(game, *target), *why),
@@ -396,7 +405,12 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
     for attribute in Attribute::ALL {
         lines.push(format!("  {:<11}{:>3}", attribute.name(), character.attribute(attribute).level()));
     }
-    lines.push(format!("Life         {:>3}", character.life()));
+    let began = match character.kept() {
+        0 => String::new(),
+        kept => format!("  (began with {kept}% of the last)"),
+    };
+    lines.push(format!("Life         {:>3}{began}", character.life()));
+    lines.push(format!("Ectoplasm    {:>3}  ({})", character.ectoplasm(), character.spirit_tier().name()));
     lines.push(format!("Health       {:>3}", character.health()));
     lines.push(format!("Rested       {:>3}", character.rested()));
     let standing = match character.standing() {

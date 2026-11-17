@@ -80,7 +80,7 @@
     </zb-each>
   </div>
   <div role="group" aria-label="Do">
-    <button type="button" class="primary" disabled={!canGather || spirit} onclick={() => emit('command', 'gather')}>Gather</button>
+    <button type="button" class="primary" disabled={!canGather} onclick={() => emit('command', 'gather')}>{spirit ? "Draw ectoplasm" : "Gather"}</button>
     <button zb-if={canTake} type="button" class="primary" disabled={spirit} onclick={() => emit('command', 'take')}>Take what's here</button>
     <button type="button" onclick={() => emit('command', 'inspect')}>Inspect</button>
     <button type="button" disabled={Boolean(body) || dormant} onclick={() => emit('command', 'sleep 8h')}>{forgotten ? "Lie dormant" : "Sleep 8 hours"}</button>

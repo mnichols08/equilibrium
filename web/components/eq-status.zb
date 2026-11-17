@@ -1,10 +1,10 @@
 <!--
   Where you are and how you and the shoreline are doing.
   @prop {{ name: string, marked: boolean, asleep: boolean }[]} company - Everyone else standing where you are.
-  @prop {{ place_name: string, description: string, health: number, life: number, body: null | { place_name: string, can_return: boolean, held_for: number, lost_in: number }, forgotten: null | { dormant: boolean, memories: number, needed: number, time_left: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
+  @prop {{ place_name: string, description: string, health: number, life: number, ectoplasm: number, spirit_tier: string, body: null | { place_name: string, can_return: boolean, held_for: number, lost_in: number }, forgotten: null | { dormant: boolean, memories: number, needed: number, time_left: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
 -->
 <script>
-  const emptyYou = { place_name: '', description: '', health: 100, life: 1, body: null, forgotten: null, rested: 100, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
+  const emptyYou = { place_name: '', description: '', health: 100, life: 1, ectoplasm: 0, spirit_tier: 'Lost Shade', body: null, forgotten: null, rested: 100, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
   const trained = [...you.skills, ...you.attributes].filter((entry) => entry.level > 0)
   const carrying = you.pack.map((item) => `${item.amount} ${item.name}`).join(', ')
   const note = (person) => (person.asleep ? ' (asleep)' : person.marked ? ' (marked)' : '')
@@ -51,6 +51,7 @@
     Taint {you.taint}{you.marked ? " — the land has marked you" : ""}
   </p>
   <p>{carrying ? `You carry ${carrying}.` : "You carry nothing."}</p>
+  <p zb-if={you.ectoplasm > 0}>Ectoplasm {you.ectoplasm} ({you.spirit_tier})</p>
   <ul zb-if={trained.length > 0} aria-label="Skills and attributes">
     <zb-each items={trained} as="entry" key={entry.name}>
       <li>{entry.name} {entry.level}</li>

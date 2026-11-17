@@ -61,6 +61,10 @@ pub struct You {
     pub body: Option<BodyView>,
     /// Their redemption, if they slept too long and are a forgotten spirit.
     pub forgotten: Option<ForgottenView>,
+    /// Ectoplasm held: the one thing death does not take.
+    pub ectoplasm: u64,
+    /// Their spirit tier, by name.
+    pub spirit_tier: &'static str,
     /// How rested they are, 0 to 100. The rested learn faster.
     pub rested: u32,
     /// Taint, 0 to 100.
@@ -230,7 +234,12 @@ impl Scene {
             place: here.get(),
             place_name: place.name,
             description: place.description,
-            can_gather: place.deposit.is_some_and(|deposit| is_workable(&deposit)),
+            // The living need stock to work; a waking spirit only needs the place.
+            can_gather: match (character.is_spirit(), place.deposit) {
+                (false, Some(deposit)) => is_workable(&deposit),
+                (true, Some(_)) => !character.is_dormant(),
+                (_, None) => false,
+            },
             can_take: game.can_take(viewer),
             health: character.health(),
             life: character.life(),
@@ -242,6 +251,8 @@ impl Scene {
                 time_left: REDEMPTION_CLOCK.saturating_sub(forgotten.played).as_ticks(),
                 can_seek: !forgotten.dormant && place.deposit.is_some() && !forgotten.found_in.contains(&here),
             }),
+            ectoplasm: character.ectoplasm(),
+            spirit_tier: character.spirit_tier().name(),
             rested: character.rested(),
             taint: character.taint(),
             marked: character.standing() == Standing::Marked,
@@ -425,6 +436,7 @@ mod tests {
         assert_eq!(here[0].people, [you]);
         assert_eq!((scene.you.health, scene.you.life, scene.you.can_take), (100, 1, false));
         assert_eq!((scene.you.body.clone(), scene.you.forgotten.clone()), (None, None));
+        assert_eq!((scene.you.ectoplasm, scene.you.spirit_tier), (0, "Lost Shade"));
         assert!(scene.places.iter().all(|place| place.bodies.is_empty()));
         assert!(scene.places.iter().all(|place| !place.spoils));
     }
@@ -480,9 +492,12 @@ mod tests {
         assert_eq!((woken.dormant, woken.memories, woken.needed, woken.can_seek), (false, 0, 3, true));
         assert_eq!(woken.time_left, 36_000);
 
+        assert!(scene(&solo).you.can_gather, "a waking spirit can draw ectoplasm here");
+        solo.handle("gather");
+        assert_eq!(scene(&solo).you.ectoplasm, 1);
         solo.handle("seek");
         let after = scene(&solo).you.forgotten.unwrap();
-        assert_eq!((after.memories, after.can_seek, after.time_left), (1, false, 36_000 - 600));
+        assert_eq!((after.memories, after.can_seek, after.time_left), (1, false, 36_000 - 610));
     }
 
     /// The same hunt the browser test plays (`web/test/e2e.html`), so a
