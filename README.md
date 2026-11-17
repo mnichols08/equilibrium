@@ -19,6 +19,10 @@ One character on the Rocky Shoreline: a camp and nine places to gather, two of t
 
 A basic top-down view: the same game compiled to WebAssembly, drawn by four [Zubra](https://github.com/journey-to-code-org/zubra) components.
 
+Play it at <https://mnichols08.github.io/equilibrium/>. Every merge to `main` that passes CI is published there.
+
+To build it yourself:
+
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.130
