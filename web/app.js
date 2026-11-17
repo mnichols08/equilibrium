@@ -152,6 +152,8 @@ export function pageView(root, options = {}) {
         foes: scene.places.find((place) => place.here)?.creatures ?? [],
         body: scene.you.body,
         forgotten: scene.you.forgotten,
+        afterlife: scene.you.afterlife,
+        burials: scene.you.can_bury,
         asleep: scene.you.asleep,
         canRite: scene.you.can_rite,
         riteWaiting: scene.you.rite_waiting,

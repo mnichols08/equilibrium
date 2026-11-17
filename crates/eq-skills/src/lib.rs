@@ -108,6 +108,14 @@ impl Proficiency {
         Self { level, progress: 0, peak: level }
     }
 
+    /// What carries over into a new life that remembers the old one:
+    /// `percent` of the level, rounded down, with nothing banked, but
+    /// the old peak kept. Practice then counts for more until the peak
+    /// is reached again (see `Rules::relearning_percent`).
+    pub const fn reborn_remembering(&self, percent: u32) -> Self {
+        Self { level: self.level * percent / 100, progress: 0, peak: self.peak }
+    }
+
     /// Drops up to `levels` levels, never below `floor`, and returns how
     /// many were lost. The peak is kept.
     pub fn lose(&mut self, levels: u32, floor: u32) -> u32 {
@@ -123,6 +131,27 @@ impl Proficiency {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_life_that_remembers_the_last_keeps_its_peak_and_relearns_faster() {
+        let rules = Rules { cap: 100, xp_per_level: 100, relearning_percent: 400 };
+        let mut skill = Proficiency::new();
+        while skill.level() < 20 {
+            skill.practice(100, &rules);
+        }
+        let forgotten = skill.reborn(15);
+        let remembered = skill.reborn_remembering(15);
+        assert_eq!((forgotten.level(), forgotten.peak()), (3, 3));
+        assert_eq!((remembered.level(), remembered.peak()), (3, 20));
+
+        let (mut slow, mut fast) = (forgotten, remembered);
+        for _ in 0..60 {
+            slow.practice(10, &rules);
+            fast.practice(10, &rules);
+        }
+        assert!(fast.level() > slow.level() + 5, "{} against {}", fast.level(), slow.level());
+        assert!(fast.level() <= 21, "the head start ends at the old peak: {}", fast.level());
+    }
 
     const RULES: Rules = Rules { cap: 100, xp_per_level: 100, relearning_percent: 300 };
 

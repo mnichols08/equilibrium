@@ -41,6 +41,24 @@ pub enum Outcome {
         /// The name invited, as the world will keep it.
         name: String,
     },
+    /// They came into the world uninvited after its lands were all
+    /// founded, and so begin as a spirit that has not yet lived.
+    Unborn,
+    /// There is no body of that person's here to bury.
+    CannotBury {
+        /// Whose body they meant.
+        target: CharacterId,
+    },
+    /// They buried someone's body.
+    Buried {
+        /// Whose.
+        target: CharacterId,
+    },
+    /// Their body was buried. Their next life will remember this one.
+    WasBuried {
+        /// Who buried them.
+        by: CharacterId,
+    },
     /// They walked from one place to another.
     Moved {
         /// Where they left.

@@ -31,7 +31,9 @@ Commands:
   sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
   rob <name>           go through the pack of someone asleep here
   return               as a spirit, go back into your body
-  relinquish           as a spirit, give up your body and be reborn
+  seek                 as a spirit, search here for a memory of yourself:
+                       three, from three places, and you live again
+  bury <name>          lay someone's body in the ground where it lies
   gather               as a spirit, draw ectoplasm where the living would work
   seek                 as a forgotten spirit, search here for a memory
   name <name>          at camp, speak a forgotten spirit's name to redeem it
@@ -61,8 +63,15 @@ few days and the body starts to waste.
 
 If you are killed your body stays where it fell and you become a spirit.
 Get back to it within ten minutes and return. Leave it longer and it
-rises as a guard over what you dropped; then you can only relinquish it
-and be reborn at camp with a little of what you knew.
+rises as a guard over what you dropped. Then, or if someone buries it,
+the only way back to the living is through the afterlife: seek three
+memories of yourself in three places that can be worked. You arise in
+whichever land has fewest people, with a little of what you knew.
+
+Someone standing at a body can bury it instead of taking what lies
+beside it. What was dropped goes into the ground. Whoever is buried
+remembers the life they had: in the next they learn it again fast, up
+to where they were.
 
 Ectoplasm is the one thing you keep through death. At rebirth it is
 spent, twenty for each extra percent of the old life you keep, up to
@@ -184,18 +193,34 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             capitalise(&being_name(game, *by, viewer)),
         ),
         Outcome::BodyRose => {
-            "You left it too long. Your body has risen without you and stands guard over what you dropped. You can relinquish it and be reborn, or wait for someone to bring it down.".into()
+            "You left it too long. Your body has risen without you and stands guard over what you dropped. The way back to the living is through your memories now: seek three, in three places that can be worked.".into()
         }
         Outcome::RelicSealed => {
             "The relic here is sealed. It opens for its owner, or once the body it belongs to is gone or brought down.".into()
         }
         Outcome::CannotReturn { why: ReturnRefusal::Risen } => {
-            "Your body has risen as a guard. There is no going back into it. Relinquish it to be reborn.".into()
+            "Your body has risen as a guard. There is no going back into it. Seek your memories to live again.".into()
         }
         Outcome::Died { by: Cause::LongSleep, place, .. } => format!(
             "You slept too long. Your body has died where it lay at {}, and what you carried lies there. \
              You are a forgotten spirit now, with no body to go back to.",
             place_name(game, *place),
+        ),
+        Outcome::CannotReturn { why: ReturnRefusal::Buried } => {
+            "Your body is in the ground. There is no going back into it. Seek your memories to live again.".into()
+        }
+        Outcome::CannotReturn { why: ReturnRefusal::Unredeemed } => {
+            "There is no giving up and starting again. Return to your body if you still can, or seek three memories of yourself, in three places that can be worked, and live again.".into()
+        }
+        Outcome::Unborn => "You have not lived yet. Every land was founded before you came, and nobody sent for you, so you begin as a spirit. Seek three memories, in three places that can be worked, and you will be born wherever the world has most need of people.".into(),
+        Outcome::CannotBury { target } => format!("{}'s body does not lie here.", name_of(game, *target)),
+        Outcome::Buried { target } => format!(
+            "You lay {} in the ground, and what they dropped with them. Their next life will remember this one.",
+            name_of(game, *target),
+        ),
+        Outcome::WasBuried { by } => format!(
+            "{} has buried your body. You cannot go back to it, but the life you had will not be lost: you will learn it again fast.",
+            name_of(game, *by),
         ),
         Outcome::CannotReturn { why: ReturnRefusal::NoBody } => {
             "You have no body to go back to or give up. Seek your memories, or hope to be named at camp.".into()
@@ -241,7 +266,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         }
         Outcome::Returned => "You are back in your body, weak but alive.".into(),
         Outcome::Reborn { life } => format!(
-            "Your old body is gone. You walk out of the tide at {}, whole and rested, into life {life}. Little of what you knew has come with you.",
+            "You remember enough to live. You walk out of the tide at {}, whole and rested, into life {life}. Little of what you knew has come with you.",
             place_name(game, home_of(game, viewer)),
         ),
         Outcome::Warded { resource } => format!(
@@ -357,6 +382,9 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         }
         Outcome::Posted { .. } if actor.place() == here => Some(format!("{name} pins a contract to the board.")),
         Outcome::Accepted { .. } if actor.place() == here => Some(format!("{name} takes a contract from the board.")),
+        Outcome::Buried { target } if actor.place() == here => {
+            Some(format!("{name} lays {}'s body in the ground.", name_of(game, *target)))
+        }
         Outcome::Returned if actor.place() == here => Some(format!("{name}'s body stirs, and {name} stands.")),
         Outcome::Reborn { .. } | Outcome::Redeemed { .. } | Outcome::Faded { .. } if actor.place() == here => {
             Some(format!("{name} walks out of the tide, reborn."))
@@ -389,13 +417,20 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     if character.is_spirit() {
         lines.push("You are a spirit. The living cannot see you, and the tide is nothing to you.".into());
     }
-    if let Some(forgotten) = character.forgotten() {
-        lines.push(format!(
-            "You are forgotten: {} of {} memories found, {} left awake.",
+    let needed = crate::content::MEMORIES_TO_REDEEM;
+    match character.forgotten() {
+        Some(forgotten) if forgotten.unborn => {
+            lines.push(format!("You have not lived yet: {} of {needed} memories found.", forgotten.memories()));
+        }
+        Some(forgotten) => lines.push(format!(
+            "You are forgotten: {} of {needed} memories found, {} left awake.",
             forgotten.memories(),
-            crate::content::MEMORIES_TO_REDEEM,
             span(REDEMPTION_CLOCK.saturating_sub(forgotten.played)),
-        ));
+        )),
+        None if character.is_spirit() => {
+            lines.push(format!("Memories found on the way back to the living: {} of {needed}.", character.memories().len()));
+        }
+        None => {}
     }
     let zone = game.zone_at(character.place());
     if character.place() == zone.anchor() {

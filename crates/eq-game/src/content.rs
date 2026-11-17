@@ -145,6 +145,9 @@ pub const VIGIL_PER_TENDING: Duration = Duration::days(1);
 /// is looked after lasts four weeks, not two.
 pub const MOST_VIGIL: Duration = Duration::days(14);
 
+/// How long it takes to bury a body.
+pub const BURY_TIME: Duration = Duration::minutes(1);
+
 /// How long anyone can sleep before the body dies where it lies.
 pub const LONG_SLEEP: Duration = Duration::days(14);
 

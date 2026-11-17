@@ -44,6 +44,9 @@ pub enum Action {
     /// As a founder, invite someone by name. Whoever joins the world
     /// under that name arrives in your land, as one of your house.
     Invite(String),
+    /// Bury someone's body where it lies. Whatever they dropped goes
+    /// into the ground with them, and their next life remembers this one.
+    Bury(CharacterId),
     /// Take part in a Restoration Rite over the deposit here. One
     /// person begins it; a second, answering in time, completes it.
     Rite,
@@ -151,6 +154,11 @@ impl Command {
     /// `who`, a founder, invites whoever will join as `name`.
     pub fn invite(who: CharacterId, name: &str) -> Self {
         Self { who, action: Action::Invite(name.into()) }
+    }
+
+    /// `who` buries `target`'s body.
+    pub const fn bury(who: CharacterId, target: CharacterId) -> Self {
+        Self { who, action: Action::Bury(target) }
     }
 
     /// `who` takes part in a rite where they stand.

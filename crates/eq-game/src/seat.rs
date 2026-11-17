@@ -45,6 +45,14 @@ pub fn interpret(game: &Game, who: CharacterId, now: Tick, line: &str) -> Reques
             Some(target) => Request::Act(Action::Rob(target)),
             None => nobody_here(&name),
         },
+        Input::Bury(name) => {
+            let here = game.character(who).map(|you| you.place());
+            let body = here.and_then(|here| game.bodies_at(here).find(|(_, body)| body.name().eq_ignore_ascii_case(&name)));
+            match body {
+                Some((target, _)) => Request::Act(Action::Bury(target)),
+                None => say(format!("Nobody called \"{name}\" lies dead here.")),
+            }
+        }
         Input::Tend(name) => match someone_here_called(game, who, &name) {
             Some(target) => Request::Act(Action::Tend(target)),
             None => nobody_here(&name),

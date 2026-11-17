@@ -14,7 +14,7 @@ use crate::combat::{may_attack, may_rob, Blow, FoundRefusal, NameRefusal, Refusa
 use crate::command::{Action, Command};
 use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 use crate::content::{
-    self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, MOST_VIGIL, RITE_CLEANSES, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
+    self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, BURY_TIME, MOST_VIGIL, RITE_CLEANSES, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
     VIGIL_PER_TENDING, WARD_TIME, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
     CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, EFFORT_SPREAD,
     FADED_CARRYOVER_PERCENT, GATHER_TIME,
@@ -151,13 +151,26 @@ impl Game {
         if who != self.next_id() {
             return events.push(Event::UnknownCharacter { who });
         }
+        // Founders and those they invite arrive alive. So does everyone
+        // in a world that was never meant to have founders. Anyone else
+        // begins as a spirit and has to earn a first life.
+        let invited = self.zones.iter().any(|zone| zone.invited.contains(&name.to_lowercase()));
+        let unborn = self.is_founded() && !invited && self.founders_left == 0;
         let (zone, founded) = self.zone_for_newcomer(who, name);
         let anchor = self.zones[zone].anchor();
-        self.characters.push(Character::new(name, anchor));
+        let mut newcomer = Character::new(name, anchor);
+        if unborn {
+            newcomer.be_unborn();
+            self.forgotten.push(who);
+        }
+        self.characters.push(newcomer);
         self.occupancy.enter(anchor, who);
         events.push(Event::Character { who, outcome: Outcome::Joined });
         if founded {
             events.push(Event::Character { who, outcome: Outcome::Founded });
+        }
+        if unborn {
+            events.push(Event::Character { who, outcome: Outcome::Unborn });
         }
     }
 
@@ -175,13 +188,52 @@ impl Game {
             self.founders_left -= 1;
             return (self.found_territory(who), true);
         }
-        let people = |zone: &Zone| self.characters.iter().filter(|character| zone.contains(character.home())).count();
-        // Nobody lives on the Meeting Ground.
-        let lived_in = |zone: &Zone| self.meeting_ground.is_none_or(|ground| !zone.contains(ground));
-        let emptiest = (0..self.zones.len())
+        (self.emptiest_land(None), false)
+    }
+
+    /// Whether anyone has founded a land here yet.
+    fn is_founded(&self) -> bool {
+        self.zones.iter().any(|zone| zone.founder().is_some())
+    }
+
+    /// The land with the fewest people who call it home, not counting
+    /// `apart_from`. The oldest land wins a tie. Nobody lives on the
+    /// Meeting Ground, and the unborn and the forgotten are nobody's
+    /// people yet.
+    fn emptiest_land(&self, apart_from: Option<CharacterId>) -> usize {
+        let people = |zone: &Zone| {
+            self.characters()
+                .filter(|(id, character)| Some(*id) != apart_from && character.forgotten().is_none() && zone.contains(character.home()))
+                .count()
+        };
+        // Once there are founders, people arise in founded lands only:
+        // the old shoreline is joined to nothing.
+        let founded = self.is_founded();
+        let lived_in = |zone: &Zone| {
+            self.meeting_ground.is_none_or(|ground| !zone.contains(ground)) && (!founded || zone.founder().is_some())
+        };
+        (0..self.zones.len())
             .filter(|&index| lived_in(&self.zones[index]))
-            .min_by_key(|&index| (people(&self.zones[index]), index));
-        (emptiest.unwrap_or(0), false)
+            .min_by_key(|&index| (people(&self.zones[index]), index))
+            .unwrap_or(0)
+    }
+
+    /// Buries a body where it lies. It will not rise, what its owner
+    /// dropped goes into the ground with it, and the owner's next life
+    /// will remember this one.
+    fn bury(&mut self, index: usize, target: CharacterId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let here = self.characters[index].place();
+        let lies_here = self.dead.contains(&target) && self.character(target).and_then(Character::death).is_some_and(|death| death.body == here && !death.risen);
+        let Some(body) = self.index_of(target).filter(|_| lies_here) else {
+            return outcomes.push(Outcome::CannotBury { target });
+        };
+        self.characters[body].be_buried();
+        self.dead.retain(|&spirit| spirit != target);
+        self.relics.retain(|relic| !(relic.owner == target && relic.place == here));
+        self.characters[index].busy_until = now + BURY_TIME;
+        outcomes.push(Outcome::Buried { target });
+        events.push(Event::Character { who: target, outcome: Outcome::WasBuried { by: who } });
     }
 
     /// Makes a new territory from the world's seed and adds it to the
@@ -515,6 +567,7 @@ impl Game {
             | Outcome::LayDown { .. }
             | Outcome::Stole { .. }
             | Outcome::Returned
+            | Outcome::Buried { .. }
             | Outcome::LandNamed { .. }
             | Outcome::HouseNamed { .. }
             | Outcome::RiteBegun
@@ -578,7 +631,7 @@ impl Game {
             Action::Go(label) => self.go(index, label, now, outcomes),
             Action::Gather => self.gather(index, now, outcomes, events),
             Action::Attack(target) => self.attack(index, *target, now, outcomes, events),
-            Action::Fight(creature) => self.fight(index, *creature, now, outcomes, events),
+            Action::Fight(creature) => self.fight(index, *creature, now, outcomes),
             Action::Take => self.take(index, now, outcomes),
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
@@ -586,6 +639,7 @@ impl Game {
             Action::NameLand(name) => self.name_founding(index, name, false, outcomes),
             Action::NameHouse(name) => self.name_founding(index, name, true, outcomes),
             Action::Invite(name) => self.invite(index, name, outcomes),
+            Action::Bury(target) => self.bury(index, *target, now, outcomes, events),
             Action::Rite => self.rite(index, now, outcomes, events),
             Action::Tend(target) => self.tend(index, *target, now, outcomes),
             Action::Post { give, want } => self.post(index, *give, *want, now, outcomes),
@@ -607,8 +661,10 @@ impl Game {
         match action {
             Action::Go(label) => self.go(index, label, now, outcomes),
             Action::Gather => self.draw(index, now, outcomes),
+            Action::Seek => self.seek(index, now, outcomes),
             Action::Return => outcomes.push(self.return_to_body(index, now)),
-            Action::Relinquish => outcomes.push(self.rebirth(index, now)),
+            // There is no giving up and starting again. The way back is the afterlife.
+            Action::Relinquish => outcomes.push(Outcome::CannotReturn { why: ReturnRefusal::Unredeemed }),
             _ => outcomes.push(Outcome::Bodiless),
         }
     }
@@ -668,18 +724,19 @@ impl Game {
         let character = &mut self.characters[index];
         let here = character.place();
         let holds_one = self.map.place(here).is_some_and(|place| place.deposit.is_some());
-        let Some(forgotten) = character.forgotten_mut() else { return outcomes.push(Outcome::NotForgotten) };
-        if !holds_one || forgotten.found_in.contains(&here) {
+        if !holds_one || character.memories().contains(&here) {
             return outcomes.push(Outcome::NothingToRemember);
         }
-        forgotten.found_in.push(here);
-        let (found, redeemed) = (forgotten.memories(), forgotten.is_redeemed());
+        let found = character.remember(here);
         character.busy_until = now + SEEK_TIME;
         outcomes.push(Outcome::Remembered { found, needed: MEMORIES_TO_REDEEM });
-        if redeemed {
-            let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true);
-            outcomes.push(Outcome::Redeemed { by: None, life });
+        if found < MEMORIES_TO_REDEEM {
+            return;
         }
+        // The loop is done: the spirit arises, wherever the world is emptiest.
+        let was_forgotten = self.characters[index].forgotten().is_some();
+        let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true);
+        outcomes.push(if was_forgotten { Outcome::Redeemed { by: None, life } } else { Outcome::Reborn { life } });
     }
 
     /// Takes part in a Restoration Rite. The first to do so begins it;
@@ -856,6 +913,9 @@ impl Game {
         if character.place() != death.body {
             return Outcome::CannotReturn { why: ReturnRefusal::NotAtBody };
         }
+        if death.buried {
+            return Outcome::CannotReturn { why: ReturnRefusal::Buried };
+        }
         if death.risen {
             return Outcome::CannotReturn { why: ReturnRefusal::Risen };
         }
@@ -867,14 +927,11 @@ impl Game {
         Outcome::Returned
     }
 
-    /// Ends a spirit's tie to its body and starts a new life at the anchor.
-    fn rebirth(&mut self, index: usize, now: Tick) -> Outcome {
-        Outcome::Reborn { life: self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true) }
-    }
-
-    /// Starts a spirit's next life at the anchor. It keeps `base`
-    /// percent of what it knew, more with Lineage and, if it may spend
-    /// it, ectoplasm. Returns which life this is.
+    /// Starts a spirit's next life. It arises at the anchor of whichever
+    /// land has the fewest people, which becomes its home: nobody
+    /// chooses where they are born. It keeps `base` percent of what it
+    /// knew, more with Lineage and, if it may spend it, ectoplasm.
+    /// Returns which life this is.
     fn begin_life(&mut self, index: usize, now: Tick, base: u32, spend_ectoplasm: bool) -> u32 {
         let who = id_at(index);
         // Whoever died where something can be worked remembers that work best.
@@ -883,8 +940,8 @@ impl Game {
             .and_then(|death| self.map.place(death.body))
             .and_then(|place| place.deposit)
             .map(|deposit| deposit.resource.attributes()[0]);
+        let home = self.zones[self.emptiest_land(Some(who))].anchor();
         let character = &mut self.characters[index];
-        let home = character.home();
         self.occupancy.leave(character.place(), who);
         self.occupancy.enter(home, who);
         character.be_reborn(home, now, Rebirth { base, favoured, spend_ectoplasm });
@@ -996,7 +1053,7 @@ impl Game {
         let lost_at = now + CORPSE_TIME;
 
         let character = &mut self.characters[index];
-        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false });
+        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false, buried: false });
         self.relics.extend(Relic::new(who, body, dropped, now));
         // Only a tethered spirit stays by its body.
         let zone = self.zones.iter().position(|zone| zone.contains(body)).unwrap_or(0);
@@ -1059,7 +1116,7 @@ impl Game {
     }
 
     /// Strikes a creature. It will come for whoever struck it.
-    fn fight(&mut self, index: usize, target: CreatureId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+    fn fight(&mut self, index: usize, target: CreatureId, now: Tick, outcomes: &mut Vec<Outcome>) {
         let who = id_at(index);
         let here = self.characters[index].place();
         let Some(slot) = self.creatures.iter().position(|creature| creature.id == target && creature.place == here) else {
@@ -1082,7 +1139,7 @@ impl Game {
         outcomes.push(Outcome::HitCreature { being, damage, left });
         if left == 0 {
             outcomes.push(Outcome::Slew { being });
-            self.remove_creature(slot, now, events);
+            self.remove_creature(slot, now);
         }
     }
 
@@ -1093,25 +1150,17 @@ impl Game {
     }
 
     /// Takes a creature out of the world. A lurker's lair fills again
-    /// in time. A Body Guard's going frees the spirit whose body it was,
-    /// which must then be reborn.
-    fn remove_creature(&mut self, slot: usize, now: Tick, events: &mut Vec<Event>) {
+    /// in time.
+    fn remove_creature(&mut self, slot: usize, now: Tick) {
         let creature = self.creatures.remove(slot);
         match creature.being {
             // Whatever makes its home in a place comes back to it in time.
             Being { kind: CreatureKind::Lurker | CreatureKind::Sentinel, .. } => {
                 self.empty_lairs.push((now + LURKER_RETURNS, creature.place));
             }
-            Being { kind: CreatureKind::BodyGuard, of } => {
-                let still_guarded = self.creatures.iter().any(|other| other.being.of == of);
-                let bound = of.and_then(|owner| self.index_of(owner)).filter(|&owner| {
-                    !still_guarded && self.characters[owner].death().is_some_and(|death| death.risen)
-                });
-                if let Some(owner) = bound {
-                    let outcome = self.rebirth(owner, now);
-                    events.push(Event::Character { who: id_at(owner), outcome });
-                }
-            }
+            // The spirit whose body it was is no nearer the living for
+            // its fall: that way is through the afterlife.
+            Being { kind: CreatureKind::BodyGuard, .. } => {}
         }
     }
 
@@ -1179,7 +1228,7 @@ impl Game {
         while let Some(slot) = self.creatures.iter().position(|creature| creature.gone_at.is_some_and(|at| at <= now)) {
             let (place, being) = (self.creatures[slot].place, self.creatures[slot].being);
             events.push(Event::CreatureGone { place, being });
-            self.remove_creature(slot, now, events);
+            self.remove_creature(slot, now);
         }
         let due: Vec<PlaceId> = self.empty_lairs.iter().filter(|(at, _)| *at <= now).map(|&(_, place)| place).collect();
         self.empty_lairs.retain(|(at, _)| *at > now);
@@ -1263,7 +1312,8 @@ impl Game {
         for &who in &self.forgotten {
             let Some(index) = self.index_of(who) else { continue };
             let Some(forgotten) = self.characters[index].forgotten_mut() else { continue };
-            if forgotten.dormant {
+            // No clock runs on the dormant, nor on those who have never lived.
+            if forgotten.dormant || forgotten.unborn {
                 continue;
             }
             forgotten.played = forgotten.played + Duration::ticks(1);
@@ -1631,7 +1681,7 @@ mod tests {
     }
 
     #[test]
-    fn a_body_left_too_long_rises_as_a_guard_and_the_spirit_can_only_give_it_up() {
+    fn a_body_left_too_long_rises_as_a_guard_and_the_spirit_must_go_the_long_way() {
         let (mut game, now) = bryn_marked_on_the_ledge();
         let mining_before = game.character(BRYN).unwrap().skill(crate::types::SkillKind::Mining).level();
         assert!(mining_before >= 2, "Bryn should have learned something first: {mining_before}");
@@ -1656,8 +1706,11 @@ mod tests {
         game.apply(&Command::go(BRYN, "north"), Tick::new(lost_at), &mut events);
         game.apply(&Command::return_to_body(BRYN), Tick::new(lost_at + 30), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::Risen }));
+        // Nor any giving it up: the only way on is through the afterlife.
         game.apply(&Command::relinquish(BRYN), Tick::new(lost_at + 30), &mut events);
-        assert_eq!(outcome(&events), Some(&Outcome::Reborn { life: 2 }));
+        assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::Unredeemed }));
+        let (events, _) = through_the_afterlife(&mut game, BRYN, lost_at + 31);
+        assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
         let bryn = game.character(BRYN).unwrap();
         assert!(!bryn.is_spirit());
         assert_eq!((bryn.place(), bryn.health(), bryn.rested(), bryn.life()), (CAMP, 100, 100, 2));
@@ -1703,15 +1756,69 @@ mod tests {
     }
 
     #[test]
-    fn a_spirit_can_give_up_its_body_and_the_living_cannot() {
+    fn nobody_can_simply_give_a_body_up() {
         let (mut game, now) = bryn_marked_on_the_ledge();
         let (_, now) = fight_to_the_end(&mut game, now);
         let mut events = Vec::new();
         game.apply(&Command::relinquish(ASH), Tick::new(now), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::NotDead));
         game.apply(&Command::relinquish(BRYN), Tick::new(now), &mut events);
-        assert_eq!(outcome(&events), Some(&Outcome::Reborn { life: 2 }));
-        assert!(!game.character(BRYN).unwrap().is_spirit());
+        assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::Unredeemed }));
+        assert!(game.character(BRYN).unwrap().is_spirit());
+    }
+
+    #[test]
+    fn a_buried_body_never_rises_and_its_owner_relearns_the_old_life_fast() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let mining = game.character(BRYN).unwrap().skill(SkillKind::Mining).level();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        assert_eq!((game.bodies_at(LEDGE).count(), game.relics_at(LEDGE).count()), (1, 1));
+
+        // Ash could take what Bryn dropped. Ash buries Bryn instead.
+        let mut events = Vec::new();
+        game.apply(&Command::bury(ASH, ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotBury { target: ASH }));
+        events.clear();
+        game.apply(&Command::bury(ASH, BRYN), Tick::new(now), &mut events);
+        assert_eq!(events, [
+            Event::Character { who: ASH, outcome: Outcome::Buried { target: BRYN } },
+            Event::Character { who: BRYN, outcome: Outcome::WasBuried { by: ASH } },
+        ]);
+        assert_eq!(game.character(ASH).unwrap().busy_until(), Tick::new(now) + BURY_TIME);
+        assert_eq!((game.bodies_at(LEDGE).count(), game.relics_at(LEDGE).count()), (0, 0), "all of it is in the ground");
+        game.apply(&Command::bury(ASH, BRYN), Tick::new(now + 60), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotBury { target: BRYN }), "once is enough");
+
+        // No guard rises from a grave, and there is no climbing out of one.
+        let later = ticks(&mut game, now + 61, now + CORPSE_TIME.as_ticks() * 2);
+        assert!(!later.iter().any(|event| matches!(event, Event::CreatureAppeared { .. })));
+        let mut events = Vec::new();
+        let at = now + CORPSE_TIME.as_ticks() * 2;
+        game.apply(&Command::go(BRYN, "north"), Tick::new(at), &mut events);
+        game.apply(&Command::return_to_body(BRYN), Tick::new(at + 30), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::Buried }));
+
+        // The next life starts as low as any, but remembers how high it stood.
+        through_the_afterlife(&mut game, BRYN, at + 31);
+        let reborn = game.character(BRYN).unwrap().skill(SkillKind::Mining);
+        assert_eq!((reborn.level(), reborn.peak()), (mining * 15 / 100, mining));
+    }
+
+    /// Walks a spirit through the afterlife, memory by memory, until it
+    /// lives again. Returns what happened and when it was over.
+    fn through_the_afterlife(game: &mut Game, who: CharacterId, from: u64) -> (Vec<Event>, u64) {
+        let mut events = Vec::new();
+        let mut now = from;
+        while game.character(who).unwrap().is_spirit() {
+            assert!(now < from + 7_200, "the afterlife should not take two hours");
+            game.tick(Tick::new(now), &mut events);
+            if game.character(who).unwrap().busy_until() <= Tick::new(now) {
+                let step = crate::bots::afterlife(game, who).expect("a land with nothing left to remember");
+                game.apply(&step, Tick::new(now), &mut events);
+            }
+            now += 1;
+        }
+        (events, now)
     }
 
     #[test]
@@ -2350,13 +2457,13 @@ mod tests {
             game.apply(&Command::fight(BRYN, guard), Tick::new(at), &mut events);
             at += ATTACK_TIME.as_ticks();
         }
-        assert!(events.contains(&Event::Character { who: ASH, outcome: Outcome::Reborn { life: 2 } }));
+        assert!(game.character(ASH).unwrap().is_spirit(), "a fallen guard frees the relic, not the spirit");
         game.apply(&Command::take(BRYN), Tick::new(at), &mut events);
         assert_eq!(game.character(BRYN).unwrap().carried(Resource::Tideglass), glass);
     }
 
     #[test]
-    fn a_guard_that_falls_or_runs_out_of_time_frees_its_spirit_to_be_reborn() {
+    fn a_guard_that_falls_or_runs_out_of_time_leaves_its_spirit_to_find_its_own_way() {
         let (mut game, now) = bryn_marked_on_the_ledge();
         let (events, now) = fight_to_the_end(&mut game, now);
         let lost_at = died(&events, BRYN).unwrap().1.get();
@@ -2375,14 +2482,13 @@ mod tests {
             world.apply(&Command::fight(ASH, guard), Tick::new(at), &mut events);
             at += ATTACK_TIME.as_ticks();
         }
-        assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
-        assert!(!world.character(BRYN).unwrap().is_spirit());
+        assert!(world.character(BRYN).unwrap().is_spirit());
 
         // Left alone, it crumbles in the end, with the same result.
         let later = ticks(&mut game, lost_at + 61, lost_at + GUARD_LASTS.as_ticks() + 10);
         let being = Being { kind: CreatureKind::BodyGuard, of: Some(BRYN) };
         assert!(later.contains(&Event::CreatureGone { place: LEDGE, being }));
-        assert!(later.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
+        assert!(game.character(BRYN).unwrap().is_spirit());
         assert_eq!(game.creatures_at(LEDGE).count(), 0);
     }
 
@@ -2419,7 +2525,8 @@ mod tests {
         assert_eq!(outcome(&events), Some(&Outcome::Drew { amount: 1, held: 45 }));
         let mining = game.character(BRYN).unwrap().skill(SkillKind::Mining).level();
 
-        game.apply(&Command::relinquish(BRYN), Tick::new(now), &mut events);
+        // The body rises, and the long way round is all that is left.
+        through_the_afterlife(&mut game, BRYN, now + CORPSE_TIME.as_ticks());
         let bryn = game.character(BRYN).unwrap();
         // 45 ectoplasm buys two percent on top of the fifteen; five are left over.
         assert_eq!((bryn.kept(), bryn.ectoplasm()), (17, 5));
@@ -2454,8 +2561,7 @@ mod tests {
     fn every_life_lived_adds_to_lineage() {
         let (mut game, now) = bryn_a_spirit_on_the_ledge();
         assert_eq!(game.character(BRYN).unwrap().attribute(Attribute::Lineage).level(), 0);
-        let mut events = Vec::new();
-        game.apply(&Command::relinquish(BRYN), Tick::new(now), &mut events);
+        through_the_afterlife(&mut game, BRYN, now);
         assert_eq!(game.character(BRYN).unwrap().attribute(Attribute::Lineage).level(), 2);
     }
 
@@ -2827,8 +2933,87 @@ mod tests {
         // The invitation is used up, and only a founder can give one.
         game.apply(&Command::invite(COLE, "Dara"), Tick::new(3), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::CannotFound { why: FoundRefusal::NotFounder }));
+        events.clear();
         game.apply(&Command::join(DARA, "Dara"), Tick::new(4), &mut events);
-        assert_eq!(game.character(DARA).unwrap().home(), game.anchor(), "the empty shoreline has fewest people");
+        assert_eq!(outcome(&events), Some(&Outcome::Unborn), "nobody asked for Dara");
+        let dara = game.character(DARA).unwrap();
+        assert!(dara.is_spirit());
+        assert_eq!(dara.place(), game.zone_of(ASH).unwrap().anchor(), "Ash's land has fewest people");
+    }
+
+    const EDDA: CharacterId = CharacterId::new(4);
+    const FENN: CharacterId = CharacterId::new(5);
+
+    #[test]
+    fn the_unborn_earn_a_first_life_and_arise_wherever_people_are_fewest() {
+        let mut game = two_founders();
+        let mut events = Vec::new();
+        game.apply(&Command::invite(BRYN, "Cole"), Tick::new(1), &mut events);
+        game.apply(&Command::join(COLE, "Cole"), Tick::new(2), &mut events);
+        let (ashland, brynsland) = (game.zone_of(ASH).unwrap().anchor(), game.zone_of(BRYN).unwrap().anchor());
+
+        // Bryn's land has two people and Ash's one. Three strangers come.
+        let mut now = 3;
+        let mut homes = Vec::new();
+        for (who, name) in [(DARA, "Dara"), (EDDA, "Edda"), (FENN, "Fenn")] {
+            events.clear();
+            game.apply(&Command::join(who, name), Tick::new(now), &mut events);
+            assert_eq!(outcome(&events), Some(&Outcome::Unborn));
+            // The unborn can do nothing a living person can.
+            game.apply(&Command::take(who), Tick::new(now), &mut events);
+            assert_eq!(outcome(&events), Some(&Outcome::Bodiless));
+            let (walked, then) = through_the_afterlife(&mut game, who, now);
+            assert!(walked.contains(&Event::Character { who, outcome: Outcome::Redeemed { by: None, life: 1 } }));
+            let born = game.character(who).unwrap();
+            assert!(!born.is_spirit());
+            assert_eq!((born.place(), born.life(), born.attribute(Attribute::Lineage).level()), (born.home(), 1, 0));
+            homes.push(born.home());
+            now = then;
+        }
+        // One to even the lands up, then the older land first, then the other.
+        assert_eq!(homes, [ashland, ashland, brynsland]);
+    }
+
+    #[test]
+    fn the_unborn_are_in_no_hurry() {
+        let mut game = two_founders();
+        let mut events = Vec::new();
+        game.apply(&Command::join(COLE, "Cole"), Tick::new(1), &mut events);
+        let long = crate::content::REDEMPTION_CLOCK.as_ticks() * 3;
+        let waited = ticks(&mut game, 2, long);
+        assert!(!waited.iter().any(|event| matches!(event, Event::Character { who: COLE, .. })), "nothing happens to them");
+        assert!(game.character(COLE).unwrap().forgotten().is_some_and(|forgotten| forgotten.unborn));
+    }
+
+    #[test]
+    fn the_dead_arise_where_people_are_fewest_and_not_where_they_lived() {
+        let mut game = two_founders();
+        let mut events = Vec::new();
+        for (who, name) in [(COLE, "Cole"), (DARA, "Dara")] {
+            game.apply(&Command::invite(BRYN, name), Tick::new(1), &mut events);
+            game.apply(&Command::join(who, name), Tick::new(2), &mut events);
+        }
+        let ashland = game.zone_of(ASH).unwrap().anchor();
+        // Cole, of Bryn's crowded land, walks into its lair and does not walk out.
+        let land = game.zone_of(COLE).unwrap();
+        let lair = game.map().places().find(|(id, place)| land.contains(*id) && place.lair.is_some()).unwrap().0;
+        let mut now = 3;
+        while !game.character(COLE).unwrap().is_spirit() {
+            assert!(now < 7_200, "the lair never finished Cole");
+            game.tick(Tick::new(now), &mut events);
+            let cole = game.character(COLE).unwrap();
+            if cole.busy_until() <= Tick::new(now) {
+                let step = match game.map().first_step(cole.place(), lair, |_| true) {
+                    Some(exit) => Command::go(COLE, &exit.label),
+                    None => Command::gather(COLE),
+                };
+                game.apply(&step, Tick::new(now), &mut events);
+            }
+            now += 1;
+        }
+        through_the_afterlife(&mut game, COLE, now);
+        let cole = game.character(COLE).unwrap();
+        assert_eq!((cole.place(), cole.home(), cole.life()), (ashland, ashland, 2), "Ash was alone");
     }
 
     #[test]
