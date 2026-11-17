@@ -5,6 +5,7 @@ use alloc::string::String;
 use crate::board::{ContractId, Lot};
 use crate::character::CharacterId;
 use crate::creature::CreatureId;
+use crate::pact::Dealing;
 
 /// Something a character can do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +48,15 @@ pub enum Action {
     /// As a founder, invite someone by name. Whoever joins the world
     /// under that name arrives in your land, as one of your house.
     Invite(String),
+    /// As a founder standing on the Meeting Ground, deal with another
+    /// land: offer an alliance, declare war, or ask for a truce. The
+    /// land is named by its own name or its founder's.
+    Deal {
+        /// The other land, by its name or its founder's.
+        with: String,
+        /// What is asked of it.
+        dealing: Dealing,
+    },
     /// Bury someone's body where it lies. Whatever they dropped goes
     /// into the ground with them, and their next life remembers this one.
     Bury(CharacterId),
@@ -157,6 +167,11 @@ impl Command {
     /// `who`, a founder, names their house.
     pub fn name_house(who: CharacterId, name: &str) -> Self {
         Self { who, action: Action::NameHouse(name.into()) }
+    }
+
+    /// `who`, a founder, deals with the land called `with`.
+    pub fn deal(who: CharacterId, with: &str, dealing: Dealing) -> Self {
+        Self { who, action: Action::Deal { with: with.into(), dealing } }
     }
 
     /// `who`, a founder, invites whoever will join as `name`.

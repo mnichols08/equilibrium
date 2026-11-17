@@ -15,6 +15,7 @@ use crate::board::{Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::creature::{Being, CreatureKind, RelicTier};
+use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
 
@@ -42,6 +43,10 @@ Commands:
   house <name>         as a founder, name your house (for good)
   invite <name>        as a founder, invite someone: whoever joins under
                        that name arrives in your land
+  ally <land>          as a founder on the Meeting Ground, offer another
+                       land an alliance; it holds once they offer it too
+  war <land>           as a founder on the Meeting Ground, declare war
+  truce <land>         leave an alliance, or offer to end a war
   rite                 begin a Restoration Rite over the deposit here, or
                        answer one someone else has begun
   tend <name>          look after someone asleep here, so they last longer
@@ -107,6 +112,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::Character { who, outcome } if *who == viewer => Some(own(outcome, game, viewer)),
         Event::Character { who, outcome } => witnessed(*who, outcome, game, viewer, here),
         Event::UnknownCharacter { .. } => None,
+        Event::Pact { by, with, dealt } => Some(pact_news(game, *by, *with, *dealt)),
         Event::DepositChanged { place, resource, from, to } if *place == here => {
             Some(deposit_changed(*resource, *from, *to))
         }
@@ -141,6 +147,17 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Joined => format!("You walk out of the tide at {}, new to the shoreline.", place_name(game, home_of(game, viewer))),
         Outcome::Founded => "Nobody has stood here before you. This land is yours to name (call <name>), and your house with it (house <name>). Those you invite (invite <name>) will arrive here.".into(),
         Outcome::CannotFound { why } => cannot_found(*why),
+        Outcome::CannotDeal { why } => cannot_deal(*why).into(),
+        Outcome::Offered { land, dealing } => format!(
+            "You offer {} {}. It waits on their founder saying the same of you, here on the Meeting Ground.",
+            land_name(game, *land),
+            offer(*dealing),
+        ),
+        Outcome::WasOffered { land, dealing } => format!(
+            "Word comes that {} offers your land {}. To accept, stand on the Meeting Ground and offer them the same.",
+            land_name(game, *land),
+            offer(*dealing),
+        ),
         Outcome::LandNamed { name } => format!("You name this land {name}. It will carry that name for good."),
         Outcome::HouseNamed { name } => format!("You name your house {name}. Those you invite will carry it."),
         Outcome::Invited { name } => format!("You send word for {name}. When they come into the world, it will be here."),
@@ -631,6 +648,55 @@ fn anchor_near(game: &Game, viewer: CharacterId) -> PlaceId {
 
 fn name_of(game: &Game, who: CharacterId) -> &str {
     game.character(who).map_or("someone", |character| character.name())
+}
+
+/// What a land is called: its name, or its founder's, or nothing much.
+fn land_name(game: &Game, anchor: PlaceId) -> String {
+    let zone = game.zone_at(anchor);
+    match (zone.name(), zone.founder()) {
+        (Some(name), _) => name.into(),
+        (None, Some(founder)) => format!("{}'s land", name_of(game, founder)),
+        (None, None) => "the old shoreline".into(),
+    }
+}
+
+/// An offer, as the thing offered.
+const fn offer(dealing: Dealing) -> &'static str {
+    match dealing {
+        Dealing::Ally => "an alliance",
+        Dealing::Truce => "a truce",
+        Dealing::War => "war",
+    }
+}
+
+/// News of what two lands have become to each other, with what it
+/// means for the one hearing it.
+fn pact_news(game: &Game, by: PlaceId, with: PlaceId, dealt: Dealt) -> String {
+    let (by, with) = (land_name(game, by), land_name(game, with));
+    match dealt {
+        Dealt::Allied => format!(
+            "{by} and {with} are allies. The sentinel in each land's pass will let the other's people by."
+        ),
+        Dealt::AtWar => format!(
+            "{by} has declared war on {with}. Their people may strike each other anywhere but a haven, and every death on either side will sicken both lands."
+        ),
+        Dealt::Peace => format!("{by} and {with} have made a truce. The war between them is over."),
+        Dealt::Parted => format!("{by} has left its alliance with {with}. The sentinels will not know each other's people now."),
+        Dealt::Offered => format!("{by} has made {with} an offer."),
+    }
+}
+
+fn cannot_deal(why: PactRefusal) -> &'static str {
+    match why {
+        PactRefusal::NotFounder => "Only the founder of a land speaks for it, and you did not found yours.",
+        PactRefusal::NotOnMeetingGround => "Lands deal with each other on the Meeting Ground and nowhere else. It lies beyond the pass.",
+        PactRefusal::NoSuchLand => "No land goes by that name, and no founder either.",
+        PactRefusal::OwnLand => "That is your own land.",
+        PactRefusal::AtWar => "You are at war with them. There must be a truce first.",
+        PactRefusal::AlreadyAllied => "You are allies already.",
+        PactRefusal::AlreadyAtWar => "You are at war with them already.",
+        PactRefusal::NoPact => "There is nothing between your lands to end.",
+    }
 }
 
 /// The one thing most worth knowing about someone at a glance.

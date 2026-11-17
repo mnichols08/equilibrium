@@ -41,6 +41,7 @@ mod game;
 mod haul;
 pub mod narrate;
 mod occupancy;
+pub mod pact;
 pub mod parser;
 pub mod rest;
 pub mod seat;

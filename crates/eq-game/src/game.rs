@@ -26,6 +26,7 @@ use crate::rest::FULLY_RESTED;
 use crate::event::{Event, Outcome};
 use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
+use crate::pact::{Dealing, Dealt, Pact, PactRefusal, Pacts};
 use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, SkillKind, Standing};
 use crate::zone::{Epitaph, Zone};
 
@@ -47,6 +48,8 @@ pub struct Game {
     /// Where the passes out of the founders' lands all lead, if this is
     /// a world for founders.
     meeting_ground: Option<PlaceId>,
+    /// How the lands stand to each other.
+    pacts: Pacts,
     /// Every place in the world. Each zone is a run of them.
     map: Graph<Place>,
     /// The world's territories, oldest first. There is always one.
@@ -91,6 +94,7 @@ impl Game {
             seed,
             founders_left: 0,
             meeting_ground: None,
+            pacts: Pacts::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
             characters,
@@ -308,6 +312,54 @@ impl Game {
         }
     }
 
+    /// The land a character belongs to: the one their lives begin in.
+    fn land_of(&self, character: &Character) -> usize {
+        self.zone_index(character.home())
+    }
+
+    /// How the lands of two characters stand to each other.
+    fn pact_between(&self, a: &Character, b: &Character) -> Option<Pact> {
+        self.pacts.between(self.land_of(a), self.land_of(b))
+    }
+
+    /// How the lands with havens at `a` and `b` stand to each other.
+    pub fn pact(&self, a: PlaceId, b: PlaceId) -> Option<Pact> {
+        self.pacts.between(self.zone_index(a), self.zone_index(b))
+    }
+
+    /// The founded land known as `name`: by its own name, or by its
+    /// founder's.
+    fn land_called(&self, name: &str) -> Option<usize> {
+        let founder_is = |zone: &Zone| {
+            zone.founder().and_then(|founder| self.character(founder)).is_some_and(|founder| founder.name().eq_ignore_ascii_case(name))
+        };
+        self.zones.iter().position(|zone| zone.name().is_some_and(|called| called.eq_ignore_ascii_case(name)) || founder_is(zone))
+    }
+
+    /// A founder, standing on the Meeting Ground, deals with another
+    /// land. What the two lands are to each other afterwards is news
+    /// for everyone who belongs to either.
+    fn deal(&mut self, index: usize, with: &str, dealing: Dealing, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let here = self.characters[index].place();
+        let dealt = self
+            .founded_by(index)
+            .map_err(|_| PactRefusal::NotFounder)
+            .and_then(|mine| if Some(here) == self.meeting_ground { Ok(mine) } else { Err(PactRefusal::NotOnMeetingGround) })
+            .and_then(|mine| self.land_called(with.trim()).map(|theirs| (mine, theirs)).ok_or(PactRefusal::NoSuchLand))
+            .and_then(|(mine, theirs)| self.pacts.deal(mine, theirs, dealing).map(|dealt| (mine, theirs, dealt)));
+        match dealt {
+            Err(why) => outcomes.push(Outcome::CannotDeal { why }),
+            Ok((mine, theirs, Dealt::Offered)) => {
+                outcomes.push(Outcome::Offered { land: self.zones[theirs].anchor(), dealing });
+                let offer = Outcome::WasOffered { land: self.zones[mine].anchor(), dealing };
+                events.extend(self.zones[theirs].founder().map(|who| Event::Character { who, outcome: offer }));
+            }
+            Ok((mine, theirs, dealt)) => {
+                events.push(Event::Pact { by: self.zones[mine].anchor(), with: self.zones[theirs].anchor(), dealt });
+            }
+        }
+    }
+
     /// A founder invites someone by name. Whoever joins the world under
     /// that name arrives in the founder's land.
     fn invite(&mut self, index: usize, raw: &str, outcomes: &mut Vec<Outcome>) {
@@ -489,6 +541,10 @@ impl Game {
             return Err(Refusal::NotHere);
         }
         let safety = self.place_of(attacker).map_or(Safety::Haven, |place| place.safety);
+        // War opens the wilderness: an enemy needs no mark to be struck.
+        if safety != Safety::Haven && self.pact_between(aggressor, victim) == Some(Pact::War) {
+            return Ok(());
+        }
         may_attack(safety, victim.standing())
     }
 
@@ -527,6 +583,11 @@ impl Game {
             | Event::PassageChanged { place, .. }
             | Event::CreatureAppeared { place, .. }
             | Event::CreatureGone { place, .. } => self.occupants(*place).to_vec(),
+            // Everyone who belongs to either land hears of it.
+            Event::Pact { by, with, .. } => {
+                let lands = [self.zone_index(*by), self.zone_index(*with)];
+                self.characters().filter(|(_, character)| lands.contains(&self.land_of(character))).map(|(id, _)| id).collect()
+            }
             // Everyone standing in that territory feels it.
             Event::VitalityChanged { anchor, .. } => {
                 let zone = self.zone_at(*anchor);
@@ -640,6 +701,7 @@ impl Game {
             Action::NameLand(name) => self.name_founding(index, name, false, outcomes),
             Action::NameHouse(name) => self.name_founding(index, name, true, outcomes),
             Action::Invite(name) => self.invite(index, name, outcomes),
+            Action::Deal { with, dealing } => self.deal(index, with, *dealing, outcomes, events),
             Action::Bury(target) => self.bury(index, *target, now, outcomes, events),
             Action::Rite => self.rite(index, now, outcomes, events),
             Action::Tend(target) => self.tend(index, *target, now, outcomes),
@@ -1104,6 +1166,16 @@ impl Game {
             self.occupancy.enter(anchor, who);
         }
         self.zones[zone].mourn(corruption);
+        // A land at war feels every one of its dead, wherever they fall,
+        // and so does every land it is at war with.
+        let home = self.land_of(&self.characters[index]);
+        let at_war: Vec<usize> = self.pacts.with(home, Pact::War).collect();
+        if !at_war.is_empty() {
+            // The land the body fell in has mourned already.
+            for land in at_war.into_iter().chain([home]).filter(|&land| land != zone) {
+                self.zones[land].mourn(corruption);
+            }
+        }
         self.dead.push(who);
         events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
@@ -1249,7 +1321,13 @@ impl Game {
         let living = |who: &CharacterId| self.character(*who).is_some_and(|character| !character.is_spirit());
         let here = self.occupants(creature.place);
         let foe = creature.foes.iter().find(|&foe| here.contains(foe) && living(foe));
-        let anyone = || here.iter().find(|&who| creature.being.kind.is_aggressive() && living(who));
+        // A sentinel lets its land's allies by.
+        let land = self.zone_index(creature.place);
+        let ally = |who: &CharacterId| {
+            creature.being.kind == CreatureKind::Sentinel
+                && self.character(*who).is_some_and(|character| self.pacts.between(land, self.land_of(character)) == Some(Pact::Alliance))
+        };
+        let anyone = || here.iter().find(|&who| creature.being.kind.is_aggressive() && living(who) && !ally(who));
         foe.or_else(anyone).and_then(|&who| self.index_of(who))
     }
 
@@ -3217,6 +3295,125 @@ mod tests {
         assert!(game.map().first_step(hers, his, |_| true).is_some());
         assert_eq!(game.zone_at(ground).founder(), None);
         assert_eq!(game.occupants(ground), []);
+    }
+
+    /// Sets someone down in a place without the walk.
+    fn set_down(game: &mut Game, who: CharacterId, place: PlaceId) {
+        let index = game.index_of(who).unwrap();
+        game.occupancy.leave(game.characters[index].place, who);
+        game.characters[index].place = place;
+        game.characters[index].busy_until = Tick::ZERO;
+        game.occupancy.enter(place, who);
+    }
+
+    /// Ash and Bryn, founders, on the Meeting Ground, with Cole at home
+    /// in Bryn's land.
+    fn founders_met() -> Game {
+        let mut game = two_founders();
+        let mut events = Vec::new();
+        game.apply(&Command::invite(BRYN, "Cole"), Tick::new(1), &mut events);
+        game.apply(&Command::join(COLE, "Cole"), Tick::new(2), &mut events);
+        let ground = game.meeting_ground().unwrap();
+        set_down(&mut game, ASH, ground);
+        set_down(&mut game, BRYN, ground);
+        game
+    }
+
+    fn deal(game: &mut Game, who: CharacterId, with: &str, dealing: Dealing) -> Vec<Event> {
+        let mut events = Vec::new();
+        game.apply(&Command::deal(who, with, dealing), Tick::new(10), &mut events);
+        events
+    }
+
+    fn refused(events: &[Event]) -> Option<PactRefusal> {
+        match outcome(events) {
+            Some(Outcome::CannotDeal { why }) => Some(*why),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn lands_deal_through_their_founders_on_the_meeting_ground() {
+        let mut game = founders_met();
+        let (ashland, brynsland) = (game.character(ASH).unwrap().home(), game.character(BRYN).unwrap().home());
+        assert_eq!(game.pact(ashland, brynsland), None, "lands that never deal are nothing to each other");
+
+        assert_eq!(refused(&deal(&mut game, COLE, "Ash", Dealing::War)), Some(PactRefusal::NotFounder));
+        assert_eq!(refused(&deal(&mut game, ASH, "Nobody", Dealing::Ally)), Some(PactRefusal::NoSuchLand));
+        assert_eq!(refused(&deal(&mut game, ASH, "ash", Dealing::Ally)), Some(PactRefusal::OwnLand));
+        assert_eq!(refused(&deal(&mut game, ASH, "Bryn", Dealing::Truce)), Some(PactRefusal::NoPact));
+        let mut home = game.clone();
+        set_down(&mut home, ASH, ashland);
+        assert_eq!(refused(&deal(&mut home, ASH, "Bryn", Dealing::War)), Some(PactRefusal::NotOnMeetingGround));
+
+        // An alliance waits for the other founder to say the same.
+        let offered = deal(&mut game, ASH, "Bryn", Dealing::Ally);
+        assert_eq!(offered, [
+            Event::Character { who: ASH, outcome: Outcome::Offered { land: brynsland, dealing: Dealing::Ally } },
+            Event::Character { who: BRYN, outcome: Outcome::WasOffered { land: ashland, dealing: Dealing::Ally } },
+        ]);
+        assert_eq!(game.pact(ashland, brynsland), None);
+        let sealed = deal(&mut game, BRYN, "ASH", Dealing::Ally);
+        assert_eq!(sealed, [Event::Pact { by: brynsland, with: ashland, dealt: Dealt::Allied }]);
+        assert_eq!(game.pact(ashland, brynsland), Some(Pact::Alliance));
+        assert_eq!(game.audience(&sealed[0]), [ASH, BRYN, COLE], "everyone of either land hears, wherever they are");
+
+        // A land can be named by its own name, and war takes only one.
+        game.apply(&Command::name_land(ASH, "Saltmarch"), Tick::new(11), &mut Vec::new());
+        let war = deal(&mut game, BRYN, "saltmarch", Dealing::War);
+        assert_eq!(war, [Event::Pact { by: brynsland, with: ashland, dealt: Dealt::AtWar }]);
+        assert_eq!(game.pact(brynsland, ashland), Some(Pact::War));
+    }
+
+    #[test]
+    fn a_sentinel_lets_its_lands_allies_by() {
+        let mut strangers = founders_met();
+        let pass = pass_of(&strangers, ASH);
+        let mut allies = strangers.clone();
+        deal(&mut allies, ASH, "Bryn", Dealing::Ally);
+        deal(&mut allies, BRYN, "Ash", Dealing::Ally);
+        for game in [&mut strangers, &mut allies] {
+            set_down(game, BRYN, pass);
+            ticks(game, 11, 71);
+        }
+        assert!(strangers.character(BRYN).unwrap().health() < 100, "a stranger is set upon");
+        assert_eq!(allies.character(BRYN).unwrap().health(), 100, "an ally walks through");
+    }
+
+    #[test]
+    fn war_opens_the_wilderness_and_every_death_sickens_both_lands() {
+        let mut peace = founders_met();
+        let mut war = peace.clone();
+        deal(&mut war, ASH, "Bryn", Dealing::War);
+        let (ashland, brynsland) = (peace.character(ASH).unwrap().home(), peace.character(BRYN).unwrap().home());
+
+        // Ash goes into Bryn's land after Cole, who has done nothing.
+        let wilds = peace
+            .zone_at(brynsland)
+            .place_ids()
+            .find(|&place| peace.map().place(place).is_some_and(|data| data.safety == Safety::Buffer && data.lair.is_none()))
+            .unwrap();
+        for game in [&mut peace, &mut war] {
+            set_down(game, ASH, wilds);
+            set_down(game, COLE, wilds);
+        }
+        assert_eq!(peace.can_attack(ASH, COLE), Err(Refusal::Unmarked));
+        assert_eq!(war.can_attack(ASH, COLE), Ok(()));
+        set_down(&mut war, ASH, brynsland);
+        set_down(&mut war, COLE, brynsland);
+        assert_eq!(war.can_attack(ASH, COLE), Err(Refusal::Haven), "a haven is a haven, even in war");
+        set_down(&mut war, ASH, wilds);
+        set_down(&mut war, COLE, wilds);
+
+        let mut events = Vec::new();
+        let mut now = 20;
+        while !war.character(COLE).unwrap().is_spirit() && !war.character(ASH).unwrap().is_spirit() {
+            war.apply(&Command::attack(ASH, COLE), Tick::new(now), &mut events);
+            now += ATTACK_TIME.as_ticks();
+        }
+        // One of them died in Bryn's land. Ash's land, far away, feels it too.
+        let felt = |game: &Game, land: PlaceId| game.zone_at(land).corruption();
+        assert_eq!((felt(&war, brynsland), felt(&war, ashland)), (CORRUPTION_PER_DEATH, CORRUPTION_PER_DEATH));
     }
 
     #[test]
