@@ -32,8 +32,10 @@ pub struct Death {
     pub passing: Passing,
     /// The earliest the spirit may return.
     pub ready_at: Tick,
-    /// When the body is lost and the spirit must be reborn.
+    /// When the body, if its spirit has not come back, rises as a Body Guard.
     pub lost_at: Tick,
+    /// Whether the body has risen. There is no returning to it then.
+    pub risen: bool,
 }
 
 /// A spirit whose body died in its sleep. It has no body to return to
@@ -245,6 +247,13 @@ impl Character {
         self.degradation.adjust(1);
         let cleansed = self.shift_taint(-i64::from(self.taint()));
         (core::mem::take(&mut self.pack), cleansed)
+    }
+
+    /// Marks the body as risen: it is a Body Guard now, and lost to its spirit.
+    pub(crate) fn lose_body(&mut self) {
+        if let Some(death) = &mut self.death {
+            death.risen = true;
+        }
     }
 
     /// Goes back into the body, weak but alive. Returns where the body lay.

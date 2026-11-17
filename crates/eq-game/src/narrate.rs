@@ -13,6 +13,7 @@ use eq_world_graph::{Passage, PlaceId};
 
 use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal};
 use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
+use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
 
@@ -23,8 +24,9 @@ Commands:
   go <exit>            walk somewhere; compass points, up and down work alone
   gather (g)           take from the deposit here
   inspect (x)          study the deposit and the health of the shoreline
-  attack <name>        trade blows with someone here (see below)
-  take                 pick up what lies dropped on the ground
+  attack <name>        trade blows with someone here (see below), or
+                       strike a creature: attack lurker, attack guard
+  take                 open the relics here and take what is in them
   sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
   rob <name>           go through the pack of someone asleep here
   return               as a spirit, go back into your body
@@ -44,8 +46,13 @@ a haven: anywhere else a sleeper can be robbed. Sleep for more than a
 few days and the body starts to waste.
 
 If you are killed your body stays where it fell and you become a spirit.
-Get back to it within ten minutes and return, or be reborn at camp with
-a little of what you knew.
+Get back to it within ten minutes and return. Leave it longer and it
+rises as a guard over what you dropped; then you can only relinquish it
+and be reborn at camp with a little of what you knew.
+
+What the dead drop lies in a relic. Common things anyone can take. A
+relic holding tide-glass is sealed to all but its owner until the body
+is gone or its guard is brought down.
 
 Sleep two weeks and the body dies where it lies. You wake a forgotten
 spirit with ten waking hours to find three memories of yourself in the
@@ -74,6 +81,16 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
             format!("The tide comes in. The way {label} is under water.")
         }),
         Event::PassageChanged { .. } => None,
+        Event::CreatureAppeared { place, being } if *place == here => Some(match being.kind {
+            CreatureKind::Lurker => "The black water stirs. A lurker has come back.".into(),
+            CreatureKind::BodyGuard => {
+                format!("{} rises and stands guard over what it dropped.", capitalise(&being_name(game, *being, viewer)))
+            }
+        }),
+        Event::CreatureGone { place, being } if *place == here => {
+            Some(format!("{} crumbles to salt and sand.", capitalise(&being_name(game, *being, viewer))))
+        }
+        Event::CreatureAppeared { .. } | Event::CreatureGone { .. } => None,
     }
 }
 
@@ -103,7 +120,33 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Hurt { by, damage, health } => {
             format!("{} strikes you for {damage}. You have {health} health left.", name_of(game, *by))
         }
-        Outcome::Died { by: Cause::Character(by), place, passing, .. } => died(game, *by, *place, *passing),
+        Outcome::Died { by: Cause::Character(by), place, passing, .. } => died(game, name_of(game, *by), *place, *passing),
+        Outcome::Died { by: Cause::Creature(being), place, passing, .. } => {
+            died(game, &capitalise(&being_name(game, *being, viewer)), *place, *passing)
+        }
+        Outcome::NoSuchCreature => "There is nothing like that here to fight.".into(),
+        Outcome::HitCreature { being, damage, left } => {
+            format!("You strike {} for {damage}. It has {left} health left.", being_name(game, *being, viewer))
+        }
+        Outcome::Slew { being: Being { kind: CreatureKind::Lurker, .. } } => {
+            "The lurker sinks back into the black water. In time another will come.".into()
+        }
+        Outcome::Slew { being } => {
+            format!("{} falls and is still. What it kept is there for the taking.", capitalise(&being_name(game, *being, viewer)))
+        }
+        Outcome::Mauled { by, damage, health } => format!(
+            "{} strikes you for {damage}. You have {health} health left.",
+            capitalise(&being_name(game, *by, viewer)),
+        ),
+        Outcome::BodyRose => {
+            "You left it too long. Your body has risen without you and stands guard over what you dropped. You can relinquish it and be reborn, or wait for someone to bring it down.".into()
+        }
+        Outcome::RelicSealed => {
+            "The relic here is sealed. It opens for its owner, or once the body it belongs to is gone or brought down.".into()
+        }
+        Outcome::CannotReturn { why: ReturnRefusal::Risen } => {
+            "Your body has risen as a guard. There is no going back into it. Relinquish it to be reborn.".into()
+        }
         Outcome::Died { by: Cause::LongSleep, place, .. } => format!(
             "You slept too long. Your body has died where it lay at {}, and what you carried lies there. \
              You are a forgotten spirit now, with no body to go back to.",
@@ -185,6 +228,9 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         return (*place == here).then(|| match by {
             Cause::Character(_) => format!("{name} dies. What they carried lies beside the body."),
             Cause::LongSleep => format!("{name} has slept too long and will not wake. What they carried lies where they lay."),
+            Cause::Creature(being) => {
+                format!("{} kills {name}. What they carried lies beside the body.", capitalise(&being_name(game, *being, viewer)))
+            }
         });
     }
     if !game.can_see(viewer, who) {
@@ -206,6 +252,15 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         // A blow that lands on the viewer reaches them as their own `Hurt`.
         Outcome::Struck { target, .. } if actor.place() == here && *target != viewer => {
             Some(format!("{name} strikes {}.", name_of(game, *target)))
+        }
+        Outcome::HitCreature { being, .. } if actor.place() == here => {
+            Some(format!("{name} strikes {}.", being_name(game, *being, viewer)))
+        }
+        Outcome::Slew { being } if actor.place() == here => {
+            Some(format!("{name} brings down {}.", being_name(game, *being, viewer)))
+        }
+        Outcome::Mauled { by, .. } if actor.place() == here => {
+            Some(format!("{} strikes {name}.", capitalise(&being_name(game, *by, viewer))))
         }
         Outcome::Returned if actor.place() == here => Some(format!("{name}'s body stirs, and {name} stands.")),
         Outcome::Reborn { .. } | Outcome::Redeemed { .. } | Outcome::Faded { .. } if actor.place() == here => {
@@ -275,8 +330,25 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     for (id, body) in game.bodies_at(character.place()) {
         lines.push(if id == viewer { "Your body lies here.".into() } else { format!("{}'s body lies here.", body.name()) });
     }
-    if here.spoils.iter().any(|&amount| amount > 0) {
-        lines.push(format!("Lying on the ground: {}.", pile(&here.spoils)));
+    for creature in game.creatures_at(character.place()) {
+        lines.push(match creature.being.kind {
+            CreatureKind::Lurker => format!("A lurker waits here, half in the water ({} health).", creature.health()),
+            CreatureKind::BodyGuard => format!(
+                "{} stands guard here ({} health).",
+                capitalise(&being_name(game, creature.being, viewer)),
+                creature.health(),
+            ),
+        });
+    }
+    for relic in game.relics_at(character.place()) {
+        let tier = relic.tier();
+        let article = if tier == RelicTier::Ancient { "An" } else { "A" };
+        let whose = if relic.owner == viewer { "your own".into() } else { format!("{}'s", name_of(game, relic.owner)) };
+        lines.push(if game.can_open(viewer, relic) {
+            format!("{article} {} lies here, {whose}: {}.", tier.name(), pile(&relic.contents))
+        } else {
+            format!("{article} {} lies here, {whose}, sealed.", tier.name())
+        });
     }
     let exits: Vec<String> = game
         .map()
@@ -362,6 +434,16 @@ fn played(game: &Game, viewer: CharacterId) -> Duration {
     game.character(viewer).and_then(|you| you.forgotten()).map_or(Duration::ZERO, |forgotten| forgotten.played)
 }
 
+/// What to call a creature, as it would follow "you strike".
+fn being_name(game: &Game, being: Being, viewer: CharacterId) -> String {
+    match (being.kind, being.of) {
+        (CreatureKind::Lurker, _) => "the lurker".into(),
+        (CreatureKind::BodyGuard, Some(owner)) if owner == viewer => "your own body".into(),
+        (CreatureKind::BodyGuard, Some(owner)) => format!("{}'s body", name_of(game, owner)),
+        (CreatureKind::BodyGuard, None) => "a risen body".into(),
+    }
+}
+
 fn name_of(game: &Game, who: CharacterId) -> &str {
     game.character(who).map_or("someone", |character| character.name())
 }
@@ -381,21 +463,21 @@ pub fn condition(character: &crate::Character, now: Tick) -> Option<&'static str
 
 /// What a character is told on dying, which depends on how their spirit
 /// stands to the body.
-fn died(game: &Game, by: CharacterId, place: PlaceId, passing: Passing) -> String {
-    let killed = format!("{} has killed you. What you carried lies beside your body.", name_of(game, by));
+fn died(game: &Game, killer: &str, place: PlaceId, passing: Passing) -> String {
+    let killed = format!("{killer} has killed you. What you carried lies beside your body.");
     let anchor = place_name(game, game.anchor());
     let body = place_name(game, place);
     let limit = span(CORPSE_TIME);
     let next = match passing {
         Passing::Tethered => format!(
-            "Someone stood by, so your spirit stays close. Wait a moment, then return to your body. You have {limit} before it is lost."
+            "Someone stood by, so your spirit stays close. Wait a moment, then return to your body. You have {limit} before it rises without you."
         ),
         Passing::Severed => format!(
-            "You died alone, and your spirit is pulled to {anchor}. Get back to your body at {body} and return to it within {limit}, or be reborn."
+            "You died alone, and your spirit is pulled to {anchor}. Get back to your body at {body} and return to it within {limit}, before it rises without you."
         ),
         Passing::Forgotten => String::new(),
         Passing::Corrupted => format!(
-            "The land here is failing, and it holds your spirit at {anchor} before you can start back to your body at {body}. You have {limit} before it is lost."
+            "The land here is failing, and it holds your spirit at {anchor} before you can start back to your body at {body}. You have {limit} before it rises without you."
         ),
     };
     format!("{killed} {next}")

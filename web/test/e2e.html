@@ -129,7 +129,8 @@
         expect(!button('Attack'), 'no Attack button while nobody here can be attacked')
 
         // Hunt the greedy bot: walk the shoreline until someone here can be attacked.
-        const CIRCUIT = ['north', 'north', 'south', 'south', 'east', 'cave', 'down', 'up', 'out', 'east', 'east', 'west', 'west', 'west', 'south', 'south', 'north', 'north']
+        // (Mirrored by a Rust test in eq-web's scene.rs. It keeps clear of the grotto and its lurker.)
+        const CIRCUIT = ['north', 'north', 'south', 'south', 'east', 'east', 'west', 'west', 'west', 'south', 'south', 'north', 'north', 'east']
         for (let step = 0; step < 400 && !button('Attack'); step++) {
             type(CIRCUIT[step % CIRCUIT.length])
             type('wait 20')
@@ -148,7 +149,8 @@
         expect(!page.querySelector('eq-status').textContent.includes('Bryn'), 'the dead to be out of sight of the living')
         expect(page.querySelector('eq-map .tile.here .body'), 'a body to show on your tile')
         expect(!button('Return'), 'no Return button for the living')
-        expect(page.querySelector('eq-map .tile.here .spoils'), 'dropped goods to show on your tile')
+        expect(page.querySelector('eq-map .tile.here .spoils'), 'a relic to show on your tile')
+        expect(tile('Deep Grotto').querySelector('.creature'), 'the lurker to show on the grotto tile')
 
         press(await until(() => button('Take'), 'a Take button'))
         await until(() => /You take .+ from the ground\./.test(logText()), 'the take to be logged')

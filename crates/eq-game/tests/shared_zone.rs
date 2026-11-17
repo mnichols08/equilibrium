@@ -152,12 +152,14 @@ fn wardens_protect_the_commons() {
     let worst_warden = *wardens.iter().min().unwrap();
 
     // The careful keep most of what restraint should earn them.
-    assert!(worst_warden > unguarded_best * 2, "wardens {wardens:?} vs unguarded {unguarded_best}");
+    // (Half as much again, not double: the lurker in the grotto now costs
+    // a careless warden a pack from time to time.)
+    assert!(worst_warden * 2 > unguarded_best * 3, "wardens {wardens:?} vs unguarded {unguarded_best}");
     assert!(worst_warden * 2 > fair_share, "wardens {wardens:?} vs a fair share of {fair_share}");
     // The defector is left with next to nothing.
     assert!(defector * 10 < fair_share, "the defector kept {defector}");
     // And the zone is spared the worst of it.
-    assert!(guarded.lowest_vitality() > unguarded.lowest_vitality() + 20);
+    assert!(guarded.lowest_vitality() > unguarded.lowest_vitality() + 10);
     assert!(guarded.lowest_vitality() > 30);
 }
 

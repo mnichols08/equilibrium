@@ -44,6 +44,13 @@ impl Policy {
         let Some(node) = game.place_of(who).and_then(|place| place.deposit).map(|deposit| deposit.node) else {
             return false;
         };
+        // Nobody settles down to work beside something that is hunting them.
+        let hunted = game.character(who).is_some_and(|me| {
+            game.creatures_at(me.place()).any(|creature| creature.being.kind.is_aggressive())
+        });
+        if hunted {
+            return false;
+        }
         match self {
             Self::Greedy => node.stock() >= MIN_WORKABLE_STOCK,
             Self::Careful => node.quality() == Quality::Pristine && node.stock() * 2 >= node.capacity(),
@@ -212,7 +219,8 @@ impl Bots {
             // Worn out: no stopping to gather on the way to shelter.
             Sleep::HeadHome => None,
             Sleep::Do(command) => Some((command, PAUSE)),
-            Sleep::NotNow => warden_duty(world, bot)
+            Sleep::NotNow => beast_duty(world, bot)
+                .or_else(|| warden_duty(world, bot))
                 .or_else(|| thieving(world, bot, now))
                 .map(|command| (command, PAUSE))
                 .or_else(|| bot.plan.policy.wants_to_gather(world, who).then(|| (Command::gather(who), IDLE))),
@@ -226,12 +234,15 @@ impl Bots {
     }
 
     /// A dead bot makes for its body by the shortest way and returns to
-    /// it as soon as it may. If it is too late, rebirth takes care of it.
+    /// it as soon as it may. If it is too late, it gives the body up.
     fn haunt(&mut self, index: usize, death: &Death, session: &mut Session<Game>, events: &mut Events<Game>, now: Tick) -> Result<(), OutOfOrder> {
         let who = self.bots[index].who;
         let world = session.world();
         let here = world.character(who).map(Character::place);
-        let command = if here == Some(death.body) {
+        let command = if death.risen {
+            // Too late: the body stands guard now. Start again.
+            Some(Command::relinquish(who))
+        } else if here == Some(death.body) {
             if now < death.ready_at {
                 self.bots[index].free_at = death.ready_at;
                 return Ok(());
@@ -339,8 +350,17 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
     if let (true, Some(target)) = (fit_to_fight, marked) {
         return Some(Command::attack(bot.who, target));
     }
-    let spoils = game.place_of(bot.who)?.spoils.iter().any(|&amount| amount > 0);
-    spoils.then(|| Command::take(bot.who))
+    game.can_take(bot.who).then(|| Command::take(bot.who))
+}
+
+/// Any bot fit to fight goes for a creature that would go for it.
+fn beast_duty(game: &Game, bot: &Bot) -> Option<Command> {
+    let me = game.character(bot.who)?;
+    if me.health() < HEALTH_TO_FIGHT {
+        return None;
+    }
+    let beast = game.creatures_at(me.place()).find(|creature| creature.being.kind.is_aggressive())?;
+    Some(Command::fight(bot.who, beast.id))
 }
 
 #[cfg(test)]
@@ -396,9 +416,9 @@ mod tests {
         let died = happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { .. } }));
         assert!(died, "Bryn was never killed");
         let bryn = session.world().character(BRYN).unwrap();
-        assert!(bryn.life() >= 1);
-        // Whether Bryn made it back or was reborn, it ends up working the grotto again.
-        assert_eq!(session.world().place_of(BRYN).map(|place| place.name), Some("Deep Grotto"));
+        // Too late to return: Bryn gave the body up and began again at camp.
+        assert!(bryn.life() >= 2, "Bryn should have been reborn");
+        assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::BodyRose })));
     }
 
     /// How long a bot stays up before it must sleep, with a little over.

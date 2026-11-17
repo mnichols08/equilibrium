@@ -82,9 +82,10 @@ impl Solo {
     pub fn handle(&mut self, line: &str) -> Reply {
         let lines = match parse(line) {
             Input::Do(action) => self.act(action),
-            Input::Attack(name) => match self.someone_here_called(&name) {
-                Some(target) => self.act(Action::Attack(target)),
-                None => alloc::vec![format!("There is nobody called \"{name}\" here.")],
+            Input::Attack(name) => match (self.someone_here_called(&name), self.creature_here_called(&name)) {
+                (Some(target), _) => self.act(Action::Attack(target)),
+                (None, Some(creature)) => self.act(Action::Fight(creature)),
+                (None, None) => alloc::vec![format!("There is nobody called \"{name}\" here.")],
             },
             Input::Wait(time) => self.wait(time),
             Input::Sleep(time) => self.sleep(time),
@@ -122,6 +123,14 @@ impl Solo {
         self.game().occupants(here).iter().copied().find(|&id| {
             id != Self::YOU && self.game().character(id).is_some_and(|other| other.name().eq_ignore_ascii_case(name))
         })
+    }
+
+    /// The creature standing with the player that answers to `word`:
+    /// "lurker", "guard" or "body".
+    fn creature_here_called(&self, word: &str) -> Option<crate::CreatureId> {
+        let here = self.game().character(Self::YOU)?.place();
+        let answers = |kind: crate::CreatureKind| kind.word() == word || (kind == crate::CreatureKind::BodyGuard && word == "body");
+        self.game().creatures_at(here).find(|creature| answers(creature.being.kind)).map(|creature| creature.id)
     }
 
     /// Anyone in the world but the player whose name is `name`, seen or not.
@@ -279,7 +288,7 @@ mod tests {
         assert!(said.iter().any(|line| line.starts_with("Bryn dies.")), "{said:?}");
         assert!(solo.look().contains("Bryn's body lies here."));
         assert!(!solo.look().contains("Also here: Bryn"), "the living do not see spirits");
-        assert!(solo.look().contains("Lying on the ground: "));
+        assert!(solo.look().contains("relic lies here, Bryn's: "), "{}", solo.look());
 
         let took = solo.handle("take").lines;
         assert!(took[0].starts_with("You take "), "{took:?}");

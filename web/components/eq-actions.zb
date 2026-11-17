@@ -4,6 +4,7 @@
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
   @prop {{ name: string }[]} targets - Everyone here you may attack right now.
   @prop {{ name: string }[]} sleepers - Everyone asleep here whose pack you may go through.
+  @prop {{ name: string, word: string, health: number }[]} foes - The creatures here, which you may strike.
   @prop {null | { place_name: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit.
   @prop {null | { dormant: boolean, can_seek: boolean, memories: number, needed: number }} forgotten - Your way back, if you slept too long and are a forgotten spirit.
   @fires command - A button was pressed; `detail` is the line to send to the game, such as "north" or "wait 10m".
@@ -33,7 +34,7 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} body={null} forgotten={null}>
+<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} body={null} forgotten={null}>
   <div zb-if={forgotten} role="group" aria-label="Your redemption">
     <button zb-if={dormant} type="button" class="primary" onclick={() => emit('command', 'wake')}>Wake</button>
     <button zb-if={!dormant} type="button" class="primary" disabled={!forgotten.can_seek} onclick={() => emit('command', 'seek')}>
@@ -51,7 +52,13 @@
       <small>be reborn</small>
     </button>
   </div>
-  <div zb-if={targets.length + sleepers.length > 0} role="group" aria-label="Others here">
+  <div zb-if={targets.length + sleepers.length + foes.length > 0} role="group" aria-label="Others here">
+    <zb-each items={foes} as="foe" key={foe.name}>
+      <button type="button" class="danger" disabled={spirit} onclick={() => emit('command', `attack ${foe.word}`)}>
+        Fight {foe.name}
+        <small>{foe.health} health</small>
+      </button>
+    </zb-each>
     <zb-each items={targets} as="target" key={target.name}>
       <button type="button" class="danger" onclick={() => emit('command', `attack ${target.name}`)}>
         Attack {target.name}

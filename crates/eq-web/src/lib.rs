@@ -15,7 +15,7 @@ mod scene;
 use eq_game::Solo;
 use wasm_bindgen::prelude::*;
 
-pub use scene::{BodyView, Carried, DepositView, ExitView, ForgottenView, Level, LinkView, PersonView, PlaceView, Scene, You};
+pub use scene::{BodyView, Carried, DepositView, ExitView, FoeView, ForgottenView, Level, LinkView, PersonView, PlaceView, Scene, You};
 
 /// One player's game, driven from JavaScript.
 #[wasm_bindgen]

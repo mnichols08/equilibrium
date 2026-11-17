@@ -4,7 +4,7 @@
 
 use eq_clock::Tick;
 use eq_events::World;
-use eq_game::{narrate, CharacterId, Command, Event, Game};
+use eq_game::{narrate, CharacterId, Command, CreatureId, Event, Game};
 use eq_rng::Rng;
 
 const NAMES: [&str; 12] = ["Ash", "Bryn", "Cole", "Dara", "Eli", "Fen", "Gil", "Hale", "Ivo", "Jun", "Kit", "Lark"];
@@ -37,7 +37,7 @@ fn audience_matches_who_the_narrator_speaks_to() {
 
         let who = CharacterId::new(script.below(NAMES.len() as u64));
         let someone = CharacterId::new(script.below(NAMES.len() as u64));
-        let command = match script.below(25) {
+        let command = match script.below(27) {
             0..=7 => Command::gather(who),
             8..=12 => Command::go(who, EXITS[script.below(EXITS.len() as u64) as usize]),
             13..=14 => Command::attack(who, someone),
@@ -48,6 +48,8 @@ fn audience_matches_who_the_narrator_speaks_to() {
             21 => Command::relinquish(who),
             22 => Command::seek(who),
             23 => Command::name(who, someone),
+            // Creature ids only grow, so the low ones cover every lurker and guard so far.
+            24..=25 => Command::fight(who, CreatureId::new(script.below(4))),
             _ => Command::rob(who, someone),
         };
         let mut events = Vec::new();

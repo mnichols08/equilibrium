@@ -3,6 +3,7 @@
 use alloc::string::String;
 
 use crate::character::CharacterId;
+use crate::creature::CreatureId;
 
 /// Something a character can do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,7 +14,9 @@ pub enum Action {
     Gather,
     /// Trade blows with someone in the same place.
     Attack(CharacterId),
-    /// Pick up whatever lies dropped on the ground here.
+    /// Strike a creature in the same place.
+    Fight(CreatureId),
+    /// Open every relic here that will open, and take what is in them.
     Take,
     /// Settle down to sleep where you stand.
     Rest,
@@ -49,6 +52,11 @@ impl Command {
     /// `who` trades blows with `target`.
     pub const fn attack(who: CharacterId, target: CharacterId) -> Self {
         Self { who, action: Action::Attack(target) }
+    }
+
+    /// `who` strikes `creature`.
+    pub const fn fight(who: CharacterId, creature: CreatureId) -> Self {
+        Self { who, action: Action::Fight(creature) }
     }
 
     /// `who` picks up what lies on the ground where they stand.
