@@ -255,7 +255,7 @@ impl Bots {
 
     /// A dead bot makes for its body by the shortest way and returns to
     /// it as soon as it may. If it is too late, or the body is in the
-    /// ground, it goes looking for its memories.
+    /// ground, it practises in the afterlife until it lives again.
     fn haunt(&mut self, index: usize, death: &Death, session: &mut Session<Game>, events: &mut Events<Game>, now: Tick) -> Result<(), OutOfOrder> {
         let who = self.bots[index].who;
         let world = session.world();
@@ -393,23 +393,21 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
     game.can_take(bot.who).then(|| Command::take(bot.who))
 }
 
-/// A spirit's next step through the afterlife: search here if there is
-/// a memory to find, or else make for the first place in this land
-/// that still holds one.
+/// A spirit's next step through the afterlife: practise here if the
+/// place can be worked, or else make for the first place in this land
+/// that can.
 pub(crate) fn afterlife(game: &Game, who: CharacterId) -> Option<Command> {
     let me = game.character(who)?;
-    let unsearched = |place: eq_world_graph::PlaceId| {
-        game.map().place(place).is_some_and(|data| data.deposit.is_some()) && !me.memories().contains(&place)
-    };
-    if unsearched(me.place()) {
-        return Some(Command::seek(who));
+    let workable = |place: eq_world_graph::PlaceId| game.map().place(place).is_some_and(|data| data.deposit.is_some());
+    if workable(me.place()) {
+        return Some(Command::gather(who));
     }
     // Water is nothing to a spirit, so every exit will do.
-    // This land first; another only if this one has too little to find.
+    // This land first; another only if nothing here can be worked.
     let near = game.zone_at(me.place()).place_ids();
     let far = game.zones().iter().flat_map(crate::zone::Zone::place_ids);
     near.chain(far)
-        .filter(|&place| unsearched(place))
+        .filter(|&place| workable(place))
         .find_map(|place| game.map().first_step(me.place(), place, |_| true))
         .map(|exit| Command::go(who, &exit.label))
 }

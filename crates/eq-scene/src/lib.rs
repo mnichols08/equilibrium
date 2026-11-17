@@ -9,7 +9,7 @@
 //! perceive from where they stand is a later rule.
 
 use eq_clock::Tick;
-use eq_game::content::{LOW_TIDE, MEMORIES_TO_REDEEM, REDEMPTION_CLOCK, TIDE};
+use eq_game::content::{AFTERLIFE_LEVEL, LOW_TIDE, MEMORIES_TO_REDEEM, REDEMPTION_CLOCK, TIDE};
 use eq_game::{
     narrate, pressure_percent, Attribute, CharacterId, Creature, Death, Deposit, Game, Resource, SkillKind, Standing,
 };
@@ -73,7 +73,7 @@ pub struct You {
     /// Their redemption, if they slept too long and are a forgotten
     /// spirit, or have not been born yet.
     pub forgotten: Option<ForgottenView>,
-    /// The way through the afterlife, for any spirit that is awake.
+    /// How far a spirit has come in the afterlife. Any spirit has one.
     pub afterlife: Option<AfterlifeView>,
     /// The names of the dead whose bodies lie here and could be buried.
     pub can_bury: Vec<String>,
@@ -184,16 +184,14 @@ pub struct FoeView {
     pub aggressive: bool,
 }
 
-/// Any spirit's way back to the living: memories of itself, found one
-/// to a place.
+/// Any spirit's way back to the living: practise a skill where the
+/// living would work, far enough, and live again knowing it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AfterlifeView {
-    /// Memories recovered so far.
-    pub memories: u32,
-    /// Memories needed to live again.
+    /// The best level reached in any one skill since leaving the living.
+    pub level: u32,
+    /// The level at which the spirit lives again.
     pub needed: u32,
-    /// Whether there is a memory to seek where the spirit stands.
-    pub can_seek: bool,
 }
 
 /// A forgotten spirit's way back.
@@ -282,11 +280,9 @@ impl Scene {
             health: character.health(),
             life: character.life(),
             body: character.death().map(|death| body_view(game, death, here, now)),
-            afterlife: (character.is_spirit() && !character.is_dormant()).then(|| AfterlifeView {
-                memories: character.memories().len() as u32,
-                needed: MEMORIES_TO_REDEEM,
-                can_seek: place.deposit.is_some() && !character.memories().contains(&here),
-            }),
+            afterlife: character
+                .is_spirit()
+                .then(|| AfterlifeView { level: character.best_practised(), needed: AFTERLIFE_LEVEL }),
             can_bury: if character.is_spirit() {
                 Vec::new()
             } else {
@@ -298,7 +294,10 @@ impl Scene {
                 memories: forgotten.memories(),
                 needed: MEMORIES_TO_REDEEM,
                 time_left: REDEMPTION_CLOCK.saturating_sub(forgotten.played).as_ticks(),
-                can_seek: !forgotten.dormant && place.deposit.is_some() && !forgotten.found_in.contains(&here),
+                can_seek: !forgotten.unborn
+                    && !forgotten.dormant
+                    && place.deposit.is_some()
+                    && !forgotten.found_in.contains(&here),
             }),
             ectoplasm: character.ectoplasm(),
             spirit_tier: character.spirit_tier().name(),
@@ -540,13 +539,12 @@ mod tests {
         let body = spirit.you.body.clone().unwrap();
         assert_eq!(body.place, here.id);
         assert_eq!((body.can_return, body.held_for, body.lost_in), (false, 0, CORPSE_TIME.as_ticks()));
-        // Camp holds no memories; the way through the afterlife is out where the work is.
-        assert_eq!(spirit.you.afterlife, Some(AfterlifeView { memories: 0, needed: 3, can_seek: false }));
+        assert_eq!(spirit.you.afterlife, Some(AfterlifeView { level: 0, needed: 10 }));
         assert!(spirit.you.can_bury.is_empty(), "spirits bury nobody");
 
         game.apply(&Command::go(bryn, "north"), died, &mut events);
         let back = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap();
-        assert!(back.you.afterlife.clone().unwrap().can_seek);
+        assert!(back.you.can_gather, "the ledge is somewhere to practise");
         assert!(back.you.body.unwrap().can_return);
 
         // Buried, there is no body to go back to, and nothing left to take.

@@ -111,6 +111,16 @@ pub enum Outcome {
         /// The new level.
         level: u32,
     },
+    /// As a spirit, they got better at something by practising it in
+    /// the afterlife.
+    Practised {
+        /// Which skill.
+        skill: SkillKind,
+        /// The level reached in the afterlife.
+        level: u32,
+        /// The level at which they live again.
+        needed: u32,
+    },
     /// As a spirit, they drew ectoplasm from the place they are in.
     Drew {
         /// How much they drew.

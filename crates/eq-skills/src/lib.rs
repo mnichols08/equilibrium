@@ -116,6 +116,15 @@ impl Proficiency {
         Self { level: self.level * percent / 100, progress: 0, peak: self.peak }
     }
 
+    /// The same proficiency, raised to `level` if it stood lower. What
+    /// was banked toward the next level is lost if it is raised.
+    pub const fn at_least(&self, level: u32) -> Self {
+        if self.level >= level {
+            return *self;
+        }
+        Self { level, progress: 0, peak: if self.peak > level { self.peak } else { level } }
+    }
+
     /// Drops up to `levels` levels, never below `floor`, and returns how
     /// many were lost. The peak is kept.
     pub fn lose(&mut self, levels: u32, floor: u32) -> u32 {
@@ -154,6 +163,14 @@ mod tests {
     }
 
     const RULES: Rules = Rules { cap: 100, xp_per_level: 100, relearning_percent: 300 };
+
+    #[test]
+    fn raising_to_a_level_never_lowers_anything() {
+        let known = Proficiency::new().at_least(4).reborn_remembering(0).at_least(2);
+        assert_eq!((known.level(), known.peak()), (2, 4));
+        assert_eq!(known.at_least(1), known);
+        assert_eq!(known.at_least(9).peak(), 9);
+    }
 
     #[test]
     fn progress_carries_between_uses() {

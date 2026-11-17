@@ -1,7 +1,7 @@
 <!--
   Where you are and how you and the shoreline are doing.
   @prop {{ name: string, marked: boolean, asleep: boolean }[]} company - Everyone else standing where you are.
-  @prop {{ place_name: string, description: string, health: number, life: number, ectoplasm: number, spirit_tier: string, body: null | { place_name: string, state: string, can_return: boolean, held_for: number, lost_in: number }, forgotten: null | { unborn: boolean, dormant: boolean, memories: number, needed: number, time_left: number }, afterlife: null | { memories: number, needed: number, can_seek: boolean }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
+  @prop {{ place_name: string, description: string, health: number, life: number, ectoplasm: number, spirit_tier: string, body: null | { place_name: string, state: string, can_return: boolean, held_for: number, lost_in: number }, forgotten: null | { unborn: boolean, dormant: boolean, memories: number, needed: number, time_left: number }, afterlife: null | { level: number, needed: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
 -->
 <script>
   const emptyYou = { place_name: '', description: '', health: 100, life: 1, ectoplasm: 0, spirit_tier: 'Lost Shade', body: null, forgotten: null, afterlife: null, rested: 100, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
@@ -9,7 +9,7 @@
   const carrying = you.pack.map((item) => `${item.amount} ${item.name}`).join(', ')
   const note = (person) => (person.asleep ? ' (asleep)' : person.marked ? ' (marked)' : '')
   const minutes = (seconds) => `${Math.ceil(seconds / 60)} min`
-  const found = you.afterlife ? `${you.afterlife.memories} of ${you.afterlife.needed} memories found.` : ''
+  const found = you.afterlife ? `Practised to level ${you.afterlife.level} of the ${you.afterlife.needed} that bring you back.` : ''
   const bodyLine = (body) =>
     body.state === 'buried'
       ? `You are a spirit. Your body is buried at ${body.place_name}: your next life will remember this one.`
@@ -22,8 +22,8 @@
           ].filter(Boolean).join(' ')
   const forgottenLine = (forgotten) =>
     forgotten.unborn
-      ? 'You have not lived yet. Seek your memories and be born where the world needs people.'
-      : `You are a forgotten spirit with no body. ${forgotten.dormant ? 'You lie dormant.' : `You fade in ${minutes(forgotten.time_left)} awake.`}`
+      ? 'You have not lived yet. Practise where the living would work, and be born where the world needs people.'
+      : `You are a forgotten spirit with no body. ${forgotten.memories} of ${forgotten.needed} memories found. ${forgotten.dormant ? 'You lie dormant.' : `You fade in ${minutes(forgotten.time_left)} awake.`}`
   const spirit = [you.body ? bodyLine(you.body) : you.forgotten ? forgottenLine(you.forgotten) : '', found].filter(Boolean).join(' ')
   const alsoHere = company.map((person) => `${person.name}${note(person)}`).join(', ')
 </script>

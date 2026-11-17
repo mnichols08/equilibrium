@@ -1,13 +1,13 @@
 <!--
   What you can do right now: walk out by an exit, gather, pick things up, challenge someone, or let time pass.
-  A spirit can only walk, draw ectoplasm, return to its body while it still lies there, or seek memories of itself until it lives again.
+  A spirit can only walk, draw ectoplasm, return to its body while it still lies there, or practise where the living would work until it lives again.
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
   @prop {{ name: string }[]} targets - Everyone here you may attack right now.
   @prop {{ name: string }[]} sleepers - Everyone asleep here whose pack you may go through.
   @prop {{ name: string, word: string, health: number }[]} foes - The creatures here, which you may strike.
   @prop {null | { place_name: string, state: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit. `state` is "lying", "risen" or "buried".
-  @prop {null | { dormant: boolean, unborn: boolean }} forgotten - Set if you slept too long and are a forgotten spirit, or have not lived yet.
-  @prop {null | { can_seek: boolean, memories: number, needed: number }} afterlife - Your way back to the living, if you are a spirit and awake.
+  @prop {null | { dormant: boolean, unborn: boolean, can_seek: boolean, memories: number, needed: number }} forgotten - Set if you slept too long and are a forgotten spirit, or have not lived yet.
+  @prop {null | { level: number, needed: number }} afterlife - How far you have practised in the afterlife, if you are a spirit.
   @prop {string[]} burials - The names of the dead whose bodies lie here, which you could bury.
   @prop {boolean} canRite - Whether the ground here is stripped enough for a Restoration Rite you could take part in.
   @prop {boolean} riteWaiting - Whether someone else has begun a rite here and is waiting for a second voice.
@@ -48,9 +48,9 @@
       Return to your body
       <small>{canReturn ? "it lies here" : body.place_name}</small>
     </button>
-    <button zb-if={afterlife} type="button" class="primary" disabled={!afterlife.can_seek} onclick={() => emit('command', 'seek')}>
+    <button zb-if={forgotten && !forgotten.unborn && !dormant} type="button" class="primary" disabled={!forgotten.can_seek} onclick={() => emit('command', 'seek')}>
       Seek a memory
-      <small>{afterlife.memories} of {afterlife.needed} found</small>
+      <small>{forgotten.memories} of {forgotten.needed} found</small>
     </button>
   </div>
   <div zb-if={targets.length + sleepers.length + foes.length + burials.length > 0} role="group" aria-label="Others here">
@@ -87,7 +87,10 @@
     </zb-each>
   </div>
   <div role="group" aria-label="Do">
-    <button type="button" class="primary" disabled={!canGather} onclick={() => emit('command', 'gather')}>{spirit ? "Draw ectoplasm" : "Gather"}</button>
+    <button type="button" class="primary" disabled={!canGather} onclick={() => emit('command', 'gather')}>
+      {spirit ? "Practise" : "Gather"}
+      <small zb-if={afterlife}>level {afterlife.level} of {afterlife.needed} to live again</small>
+    </button>
     <button zb-if={canRite} type="button" class="primary" onclick={() => emit('command', 'rite')}>
       {riteWaiting ? "Answer the rite" : "Begin a rite"}
       <small>{riteWaiting ? "mends this place" : "needs a second voice"}</small>

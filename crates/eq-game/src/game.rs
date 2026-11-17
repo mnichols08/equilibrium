@@ -16,7 +16,7 @@ use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTie
 use crate::content::{
     self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, BURY_TIME, MOST_VIGIL, RITE_CLEANSES, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
     VIGIL_PER_TENDING, WARD_TIME, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
-    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, EFFORT_SPREAD,
+    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, AFTERLIFE_LEVEL, EFFORT_SPREAD,
     FADED_CARRYOVER_PERCENT, GATHER_TIME,
     HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
     REBIRTH_CARRYOVER_PERCENT, REDEMPTION_CLOCK, RESTED_LASTS, SEEK_TIME, SETTLE_TIME, TAINT_FADES_EVERY,
@@ -707,15 +707,26 @@ impl Game {
     /// A spirit draws ectoplasm from any place the living can work.
     fn draw(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
         let character = &mut self.characters[index];
-        let workable = self.map.place(character.place()).is_some_and(|place| place.deposit.is_some());
-        if !workable {
+        let Some(deposit) = self.map.place(character.place()).and_then(|place| place.deposit) else {
             return outcomes.push(Outcome::NothingToGather);
-        }
+        };
         let mut risen = Vec::new();
         let amount = character.draw(&mut risen);
         character.busy_until = now + DRAW_TIME;
         outcomes.push(Outcome::Drew { amount, held: character.ectoplasm() });
         outcomes.append(&mut risen);
+        // The work is practice too, and enough practice is the way back.
+        if character.practise(deposit.resource, outcomes) >= AFTERLIFE_LEVEL {
+            self.arise(index, now, outcomes);
+        }
+    }
+
+    /// Ends a spirit's time in the afterlife: it lives again, wherever
+    /// the world is emptiest.
+    fn arise(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let was_forgotten = self.characters[index].forgotten().is_some();
+        let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true);
+        outcomes.push(if was_forgotten { Outcome::Redeemed { by: None, life } } else { Outcome::Reborn { life } });
     }
 
     /// Searches a place for a memory. Each place with a deposit holds
@@ -724,19 +735,21 @@ impl Game {
         let character = &mut self.characters[index];
         let here = character.place();
         let holds_one = self.map.place(here).is_some_and(|place| place.deposit.is_some());
-        if !holds_one || character.memories().contains(&here) {
+        // Only those who lived and were forgotten have memories to find.
+        let Some(forgotten) = character.forgotten_mut().filter(|forgotten| !forgotten.unborn) else {
+            return outcomes.push(Outcome::NothingToRemember);
+        };
+        if !holds_one || forgotten.found_in.contains(&here) {
             return outcomes.push(Outcome::NothingToRemember);
         }
-        let found = character.remember(here);
+        forgotten.found_in.push(here);
+        let found = forgotten.memories();
         character.busy_until = now + SEEK_TIME;
         outcomes.push(Outcome::Remembered { found, needed: MEMORIES_TO_REDEEM });
         if found < MEMORIES_TO_REDEEM {
             return;
         }
-        // The loop is done: the spirit arises, wherever the world is emptiest.
-        let was_forgotten = self.characters[index].forgotten().is_some();
-        let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true);
-        outcomes.push(if was_forgotten { Outcome::Redeemed { by: None, life } } else { Outcome::Reborn { life } });
+        self.arise(index, now, outcomes);
     }
 
     /// Takes part in a Restoration Rite. The first to do so begins it;
@@ -1053,7 +1066,7 @@ impl Game {
         let lost_at = now + CORPSE_TIME;
 
         let character = &mut self.characters[index];
-        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false, buried: false });
+        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false, buried: false, disturbed: false });
         self.relics.extend(Relic::new(who, body, dropped, now));
         // Only a tethered spirit stays by its body.
         let zone = self.zones.iter().position(|zone| zone.contains(body)).unwrap_or(0);
@@ -1109,6 +1122,12 @@ impl Game {
             }
         }
         self.relics.retain(|relic| !open.contains(relic));
+        // A body whose things were taken by someone else has been disturbed.
+        for owner in open.iter().map(|relic| relic.owner).filter(|owner| *owner != who) {
+            if let Some(owner) = self.index_of(owner) {
+                self.characters[owner].be_disturbed();
+            }
+        }
         let character = &mut self.characters[index];
         character.stow_all(spoils);
         character.busy_until = now + time;
@@ -1714,8 +1733,9 @@ mod tests {
         let bryn = game.character(BRYN).unwrap();
         assert!(!bryn.is_spirit());
         assert_eq!((bryn.place(), bryn.health(), bryn.rested(), bryn.life()), (CAMP, 100, 100, 2));
+        // Death kept nothing. The ledge is where Bryn practised, so mining is what came back.
         let mining = bryn.skill(crate::types::SkillKind::Mining);
-        assert_eq!((mining.level(), mining.peak()), (mining_before * 15 / 100, mining_before * 15 / 100));
+        assert_eq!((mining.level(), mining.peak()), (AFTERLIFE_LEVEL, AFTERLIFE_LEVEL.max(mining_before)));
         assert_eq!(game.bodies_at(LEDGE).count(), 0);
     }
 
@@ -1798,10 +1818,48 @@ mod tests {
         game.apply(&Command::return_to_body(BRYN), Tick::new(at + 30), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::Buried }));
 
-        // The next life starts as low as any, but remembers how high it stood.
-        through_the_afterlife(&mut game, BRYN, at + 31);
-        let reborn = game.character(BRYN).unwrap().skill(SkillKind::Mining);
-        assert_eq!((reborn.level(), reborn.peak()), (mining * 15 / 100, mining));
+        // Bryn practises foraging on the beach. Mining starts from nothing
+        // in the next life, but that life remembers how high it stood.
+        let at = to_the_beach(&mut game, BRYN, at + 31);
+        through_the_afterlife(&mut game, BRYN, at);
+        let bryn = game.character(BRYN).unwrap();
+        let (mining_now, foraging) = (bryn.skill(SkillKind::Mining), bryn.skill(SkillKind::Foraging));
+        assert_eq!((mining_now.level(), mining_now.peak()), (0, mining));
+        assert_eq!((foraging.level(), foraging.peak()), (AFTERLIFE_LEVEL, AFTERLIFE_LEVEL));
+    }
+
+    /// Walks a spirit on the Ore Ledge down to the Shingle Beach.
+    fn to_the_beach(game: &mut Game, who: CharacterId, from: u64) -> u64 {
+        let mut events = Vec::new();
+        let mut now = from;
+        for way in ["south", "east"] {
+            game.apply(&Command::go(who, way), Tick::new(now), &mut events);
+            now = game.character(who).unwrap().busy_until().get();
+        }
+        assert_eq!(game.place_of(who).unwrap().name, "Shingle Beach");
+        now
+    }
+
+    #[test]
+    fn a_body_left_in_peace_is_remembered_and_a_looted_one_is_not() {
+        let (game, now) = bryn_marked_on_the_ledge();
+        let mining = game.character(BRYN).unwrap().skill(SkillKind::Mining).level();
+        let next_life = |loot: bool| {
+            let mut game = game.clone();
+            let (_, now) = fight_to_the_end(&mut game, now);
+            let mut events = Vec::new();
+            if loot {
+                game.apply(&Command::take(ASH), Tick::new(now), &mut events);
+                assert!(matches!(outcome(&events), Some(Outcome::Took { .. })));
+            }
+            // Severed, Bryn is at camp. The beach is one step east.
+            game.apply(&Command::go(BRYN, "east"), Tick::new(now), &mut events);
+            through_the_afterlife(&mut game, BRYN, now + TRAVEL_TIME.as_ticks());
+            let mining = *game.character(BRYN).unwrap().skill(SkillKind::Mining);
+            (mining.level(), mining.peak())
+        };
+        assert_eq!(next_life(false), (0, mining), "nobody touched it: the old life can be won back fast");
+        assert_eq!(next_life(true), (0, 0), "Ash took what lay beside it: the old life is gone");
     }
 
     /// Walks a spirit through the afterlife, memory by memory, until it
@@ -2528,9 +2586,10 @@ mod tests {
         // The body rises, and the long way round is all that is left.
         through_the_afterlife(&mut game, BRYN, now + CORPSE_TIME.as_ticks());
         let bryn = game.character(BRYN).unwrap();
-        // 45 ectoplasm buys two percent on top of the fifteen; five are left over.
-        assert_eq!((bryn.kept(), bryn.ectoplasm()), (17, 5));
-        assert_eq!(bryn.skill(SkillKind::Mining).level(), mining * 17 / 100);
+        // It takes 115 draws to practise a skill to level 10. A hundred of
+        // that ectoplasm buys five percent of the old life; the rest is kept.
+        assert_eq!((bryn.kept(), bryn.ectoplasm()), (5, 15));
+        assert_eq!(bryn.skill(SkillKind::Mining).level(), AFTERLIFE_LEVEL.max(mining * 5 / 100));
     }
 
     #[test]
@@ -2967,6 +3026,8 @@ mod tests {
             let born = game.character(who).unwrap();
             assert!(!born.is_spirit());
             assert_eq!((born.place(), born.life(), born.attribute(Attribute::Lineage).level()), (born.home(), 1, 0));
+            assert_eq!(born.best_practised(), 0, "what was practised is theirs now, as a skill");
+            assert!(SkillKind::ALL.iter().any(|&skill| born.skill(skill).level() == AFTERLIFE_LEVEL));
             homes.push(born.home());
             now = then;
         }
