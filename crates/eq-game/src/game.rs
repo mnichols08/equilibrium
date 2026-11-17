@@ -532,14 +532,15 @@ mod tests {
     }
 
     #[test]
-    fn the_tide_turning_is_reported_once_per_side() {
+    fn the_tide_turning_is_reported_once_per_side_of_each_tidal_way() {
         let mut game = Game::new(1, &["Ash"]);
         let mut events = Vec::new();
         for tick in 1..=600 {
             game.tick(Tick::new(tick), &mut events);
         }
         let closings = events.iter().filter(|event| matches!(event, Event::PassageChanged { open: false, .. })).count();
-        assert_eq!(closings, 2);
+        // The cave mouth and the reef crossing, each seen from both ends.
+        assert_eq!(closings, 4);
     }
 
     #[test]

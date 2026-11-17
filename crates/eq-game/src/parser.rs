@@ -60,7 +60,8 @@ pub fn parse(line: &str) -> Input {
             Some(label) => go(label),
             None => Input::Unknown("Go where? Try \"go north\".".into()),
         },
-        "north" | "south" | "east" | "west" | "n" | "s" | "e" | "w" | "cave" | "out" => go(verb),
+        "north" | "south" | "east" | "west" | "up" | "down" | "cave" | "out" => go(verb),
+        "n" | "s" | "e" | "w" | "u" | "d" => go(verb),
         _ => Input::Unknown(alloc::format!("I don't know how to \"{verb}\". Type \"help\" for commands.")),
     }
 }
@@ -71,6 +72,8 @@ fn go(label: &str) -> Input {
         "s" => "south",
         "e" => "east",
         "w" => "west",
+        "u" => "up",
+        "d" => "down",
         other => other,
     };
     Input::Do(Action::Go(label.into()))
@@ -109,6 +112,8 @@ mod tests {
         assert_eq!(parse("west"), go_to("west"));
         assert_eq!(parse("enter cave"), go_to("cave"));
         assert_eq!(parse("out"), go_to("out"));
+        assert_eq!(parse("d"), go_to("down"));
+        assert_eq!(parse("go up"), go_to("up"));
         assert_eq!(parse("go rope-bridge"), go_to("rope-bridge"));
         assert!(matches!(parse("go"), Input::Unknown(_)));
     }

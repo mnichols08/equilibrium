@@ -10,7 +10,7 @@ the browser.
 cargo run -p eq-cli
 ```
 
-One character on the Rocky Shoreline (the rules support many; the terminal plays one). Walk, gather, wait and watch what your choices do to the place. Type `help` in the game for commands.
+One character on the Rocky Shoreline: a camp and nine places to gather, two of them cut off at high tide. The rules support many characters; the terminal plays one. Walk, gather, wait and watch what your choices do to the place. Type `help` in the game for commands.
 
 - `--seed N` picks the world's random seed (default 1).
 - `--verify` replays your command log when you quit and checks it rebuilds the same world.

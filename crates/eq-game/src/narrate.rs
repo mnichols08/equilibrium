@@ -19,7 +19,7 @@ use crate::types::{Attribute, Health, Resource, SkillKind};
 pub const HELP: &str = "\
 Commands:
   look (l)             describe where you are
-  go <exit>            walk somewhere; north/south/east/west also work alone
+  go <exit>            walk somewhere; compass points, up and down work alone
   gather (g)           take from the deposit here
   inspect (x)          study the deposit and the health of the shoreline
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
@@ -264,7 +264,7 @@ mod tests {
     fn the_starting_place_reads_well() {
         let text = place(&Game::new(1, &["Ash"]), ASH, Tick::ZERO);
         assert!(text.starts_with("Tidewatch Camp [haven]"));
-        assert!(text.ends_with("Exits: north, east."));
+        assert!(text.ends_with("Exits: north, east, south."));
         assert!(!text.contains("Also here"));
     }
 
