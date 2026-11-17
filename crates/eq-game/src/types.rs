@@ -4,6 +4,7 @@ use eq_nodes::Node;
 
 /// Something that can be gathered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Resource {
     /// Heavy ore from the cliff foot.
     Ore,

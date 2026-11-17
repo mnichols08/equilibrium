@@ -94,6 +94,9 @@ pub struct Character {
     drawn: u64,
     /// The share of the last life this one began with, as a percentage.
     kept: u32,
+    /// Extra sleep this sleeper has in hand from being tended. It is
+    /// gone when they wake.
+    vigil: Duration,
 }
 
 /// How a new life begins.
@@ -131,7 +134,29 @@ impl Character {
             ectoplasm: 0,
             drawn: 0,
             kept: 0,
+            vigil: Duration::ZERO,
         }
+    }
+
+    /// Extra sleep in hand from being tended.
+    pub const fn vigil(&self) -> Duration {
+        self.vigil
+    }
+
+    /// Adds `more` to the sleep in hand, up to `most`. Returns the new total.
+    pub(crate) fn tend(&mut self, more: Duration, most: Duration) -> Duration {
+        self.vigil = (self.vigil + more).min(most);
+        self.vigil
+    }
+
+    /// Takes `amount` of `resource` out of the pack, if it is all there.
+    pub(crate) fn spend(&mut self, resource: Resource, amount: u64) -> bool {
+        let held = &mut self.pack[resource.index()];
+        let enough = *held >= amount;
+        if enough {
+            *held -= amount;
+        }
+        enough
     }
 
     /// Ectoplasm held.
@@ -203,6 +228,7 @@ impl Character {
     /// what the sleep did, as a [`Outcome::Woke`].
     pub(crate) fn wake(&mut self, now: Tick) -> Option<Outcome> {
         let from = self.asleep_from.take()?;
+        self.vigil = Duration::ZERO;
         let slept = now.since(from);
         self.rested.adjust(i64::from(rest_gained(slept)));
         Some(Outcome::Woke { slept, rested: self.rested(), wasted: self.waste(slept) })
@@ -296,6 +322,7 @@ impl Character {
         self.death = Some(death);
         self.degradation.adjust(1);
         self.asleep_from = None;
+        self.vigil = Duration::ZERO;
         let cleansed = self.shift_taint(-i64::from(self.taint()));
         (core::mem::take(&mut self.pack), cleansed)
     }
@@ -307,6 +334,7 @@ impl Character {
         if let Some(from) = self.asleep_from.take() {
             self.waste(now.since(from));
         }
+        self.vigil = Duration::ZERO;
         self.forgotten = Some(Forgotten { played: Duration::ZERO, dormant: true, found_in: Vec::new() });
         self.degradation.adjust(1);
         let cleansed = self.shift_taint(-i64::from(self.taint()));

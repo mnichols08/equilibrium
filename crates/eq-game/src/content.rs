@@ -93,6 +93,22 @@ pub const ATROPHY_FLOOR_PERCENT: u32 = 50;
 /// out of a fight.
 pub const DISCONNECT_GRACE: Duration = Duration::seconds(120);
 
+/// How many contracts one person may have on the board at once.
+pub const MOST_CONTRACTS_EACH: usize = 3;
+
+/// How long it takes to pin up, take down, accept or collect at the board.
+pub const BOARD_TIME: Duration = Duration::seconds(10);
+
+/// How long it takes to tend a sleeper.
+pub const TEND_TIME: Duration = Duration::minutes(1);
+
+/// How much longer a sleeper lasts for each tending.
+pub const VIGIL_PER_TENDING: Duration = Duration::days(1);
+
+/// The most that tending can add to one sleep. With it, a sleeper who
+/// is looked after lasts four weeks, not two.
+pub const MOST_VIGIL: Duration = Duration::days(14);
+
 /// How long anyone can sleep before the body dies where it lies.
 pub const LONG_SLEEP: Duration = Duration::days(14);
 

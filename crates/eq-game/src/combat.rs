@@ -41,6 +41,19 @@ pub enum ReturnRefusal {
     Risen,
 }
 
+/// Why a sleeper could not be tended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TendRefusal {
+    /// The target is the one tending.
+    Yourself,
+    /// The target is somewhere else, or a spirit.
+    NotHere,
+    /// The target is awake.
+    Awake,
+    /// The sleeper has been tended as much as tending can help.
+    Enough,
+}
+
 /// Why a name could not be spoken at the shrine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NameRefusal {

@@ -9,12 +9,13 @@ use eq_world_graph::{Graph, PlaceId};
 
 use alloc::string::String;
 
+use crate::board::{Board, ContractId, Lot, TradeRefusal};
 use crate::character::{Character, CharacterId, Death, Rebirth};
-use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RobRefusal};
+use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RobRefusal, TendRefusal};
 use crate::command::{Action, Command};
 use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 use crate::content::{
-    self, ATTACK_TIME, BASE_EFFORT, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
+    self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, MOST_VIGIL, TEND_TIME, VIGIL_PER_TENDING, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
     CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, EFFORT_SPREAD,
     FADED_CARRYOVER_PERCENT, GATHER_TIME,
     HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
@@ -68,6 +69,8 @@ pub struct Game {
     empty_lairs: Vec<(Tick, PlaceId)>,
     /// What the dead dropped, oldest first.
     relics: Vec<Relic>,
+    /// The Contract Board, which stands at the anchor.
+    board: Board,
     /// Where severed spirits are pulled to and new lives begin.
     anchor: PlaceId,
 }
@@ -95,6 +98,7 @@ impl Game {
             next_creature: 0,
             empty_lairs: Vec::new(),
             relics: Vec::new(),
+            board: Board::new(),
             anchor: start,
         };
         for lair in lairs {
@@ -155,6 +159,31 @@ impl Game {
     /// stones at the anchor.
     pub fn shrine(&self) -> &[Epitaph] {
         &self.shrine
+    }
+
+    /// The Contract Board. It stands at the anchor.
+    pub const fn board(&self) -> &Board {
+        &self.board
+    }
+
+    /// Whether `who` may tend `target` at `now`.
+    pub fn can_tend(&self, who: CharacterId, target: CharacterId, now: Tick) -> Result<(), TendRefusal> {
+        if who == target {
+            return Err(TendRefusal::Yourself);
+        }
+        let (Some(tender), Some(sleeper)) = (self.character(who), self.character(target)) else {
+            return Err(TendRefusal::NotHere);
+        };
+        if tender.place() != sleeper.place() || sleeper.is_spirit() {
+            return Err(TendRefusal::NotHere);
+        }
+        if !sleeper.is_asleep(now) {
+            return Err(TendRefusal::Awake);
+        }
+        if sleeper.vigil() >= MOST_VIGIL {
+            return Err(TendRefusal::Enough);
+        }
+        Ok(())
     }
 
     /// The creatures in `place`, oldest first.
@@ -303,6 +332,9 @@ impl Game {
             | Outcome::LayDown { .. }
             | Outcome::Stole { .. }
             | Outcome::Returned
+            | Outcome::Tended { .. }
+            | Outcome::Posted { .. }
+            | Outcome::Accepted { .. }
             | Outcome::HitCreature { .. }
             | Outcome::Slew { .. }
             | Outcome::Mauled { .. }
@@ -365,6 +397,11 @@ impl Game {
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
             Action::Name(target) => self.name(index, *target, now, outcomes, events),
+            Action::Tend(target) => self.tend(index, *target, now, outcomes),
+            Action::Post { give, want } => self.post(index, *give, *want, now, outcomes),
+            Action::Accept(id) => self.accept(index, *id, now, outcomes, events),
+            Action::Withdraw(id) => self.withdraw(index, *id, now, outcomes),
+            Action::Collect => self.collect(index, now, outcomes),
             Action::Wake | Action::Return | Action::Relinquish | Action::Seek | Action::Join(_) => {}
         }
     }
@@ -453,6 +490,102 @@ impl Game {
             let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true);
             outcomes.push(Outcome::Redeemed { by: None, life });
         }
+    }
+
+    /// Tends a sleeper, which pushes back the long sleep for them.
+    fn tend(&mut self, index: usize, target: CharacterId, now: Tick, outcomes: &mut Vec<Outcome>) {
+        if let Err(why) = self.can_tend(id_at(index), target, now) {
+            return outcomes.push(Outcome::CannotTend { target, why });
+        }
+        let Some(sleeper) = self.index_of(target) else { return };
+        let vigil = self.characters[sleeper].tend(VIGIL_PER_TENDING, MOST_VIGIL);
+        self.characters[index].busy_until = now + TEND_TIME;
+        outcomes.push(Outcome::Tended { target, vigil });
+    }
+
+    /// Whether the character at `index` is standing at the board.
+    fn at_the_board(&self, index: usize) -> Result<(), TradeRefusal> {
+        if self.characters[index].place() == self.anchor {
+            Ok(())
+        } else {
+            Err(TradeRefusal::NotAtBoard)
+        }
+    }
+
+    /// Pins up an offer. What is offered leaves the pack at once.
+    fn post(&mut self, index: usize, give: Lot, want: Lot, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let who = id_at(index);
+        let allowed = self.at_the_board(index).and_then(|()| self.board.may_post(who, give, want));
+        if let Err(why) = allowed {
+            return outcomes.push(Outcome::CannotTrade { why });
+        }
+        let poster = &mut self.characters[index];
+        if !poster.spend(give.resource, give.amount) {
+            return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::CannotPay });
+        }
+        poster.busy_until = now + BOARD_TIME;
+        let id = self.board.post(who, give, want);
+        outcomes.push(Outcome::Posted { id, give, want });
+    }
+
+    /// Pays a contract's price and takes what it held. The price waits
+    /// at the board for whoever posted it.
+    fn accept(&mut self, index: usize, id: ContractId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let found = self.at_the_board(index).and_then(|()| match self.board.contract(id) {
+            None => Err(TradeRefusal::NoSuchContract),
+            Some(contract) if contract.by == who => Err(TradeRefusal::YourOwn),
+            Some(contract) => Ok(*contract),
+        });
+        let contract = match found {
+            Ok(contract) => contract,
+            Err(why) => return outcomes.push(Outcome::CannotTrade { why }),
+        };
+        let buyer = &mut self.characters[index];
+        if !buyer.spend(contract.want.resource, contract.want.amount) {
+            return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::CannotPay });
+        }
+        buyer.stow(contract.give.resource, contract.give.amount);
+        buyer.busy_until = now + BOARD_TIME;
+        self.board.take_down(id);
+        self.board.hold_for(contract.by, contract.want);
+        outcomes.push(Outcome::Accepted { id, paid: contract.want, got: contract.give });
+        events.push(Event::Character { who: contract.by, outcome: Outcome::Filled { id, by: who, earned: contract.want } });
+    }
+
+    /// Takes down a contract of one's own and has back what it held.
+    fn withdraw(&mut self, index: usize, id: ContractId, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let who = id_at(index);
+        let found = self.at_the_board(index).and_then(|()| match self.board.contract(id) {
+            None => Err(TradeRefusal::NoSuchContract),
+            Some(contract) if contract.by != who => Err(TradeRefusal::NotYours),
+            Some(contract) => Ok(*contract),
+        });
+        match found {
+            Ok(contract) => {
+                self.board.take_down(id);
+                let owner = &mut self.characters[index];
+                owner.stow(contract.give.resource, contract.give.amount);
+                owner.busy_until = now + BOARD_TIME;
+                outcomes.push(Outcome::Withdrew { id, back: contract.give });
+            }
+            Err(why) => outcomes.push(Outcome::CannotTrade { why }),
+        }
+    }
+
+    /// Takes everything the board holds for this character.
+    fn collect(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        if let Err(why) = self.at_the_board(index) {
+            return outcomes.push(Outcome::CannotTrade { why });
+        }
+        let spoils = self.board.collect(id_at(index));
+        if spoils.iter().all(|&amount| amount == 0) {
+            return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::NothingOwed });
+        }
+        let owner = &mut self.characters[index];
+        owner.stow_all(spoils);
+        owner.busy_until = now + BOARD_TIME;
+        outcomes.push(Outcome::Collected { spoils });
     }
 
     /// Speaks a forgotten spirit's name at the shrine, which redeems it
@@ -843,7 +976,9 @@ impl Game {
         }
         for index in 0..self.characters.len() {
             let character = &mut self.characters[index];
-            let overslept = character.asleep_from().is_some_and(|from| from <= now && now.since(from) >= LONG_SLEEP);
+            // A sleeper someone has tended lasts that much longer.
+            let allowed = LONG_SLEEP + character.vigil();
+            let overslept = character.asleep_from().is_some_and(|from| from <= now && now.since(from) >= allowed);
             if !overslept {
                 continue;
             }
@@ -2094,5 +2229,137 @@ mod tests {
             Some(Event::UnknownCharacter { who }) => Some(*who),
             _ => None,
         }
+    }
+
+    const fn lot(resource: Resource, amount: u64) -> Lot {
+        Lot { resource, amount }
+    }
+
+    /// Ash back at camp with some ore, and Bryn there with some driftwood.
+    fn two_with_goods_at_camp() -> (Game, u64) {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        game.apply(&Command::go(BRYN, "east"), Tick::new(0), &mut events);
+        for haul in 0..3 {
+            let at = Tick::new(30 + haul * GATHER_TIME.as_ticks());
+            game.apply(&Command::gather(ASH), at, &mut events);
+            game.apply(&Command::gather(BRYN), at, &mut events);
+        }
+        game.apply(&Command::go(ASH, "south"), Tick::new(60), &mut events);
+        game.apply(&Command::go(BRYN, "west"), Tick::new(60), &mut events);
+        (game, 90)
+    }
+
+    #[test]
+    fn a_contract_holds_what_is_offered_and_pays_the_poster_when_accepted() {
+        let (mut game, now) = two_with_goods_at_camp();
+        let ore = game.character(ASH).unwrap().carried(Resource::Ore);
+        let wood = game.character(BRYN).unwrap().carried(Resource::Driftwood);
+        assert!(ore >= 20 && wood >= 20, "not enough to trade with: {ore} ore, {wood} driftwood");
+        let (give, want) = (lot(Resource::Ore, 20), lot(Resource::Driftwood, 15));
+
+        let mut events = Vec::new();
+        game.apply(&Command::post(ASH, give, want), Tick::new(now), &mut events);
+        let id = ContractId::new(0);
+        assert_eq!(outcome(&events), Some(&Outcome::Posted { id, give, want }));
+        assert_eq!(game.character(ASH).unwrap().carried(Resource::Ore), ore - 20, "the offer is held by the board");
+
+        // Ash can go: the trade does not need them there.
+        game.apply(&Command::go(ASH, "north"), Tick::new(now + BOARD_TIME.as_ticks()), &mut events);
+        events.clear();
+        game.apply(&Command::accept(BRYN, id), Tick::new(now + 60), &mut events);
+        assert_eq!(events[0], Event::Character { who: BRYN, outcome: Outcome::Accepted { id, paid: want, got: give } });
+        assert_eq!(events[1], Event::Character { who: ASH, outcome: Outcome::Filled { id, by: BRYN, earned: want } });
+        let bryn = game.character(BRYN).unwrap();
+        assert_eq!((bryn.carried(Resource::Ore), bryn.carried(Resource::Driftwood)), (20, wood - 15));
+        assert!(game.board().contracts().is_empty());
+        assert_eq!(game.board().owed_to(ASH)[Resource::Driftwood.index()], 15);
+
+        // The price waits at the board until Ash comes for it.
+        game.apply(&Command::collect(ASH), Tick::new(now + 90), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::NotAtBoard }));
+        game.apply(&Command::go(ASH, "south"), Tick::new(now + 90), &mut events);
+        game.apply(&Command::collect(ASH), Tick::new(now + 120), &mut events);
+        assert_eq!(game.character(ASH).unwrap().carried(Resource::Driftwood), 15);
+        game.apply(&Command::collect(ASH), Tick::new(now + 140), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::NothingOwed }));
+    }
+
+    #[test]
+    fn the_board_refuses_what_cannot_be_paid_for_and_gives_back_what_is_withdrawn() {
+        let (mut game, now) = two_with_goods_at_camp();
+        let ore = game.character(ASH).unwrap().carried(Resource::Ore);
+        let refused = |events: &[Event]| match outcome(events) {
+            Some(Outcome::CannotTrade { why }) => Some(*why),
+            _ => None,
+        };
+        let mut events = Vec::new();
+        let mut at = now;
+        let mut step = |game: &mut Game, command: Command, events: &mut Vec<Event>| {
+            game.apply(&command, Tick::new(at), events);
+            at += BOARD_TIME.as_ticks();
+        };
+
+        step(&mut game, Command::post(ASH, lot(Resource::Ore, ore + 1), lot(Resource::Kelp, 1)), &mut events);
+        assert_eq!(refused(&events), Some(TradeRefusal::CannotPay));
+        step(&mut game, Command::post(ASH, lot(Resource::Ore, 0), lot(Resource::Kelp, 1)), &mut events);
+        assert_eq!(refused(&events), Some(TradeRefusal::Empty));
+
+        step(&mut game, Command::post(ASH, lot(Resource::Ore, 5), lot(Resource::Tideglass, 99)), &mut events);
+        let id = ContractId::new(0);
+        step(&mut game, Command::accept(ASH, id), &mut events);
+        assert_eq!(refused(&events), Some(TradeRefusal::YourOwn));
+        step(&mut game, Command::accept(BRYN, id), &mut events);
+        assert_eq!(refused(&events), Some(TradeRefusal::CannotPay));
+        step(&mut game, Command::withdraw(BRYN, id), &mut events);
+        assert_eq!(refused(&events), Some(TradeRefusal::NotYours));
+        step(&mut game, Command::accept(BRYN, ContractId::new(9)), &mut events);
+        assert_eq!(refused(&events), Some(TradeRefusal::NoSuchContract));
+
+        step(&mut game, Command::withdraw(ASH, id), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Withdrew { id, back: lot(Resource::Ore, 5) }));
+        assert_eq!(game.character(ASH).unwrap().carried(Resource::Ore), ore);
+    }
+
+    #[test]
+    fn a_tended_sleeper_outlasts_the_long_sleep_by_a_day_for_each_tending() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::tend(BRYN, ASH), Tick::new(0), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTend { target: ASH, why: TendRefusal::Awake }));
+        game.apply(&Command::tend(ASH, ASH), Tick::new(0), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTend { target: ASH, why: TendRefusal::Yourself }));
+
+        game.apply(&Command::rest(ASH), Tick::new(0), &mut events);
+        let asleep = SETTLE_TIME.as_ticks();
+        game.apply(&Command::tend(BRYN, ASH), Tick::new(asleep), &mut events);
+        game.apply(&Command::tend(BRYN, ASH), Tick::new(asleep + TEND_TIME.as_ticks()), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Tended { target: ASH, vigil: Duration::days(2) }));
+
+        // Fourteen days would have killed Ash. Sixteen do.
+        let untended = asleep + LONG_SLEEP.as_ticks() + 120;
+        ticks(&mut game, 1, untended);
+        assert!(game.character(ASH).unwrap().is_asleep(Tick::new(untended)));
+        ticks(&mut game, untended + 1, untended + Duration::days(2).as_ticks());
+        assert!(game.character(ASH).unwrap().forgotten().is_some());
+    }
+
+    #[test]
+    fn tending_only_helps_so_far_and_is_gone_on_waking() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::rest(ASH), Tick::new(0), &mut events);
+        let mut now = SETTLE_TIME.as_ticks();
+        for _ in 0..14 {
+            game.apply(&Command::tend(BRYN, ASH), Tick::new(now), &mut events);
+            now += TEND_TIME.as_ticks();
+        }
+        assert_eq!(game.character(ASH).unwrap().vigil(), MOST_VIGIL);
+        game.apply(&Command::tend(BRYN, ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTend { target: ASH, why: TendRefusal::Enough }));
+
+        game.apply(&Command::wake(ASH), Tick::new(now), &mut events);
+        assert_eq!(game.character(ASH).unwrap().vigil(), Duration::ZERO);
     }
 }

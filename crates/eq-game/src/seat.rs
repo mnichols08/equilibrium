@@ -45,6 +45,11 @@ pub fn interpret(game: &Game, who: CharacterId, now: Tick, line: &str) -> Reques
             Some(target) => Request::Act(Action::Rob(target)),
             None => nobody_here(&name),
         },
+        Input::Tend(name) => match someone_here_called(game, who, &name) {
+            Some(target) => Request::Act(Action::Tend(target)),
+            None => nobody_here(&name),
+        },
+        Input::Board => say(narrate::board(game, who)),
         Input::Name(name) => match anyone_called(game, who, &name) {
             Some(target) => Request::Act(Action::Name(target)),
             None => say(format!("You know of nobody called \"{name}\".")),
