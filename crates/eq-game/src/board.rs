@@ -65,6 +65,20 @@ pub enum TradeRefusal {
     Empty,
     /// The board holds nothing for them.
     NothingOwed,
+    /// Nobody puts a price on their own head.
+    OnYourself,
+}
+
+/// A price on someone's head. The board holds the reward for whoever
+/// kills them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bounty {
+    /// Whose death it pays for.
+    pub on: CharacterId,
+    /// Who put it up.
+    pub by: CharacterId,
+    /// What it pays.
+    pub reward: Lot,
 }
 
 /// Every open contract, and what the board holds for those whose
@@ -72,6 +86,7 @@ pub enum TradeRefusal {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Board {
     contracts: Vec<Contract>,
+    bounties: Vec<Bounty>,
     next: u64,
     /// What is waiting to be collected, by who it is for.
     owed: Vec<(CharacterId, [u64; Resource::ALL.len()])>,
@@ -80,12 +95,35 @@ pub struct Board {
 impl Board {
     /// An empty board.
     pub const fn new() -> Self {
-        Self { contracts: Vec::new(), next: 0, owed: Vec::new() }
+        Self { contracts: Vec::new(), bounties: Vec::new(), next: 0, owed: Vec::new() }
     }
 
     /// The open contracts, oldest first.
     pub fn contracts(&self) -> &[Contract] {
         &self.contracts
+    }
+
+    /// The prices on people's heads, oldest first.
+    pub fn bounties(&self) -> &[Bounty] {
+        &self.bounties
+    }
+
+    /// Puts a price on someone's head. The caller has already taken the
+    /// reward from the poster's pack.
+    pub(crate) fn post_bounty(&mut self, bounty: Bounty) {
+        self.bounties.push(bounty);
+    }
+
+    /// Pays every bounty on `on` to `killer`: the rewards wait here for
+    /// them to collect. Returns what was paid.
+    pub(crate) fn pay_bounties(&mut self, on: CharacterId, killer: CharacterId) -> Vec<Lot> {
+        let (paid, kept): (Vec<Bounty>, Vec<Bounty>) = self.bounties.iter().partition(|bounty| bounty.on == on);
+        self.bounties = kept;
+        let rewards: Vec<Lot> = paid.iter().map(|bounty| bounty.reward).collect();
+        for &reward in &rewards {
+            self.hold_for(killer, reward);
+        }
+        rewards
     }
 
     /// One open contract.

@@ -44,6 +44,8 @@ pub enum Input {
     Name(String),
     /// Tend a sleeper, by name.
     Tend(String),
+    /// Put a price on someone's head, by name.
+    Bounty(String, Lot),
     /// Read the Contract Board.
     Board,
     /// Describe the current place.
@@ -127,6 +129,12 @@ pub fn parse(line: &str) -> Input {
             Some(id) if verb == "accept" => Input::Do(Action::Accept(id)),
             Some(id) => Input::Do(Action::Withdraw(id)),
             None => Input::Unknown(alloc::format!("Which contract? Try \"{verb} 3\". \"board\" lists them.")),
+        },
+        "bounty" => match (rest, words.next(), words.next()) {
+            (Some(name), Some(amount), Some(resource)) if lot(amount, resource).is_some_and(|reward| reward.amount > 0) => {
+                Input::Bounty(name.into(), lot(amount, resource).expect("checked above"))
+            }
+            _ => Input::Unknown("A bounty on whom, of what? Try \"bounty bryn 30 ore\".".into()),
         },
         "collect" => Input::Do(Action::Collect),
         "bury" => match rest {
@@ -309,6 +317,9 @@ mod tests {
             assert!(matches!(parse(nonsense), Input::Unknown(_)), "{nonsense}");
         }
         assert_eq!(parse("board"), Input::Board);
+        assert_eq!(parse("bounty Bryn 30 ore"), Input::Bounty("bryn".into(), Lot { resource: Resource::Ore, amount: 30 }));
+        assert!(matches!(parse("bounty bryn"), Input::Unknown(_)));
+        assert!(matches!(parse("bounty bryn 0 ore"), Input::Unknown(_)));
         assert_eq!(parse("accept 3"), Input::Do(Action::Accept(ContractId::new(3))));
         assert_eq!(parse("withdraw 0"), Input::Do(Action::Withdraw(ContractId::new(0))));
         assert!(matches!(parse("accept three"), Input::Unknown(_)));

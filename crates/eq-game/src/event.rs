@@ -329,6 +329,28 @@ pub enum Outcome {
         /// Why not.
         why: TradeRefusal,
     },
+    /// They put a price on someone's head.
+    BountyPosted {
+        /// Whose head.
+        on: CharacterId,
+        /// What it pays.
+        reward: Lot,
+    },
+    /// Someone has put a price on their head.
+    Hunted {
+        /// What their death now pays.
+        reward: Lot,
+    },
+    /// They killed someone with a price on their head. The reward waits
+    /// for them at the board where it was posted.
+    BountyEarned {
+        /// Whose head it was.
+        on: CharacterId,
+        /// What it paid.
+        reward: Lot,
+        /// The haven whose board holds it.
+        at: PlaceId,
+    },
     /// They pinned a contract to the board.
     Posted {
         /// Its number.

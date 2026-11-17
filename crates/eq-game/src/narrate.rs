@@ -54,7 +54,9 @@ Commands:
   rite                 begin a Restoration Rite over the deposit here, or
                        answer one someone else has begun
   tend <name>          look after someone asleep here, so they last longer
-  board                at camp, read the Contract Board
+  board                at camp, read the Contract Board and its bounties
+  bounty bryn 30 ore   at camp, put a price on someone's head: it pays
+                       whoever kills them, wherever they are
   post 10 ore for 30 kelp   at camp, pin up an offer (what you offer is held)
   accept <number>      at camp, pay a contract's price and take what it holds
   withdraw <number>    at camp, take your own contract down
@@ -328,6 +330,18 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             span(*vigil),
         ),
         Outcome::CannotTrade { why } => cannot_trade(game, viewer, *why),
+        Outcome::BountyPosted { on, reward } => format!(
+            "You put {} on {}'s head. The board holds it for whoever kills them.",
+            lot(*reward),
+            name_of(game, *on),
+        ),
+        Outcome::Hunted { reward } => format!("Word reaches you: there is a price on your head. {} to whoever kills you.", lot(*reward)),
+        Outcome::BountyEarned { on, reward, at } => format!(
+            "There was a price on {}'s head, and it is yours: {} waits for you at the board at {}.",
+            name_of(game, *on),
+            lot(*reward),
+            place_name(game, *at),
+        ),
         Outcome::Posted { id, give, want } => {
             format!("You pin contract {} to the board: {} for {}. The board holds what you offered.", id.get(), lot(*give), lot(*want))
         }
@@ -831,6 +845,20 @@ pub fn board(game: &Game, viewer: CharacterId) -> String {
         })
         .collect();
     lines.insert(0, if lines.is_empty() { "The Contract Board is bare.".into() } else { "The Contract Board:".into() });
+    let hunted: Vec<String> = zone
+        .board()
+        .bounties()
+        .iter()
+        .map(|bounty| {
+            let marked = game.character(bounty.on).is_some_and(|on| on.standing() == Standing::Marked);
+            let note = if marked { ", marked: fair game anywhere but a haven" } else { "" };
+            format!("  {} for the death of {}{note}", lot(bounty.reward), name_of(game, bounty.on))
+        })
+        .collect();
+    if !hunted.is_empty() {
+        lines.push("Bounties:".into());
+        lines.extend(hunted);
+    }
     let owed = zone.board().owed_to(viewer);
     if owed.iter().any(|&amount| amount > 0) {
         lines.push(format!("Waiting for you to collect: {}.", pile(&owed)));
@@ -884,6 +912,7 @@ fn cannot_trade(game: &Game, viewer: CharacterId, why: TradeRefusal) -> String {
         TradeRefusal::TooMany => "You have as many contracts up as one person may.".into(),
         TradeRefusal::Empty => "A contract has to offer something and ask something.".into(),
         TradeRefusal::NothingOwed => "The board holds nothing for you.".into(),
+        TradeRefusal::OnYourself => "Nobody puts a price on their own head.".into(),
     }
 }
 

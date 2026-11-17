@@ -76,6 +76,14 @@ pub enum Action {
         /// What is asked for it.
         want: Lot,
     },
+    /// At the board, put a price on someone's head. The reward leaves
+    /// the pack at once and waits there for whoever kills them.
+    Bounty {
+        /// Whose death it pays for.
+        on: CharacterId,
+        /// What it pays.
+        reward: Lot,
+    },
     /// At the board, pay a contract's price and take what it offers.
     Accept(ContractId),
     /// At the board, take down a contract of your own and have back
@@ -170,6 +178,11 @@ impl Command {
     /// `who`, a founder, names their house.
     pub fn name_house(who: CharacterId, name: &str) -> Self {
         Self { who, action: Action::NameHouse(name.into()) }
+    }
+
+    /// `who` puts `reward` on `on`'s head.
+    pub const fn bounty(who: CharacterId, on: CharacterId, reward: Lot) -> Self {
+        Self { who, action: Action::Bounty { on, reward } }
     }
 
     /// `who`, a founder, raises their land's house where they stand.
