@@ -11,6 +11,8 @@ the browser.
 | `eq-ids` | Typed ids that cannot be mixed up |
 | `eq-rng` | Seeded, splittable, deterministic random source |
 | `eq-clock` | Ticks, durations, cycles and pausable stopwatches |
+| `eq-meter` | A bounded value with named bands |
+| `eq-curve` | Deterministic, integer-only progression maths |
 
 Every crate is `no_std`, has no dependencies and is usable without the game.
 
