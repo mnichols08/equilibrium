@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use eq_clock::Duration;
 use eq_events::{replay, Events, OutOfOrder, Session};
 use eq_game::parser::{parse, Input};
-use eq_game::{narrate, Command, Event, Game};
+use eq_game::{narrate, Action, CharacterId, Command, Event, Game, Outcome};
 
 const USAGE: &str = "usage: equilibrium [--seed N] [--verify]";
 
@@ -21,6 +21,13 @@ const INTRO: &str = "\
 EQUILIBRIUM
 The shoreline gives what you take from it, and remembers how you took it.
 Type \"help\" for commands.";
+
+/// The player's character: the only one in a terminal game, for now.
+const YOU: CharacterId = CharacterId::new(0);
+
+fn new_game(seed: u64) -> Game {
+    Game::new(seed, &["You"])
+}
 
 struct Options {
     seed: u64,
@@ -51,7 +58,7 @@ struct Play<W: Write> {
 
 impl<W: Write> Play<W> {
     fn new(seed: u64, out: W) -> Self {
-        Self { session: Session::new(Game::new(seed)), out }
+        Self { session: Session::new(new_game(seed)), out }
     }
 
     fn game(&self) -> &Game {
@@ -63,25 +70,34 @@ impl<W: Write> Play<W> {
     }
 
     fn look(&mut self) -> io::Result<()> {
-        let text = narrate::place(self.game(), self.session.now());
+        let text = narrate::place(self.game(), YOU, self.session.now());
         self.say(&text)
     }
 
     /// Prints what the player would notice among `events`.
     fn tell(&mut self, events: &Events<Game>) -> io::Result<()> {
         for stamped in events {
-            if let Some(text) = narrate::event(&stamped.value, self.game()) {
+            if let Some(text) = narrate::event(&stamped.value, self.game(), YOU) {
                 self.say(&text)?;
             }
         }
         Ok(())
     }
 
-    /// Applies a command, then lets its time cost pass.
-    fn act(&mut self, command: Command) -> io::Result<()> {
+    /// When the player's character will be free to act again.
+    fn free_at(&self) -> eq_clock::Tick {
+        let busy_until = self.game().character(YOU).map_or(self.session.now(), |you| you.busy_until());
+        busy_until.max(self.session.now())
+    }
+
+    /// Has the player's character act, then lets the action's time pass.
+    fn act(&mut self, action: Action) -> io::Result<()> {
+        let command = Command { who: YOU, action };
         let mut events = unwrap_ordered(self.session.submit(self.session.now(), command));
-        let moved = events.iter().any(|stamped| matches!(stamped.value, Event::Moved { .. }));
-        let free_at = self.game().hero().busy_until().max(self.session.now());
+        let moved = events.iter().any(|stamped| {
+            matches!(stamped.value, Event::Character { who: YOU, outcome: Outcome::Moved { .. } })
+        });
+        let free_at = self.free_at();
         events.extend(unwrap_ordered(self.session.advance_to(free_at)));
         self.tell(&events)?;
         if moved {
@@ -99,19 +115,19 @@ impl<W: Write> Play<W> {
     /// Handles one line. Returns `false` when the player wants to stop.
     fn handle(&mut self, line: &str) -> io::Result<bool> {
         match parse(line) {
-            Input::Do(command) => self.act(command)?,
+            Input::Do(action) => self.act(action)?,
             Input::Wait(time) => self.wait(time)?,
             Input::Look => self.look()?,
             Input::Inspect => {
-                let text = narrate::inspect(self.game());
+                let text = narrate::inspect(self.game(), YOU);
                 self.say(&text)?;
             }
             Input::Stats => {
-                let text = narrate::stats(self.game());
+                let text = narrate::stats(self.game(), YOU);
                 self.say(&text)?;
             }
             Input::Pack => {
-                let text = narrate::pack(self.game());
+                let text = narrate::pack(self.game(), YOU);
                 self.say(&text)?;
             }
             Input::Help => self.say(narrate::HELP)?,
@@ -130,7 +146,7 @@ impl<W: Write> Play<W> {
     /// Replays the log from scratch and compares the result.
     fn verify(&mut self, seed: u64) -> io::Result<bool> {
         let now = self.session.now();
-        let (rebuilt, _) = replay(Game::new(seed), self.session.log(), now);
+        let (rebuilt, _) = replay(new_game(seed), self.session.log(), now);
         let same = &rebuilt == self.game();
         let commands = self.session.log().len();
         let text = if same {

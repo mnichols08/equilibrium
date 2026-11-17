@@ -157,6 +157,19 @@ impl Node {
         (over * 100 / (MAX_STRAIN - PRISTINE_LIMIT)) as u32
     }
 
+    /// How bare the node is, from 0 to 100.
+    ///
+    /// Zero while the node is at least half full, rising to 100 when it
+    /// is empty. A node kept bare is under pressure even if each visitor
+    /// takes little.
+    pub const fn bareness_percent(&self) -> u32 {
+        let half = self.config.capacity / 2;
+        if half == 0 || self.stock >= half {
+            return 0;
+        }
+        ((half - self.stock) as u64 * 100 / half as u64) as u32
+    }
+
     /// How worn the node is.
     pub fn quality(&self) -> Quality {
         QUALITY.band_of(self.strain.value())
@@ -327,6 +340,20 @@ mod tests {
             run(&mut node, 100, 2);
         }
         assert_eq!(node.quality(), Quality::Pristine);
+    }
+
+    #[test]
+    fn bareness_is_zero_until_half_empty_then_rises_to_full() {
+        let mut node = Node::new(ORE);
+        assert_eq!(node.bareness_percent(), 0);
+        node.harvest(50);
+        assert_eq!(node.bareness_percent(), 0);
+        node.harvest(25);
+        assert_eq!(node.bareness_percent(), 50);
+        node.harvest(25);
+        assert_eq!(node.bareness_percent(), 100);
+        let tiny = Node::new(NodeConfig { capacity: 1, ..ORE });
+        assert_eq!(tiny.bareness_percent(), 0);
     }
 
     #[test]

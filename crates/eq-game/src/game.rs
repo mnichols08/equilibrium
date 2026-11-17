@@ -7,7 +7,7 @@ use eq_clock::Tick;
 use eq_curve::stepped_bonus;
 use eq_events::World;
 use eq_meter::Meter;
-use eq_nodes::Quality;
+use eq_nodes::{Node, Quality};
 use eq_rng::Rng;
 use eq_skills::Proficiency;
 use eq_world_graph::{Graph, Passage, PlaceId};
@@ -18,26 +18,52 @@ use crate::content::{
 };
 use crate::types::{Attribute, Health, Place, Resource, SkillKind};
 
-/// Something the player asks their character to do.
+eq_ids::define_id!(
+    /// Identifies a character within one [`Game`].
+    CharacterId
+);
+
+/// Something a character can do.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Command {
+pub enum Action {
     /// Leave by the exit with this label.
     Go(String),
     /// Gather from the deposit here.
     Gather,
 }
 
-/// Something that happened in the world.
+/// An action and the character asked to take it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Event {
-    /// The character walked from one place to another.
+pub struct Command {
+    /// Who acts.
+    pub who: CharacterId,
+    /// What they do.
+    pub action: Action,
+}
+
+impl Command {
+    /// `who` leaves by the exit labelled `label`.
+    pub fn go(who: CharacterId, label: &str) -> Self {
+        Self { who, action: Action::Go(label.into()) }
+    }
+
+    /// `who` gathers from the deposit where they stand.
+    pub const fn gather(who: CharacterId) -> Self {
+        Self { who, action: Action::Gather }
+    }
+}
+
+/// What came of one character's action.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// They walked from one place to another.
     Moved {
         /// Where they left.
         from: PlaceId,
         /// Where they arrived.
         to: PlaceId,
     },
-    /// There is no exit with that label here.
+    /// There is no exit with that label where they stand.
     NoSuchExit {
         /// What was asked for.
         label: String,
@@ -47,19 +73,19 @@ pub enum Event {
         /// The exit's label.
         label: String,
     },
-    /// The character is still finishing their last action.
+    /// They are still finishing their last action.
     Busy {
         /// When they will be free.
         until: Tick,
     },
-    /// There is no deposit here.
+    /// There is no deposit where they stand.
     NothingToGather,
-    /// The deposit here has too little stock to be worth working.
+    /// The deposit has too little stock to be worth working.
     TooSparse {
         /// What would have been gathered.
         resource: Resource,
     },
-    /// The character gathered something.
+    /// They gathered something.
     Gathered {
         /// What was gathered.
         resource: Resource,
@@ -67,17 +93,6 @@ pub enum Event {
         amount: u64,
         /// The deposit's quality when the work began.
         quality: Quality,
-    },
-    /// A deposit became more or less worn.
-    DepositChanged {
-        /// Where the deposit is.
-        place: PlaceId,
-        /// What it gives.
-        resource: Resource,
-        /// Its quality before.
-        from: Quality,
-        /// Its quality now.
-        to: Quality,
     },
     /// A skill reached a new level.
     SkillRose {
@@ -92,6 +107,34 @@ pub enum Event {
         attribute: Attribute,
         /// The new level.
         level: u32,
+    },
+}
+
+/// Something that happened in the world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// Something one character did or experienced.
+    Character {
+        /// Who it happened to.
+        who: CharacterId,
+        /// What happened.
+        outcome: Outcome,
+    },
+    /// A command named a character who does not exist.
+    UnknownCharacter {
+        /// The id that was asked for.
+        who: CharacterId,
+    },
+    /// A deposit became more or less worn.
+    DepositChanged {
+        /// Where the deposit is.
+        place: PlaceId,
+        /// What it gives.
+        resource: Resource,
+        /// Its quality before.
+        from: Quality,
+        /// Its quality now.
+        to: Quality,
     },
     /// The zone moved from one vitality band to another.
     VitalityChanged {
@@ -111,9 +154,10 @@ pub enum Event {
     },
 }
 
-/// The player's character.
+/// One character in the world.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Character {
+    name: String,
     place: PlaceId,
     busy_until: Tick,
     skills: [Proficiency; SkillKind::ALL.len()],
@@ -122,14 +166,20 @@ pub struct Character {
 }
 
 impl Character {
-    fn new(place: PlaceId) -> Self {
+    fn new(name: &str, place: PlaceId) -> Self {
         Self {
+            name: name.into(),
             place,
             busy_until: Tick::ZERO,
             skills: [Proficiency::new(); SkillKind::ALL.len()],
             attributes: [Proficiency::new(); Attribute::ALL.len()],
             pack: [0; Resource::ALL.len()],
         }
+    }
+
+    /// What the character is called.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Where the character is.
@@ -157,20 +207,25 @@ impl Character {
         self.pack[resource.index()]
     }
 
+    /// Everything the character carries, added together.
+    pub fn carried_total(&self) -> u64 {
+        self.pack.iter().sum()
+    }
+
     /// Trains the skill and attributes that gathering `resource` uses.
-    fn train(&mut self, resource: Resource, units: u32, events: &mut Vec<Event>) {
+    fn train(&mut self, resource: Resource, units: u32, outcomes: &mut Vec<Outcome>) {
         let units = u64::from(units);
         let skill = resource.skill();
         let progress = &mut self.skills[skill.index()];
         if progress.practice(units * SKILL_XP_PER_UNIT, &SKILL_RULES).levels_gained > 0 {
-            events.push(Event::SkillRose { skill, level: progress.level() });
+            outcomes.push(Outcome::SkillRose { skill, level: progress.level() });
         }
 
         let xp = stepped_bonus(units * ATTRIBUTE_XP_PER_UNIT, resource.tier(), TIERS_PER_WHOLE);
         for &attribute in resource.attributes() {
             let progress = &mut self.attributes[attribute.index()];
             if progress.practice(xp, &ATTRIBUTE_RULES).levels_gained > 0 {
-                events.push(Event::AttributeRose { attribute, level: progress.level() });
+                outcomes.push(Outcome::AttributeRose { attribute, level: progress.level() });
             }
         }
     }
@@ -189,35 +244,52 @@ pub fn yield_amount(taken: u32, quality: Quality, health: Health, attribute_leve
     parts / 1_000_000
 }
 
-/// The whole world: one zone, one character.
+/// How hard a deposit is being pushed, from 0 to 100: the greater of its
+/// wear and its bareness.
+///
+/// Wear comes from taking fast. Bareness comes from never letting the
+/// stock recover, however little each visitor takes. Either one means the
+/// deposit is over-harvested.
+pub fn pressure_percent(node: &Node) -> u32 {
+    node.wear_percent().max(node.bareness_percent())
+}
+
+/// The whole world: one zone and the characters in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     rng: Rng,
     map: Graph<Place>,
-    hero: Character,
+    characters: Vec<Character>,
     vitality: Meter,
 }
 
 impl Game {
-    /// A fresh world. The same seed always plays out the same way.
-    pub fn new(seed: u64) -> Self {
+    /// A fresh world with one character per name, all at the starting
+    /// place. The same seed and names always play out the same way.
+    pub fn new(seed: u64, names: &[&str]) -> Self {
         let (map, start) = content::rocky_shoreline();
-        Self { rng: Rng::from_seed(seed), map, hero: Character::new(start), vitality: Meter::full(0, 100) }
+        let characters = names.iter().map(|name| Character::new(name, start)).collect();
+        Self { rng: Rng::from_seed(seed), map, characters, vitality: Meter::full(0, 100) }
     }
 
-    /// The player's character.
-    pub const fn hero(&self) -> &Character {
-        &self.hero
+    /// A character, if the id belongs to this world.
+    pub fn character(&self, who: CharacterId) -> Option<&Character> {
+        self.characters.get(usize::try_from(who.get()).ok()?)
+    }
+
+    /// Every character with its id, in the order they were named.
+    pub fn characters(&self) -> impl Iterator<Item = (CharacterId, &Character)> {
+        self.characters.iter().enumerate().map(|(index, character)| (CharacterId::new(index as u64), character))
+    }
+
+    /// The place a character is in.
+    pub fn place_of(&self, who: CharacterId) -> Option<&Place> {
+        self.map.place(self.character(who)?.place)
     }
 
     /// The map.
     pub const fn map(&self) -> &Graph<Place> {
         &self.map
-    }
-
-    /// The place the character is in.
-    pub fn here(&self) -> &Place {
-        self.map.place(self.hero.place).expect("the character is always somewhere on the map")
     }
 
     /// Zone vitality, from 0 to 100.
@@ -230,31 +302,45 @@ impl Game {
         VITALITY_BANDS.band_of(self.vitality.value())
     }
 
-    fn go(&mut self, label: &str, now: Tick, events: &mut Vec<Event>) {
-        let from = self.hero.place;
+    fn act(&mut self, index: usize, action: &Action, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let busy_until = self.characters[index].busy_until;
+        if now < busy_until {
+            outcomes.push(Outcome::Busy { until: busy_until });
+            return;
+        }
+        match action {
+            Action::Go(label) => self.go(index, label, now, outcomes),
+            Action::Gather => self.gather(index, now, outcomes, events),
+        }
+    }
+
+    fn go(&mut self, index: usize, label: &str, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let character = &mut self.characters[index];
+        let from = character.place;
         let Some(exit) = self.map.exit(from, label) else {
-            events.push(Event::NoSuchExit { label: label.into() });
+            outcomes.push(Outcome::NoSuchExit { label: label.into() });
             return;
         };
         if !exit.passage.is_open(now) {
-            events.push(Event::ExitClosed { label: label.into() });
+            outcomes.push(Outcome::ExitClosed { label: label.into() });
             return;
         }
-        self.hero.place = exit.to;
-        self.hero.busy_until = now + TRAVEL_TIME;
-        events.push(Event::Moved { from, to: exit.to });
+        character.place = exit.to;
+        character.busy_until = now + TRAVEL_TIME;
+        outcomes.push(Outcome::Moved { from, to: exit.to });
     }
 
-    fn gather(&mut self, now: Tick, events: &mut Vec<Event>) {
-        let place = self.hero.place;
+    fn gather(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
         let health = self.health();
+        let character = &mut self.characters[index];
+        let place = character.place;
         let Some(deposit) = self.map.place_mut(place).and_then(|place| place.deposit.as_mut()) else {
-            events.push(Event::NothingToGather);
+            outcomes.push(Outcome::NothingToGather);
             return;
         };
         let resource = deposit.resource;
         if deposit.node.stock() < MIN_WORKABLE_STOCK {
-            events.push(Event::TooSparse { resource });
+            outcomes.push(Outcome::TooSparse { resource });
             return;
         }
 
@@ -264,16 +350,16 @@ impl Game {
         let quality_after = deposit.node.quality();
 
         let governing = resource.attributes()[0];
-        let level = self.hero.attribute(governing).level();
+        let level = character.attribute(governing).level();
         let amount = yield_amount(harvest.taken, harvest.quality, health, level);
-        self.hero.pack[resource.index()] += amount;
-        self.hero.busy_until = now + GATHER_TIME;
+        character.pack[resource.index()] += amount;
+        character.busy_until = now + GATHER_TIME;
 
-        events.push(Event::Gathered { resource, amount, quality: harvest.quality });
+        outcomes.push(Outcome::Gathered { resource, amount, quality: harvest.quality });
         if quality_after != harvest.quality {
             events.push(Event::DepositChanged { place, resource, from: harvest.quality, to: quality_after });
         }
-        self.hero.train(resource, harvest.taken, events);
+        character.train(resource, harvest.taken, outcomes);
     }
 
     fn grow_deposits(&mut self, events: &mut Vec<Event>) {
@@ -289,18 +375,18 @@ impl Game {
         }
     }
 
-    /// Vitality is 100 minus the average wear across the zone's deposits.
-    /// Wear is zero while a deposit is pristine, so careful use costs the
-    /// zone nothing; only over-harvesting does.
+    /// Vitality is 100 minus the average pressure on the zone's deposits.
+    /// A deposit that is pristine and at least half full is under no
+    /// pressure, so careful use costs the zone nothing.
     fn update_vitality(&mut self, events: &mut Vec<Event>) {
-        let (wear, deposits) = self
+        let (pressure, deposits) = self
             .map
             .places()
             .filter_map(|(_, place)| place.deposit.as_ref())
-            .fold((0i64, 0i64), |(wear, count), deposit| {
-                (wear + i64::from(deposit.node.wear_percent()), count + 1)
+            .fold((0i64, 0i64), |(pressure, count), deposit| {
+                (pressure + i64::from(pressure_percent(&deposit.node)), count + 1)
             });
-        let penalty = if deposits == 0 { 0 } else { wear / deposits };
+        let penalty = if deposits == 0 { 0 } else { pressure / deposits };
         let change = self.vitality.set(100 - penalty);
         if let Some((from, to)) = VITALITY_BANDS.crossing(change) {
             events.push(Event::VitalityChanged { from, to });
@@ -332,20 +418,33 @@ impl World for Game {
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
-        if now < self.hero.busy_until {
-            events.push(Event::Busy { until: self.hero.busy_until });
+        let who = command.who;
+        let Some(index) = usize::try_from(who.get()).ok().filter(|&index| index < self.characters.len()) else {
+            events.push(Event::UnknownCharacter { who });
             return;
-        }
-        match command {
-            Command::Go(label) => self.go(label, now, events),
-            Command::Gather => self.gather(now, events),
-        }
+        };
+        // What the character did comes first, then what it did to the world.
+        let mut outcomes = Vec::new();
+        let mut world_events = Vec::new();
+        self.act(index, &command.action, now, &mut outcomes, &mut world_events);
+        events.extend(outcomes.into_iter().map(|outcome| Event::Character { who, outcome }));
+        events.append(&mut world_events);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ASH: CharacterId = CharacterId::new(0);
+    const BRYN: CharacterId = CharacterId::new(1);
+
+    fn outcome(events: &[Event]) -> Option<&Outcome> {
+        events.iter().rev().find_map(|event| match event {
+            Event::Character { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+    }
 
     #[test]
     fn yield_follows_quality_health_and_attribute() {
@@ -367,40 +466,92 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_world_is_at_peak_health_at_camp() {
-        let game = Game::new(1);
+    fn a_fresh_world_is_at_peak_health_with_everyone_at_camp() {
+        let game = Game::new(1, &["Ash", "Bryn"]);
         assert_eq!((game.vitality(), game.health()), (100, Health::Peak));
-        assert_eq!(game.here().name, "Tidewatch Camp");
+        assert_eq!(game.characters().count(), 2);
+        assert_eq!(game.place_of(BRYN).unwrap().name, "Tidewatch Camp");
+        assert_eq!(game.character(BRYN).unwrap().name(), "Bryn");
     }
 
     #[test]
     fn commands_are_refused_while_busy() {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, &["Ash"]);
         let mut events = Vec::new();
-        game.apply(&Command::Go("north".into()), Tick::new(0), &mut events);
-        game.apply(&Command::Gather, Tick::new(1), &mut events);
-        assert_eq!(events.last(), Some(&Event::Busy { until: Tick::ZERO + TRAVEL_TIME }));
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        game.apply(&Command::gather(ASH), Tick::new(1), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Busy { until: Tick::ZERO + TRAVEL_TIME }));
+    }
+
+    #[test]
+    fn one_character_being_busy_does_not_hold_up_another() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        game.apply(&Command::go(BRYN, "east"), Tick::new(1), &mut events);
+        assert_eq!(game.place_of(ASH).unwrap().name, "Ore Ledge");
+        assert_eq!(game.place_of(BRYN).unwrap().name, "Shingle Beach");
+    }
+
+    #[test]
+    fn two_characters_draw_on_the_same_deposit() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        game.apply(&Command::go(BRYN, "north"), Tick::new(0), &mut events);
+        let before = game.place_of(ASH).unwrap().deposit.unwrap().node.stock();
+        game.apply(&Command::gather(ASH), Tick::new(30), &mut events);
+        game.apply(&Command::gather(BRYN), Tick::new(30), &mut events);
+        let after = game.place_of(ASH).unwrap().deposit.unwrap().node.stock();
+
+        assert!(before - after >= 2 * BASE_EFFORT);
+        assert!(game.character(ASH).unwrap().carried(Resource::Ore) > 0);
+        assert!(game.character(BRYN).unwrap().carried(Resource::Ore) > 0);
+    }
+
+    #[test]
+    fn commands_for_unknown_characters_change_nothing() {
+        let mut game = Game::new(1, &["Ash"]);
+        let before = game.clone();
+        let mut events = Vec::new();
+        let ghost = CharacterId::new(9);
+        game.apply(&Command::gather(ghost), Tick::new(0), &mut events);
+        assert_eq!(events, [Event::UnknownCharacter { who: ghost }]);
+        assert_eq!(game, before);
     }
 
     #[test]
     fn the_cave_floods_at_high_tide() {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, &["Ash"]);
         let mut events = Vec::new();
-        game.apply(&Command::Go("east".into()), Tick::new(0), &mut events);
-        game.apply(&Command::Go("cave".into()), Tick::new(700), &mut events);
-        assert_eq!(events.last(), Some(&Event::ExitClosed { label: "cave".into() }));
-        game.apply(&Command::Go("cave".into()), Tick::new(1_200), &mut events);
-        assert_eq!(game.here().name, "Tidal Cave");
+        game.apply(&Command::go(ASH, "east"), Tick::new(0), &mut events);
+        game.apply(&Command::go(ASH, "cave"), Tick::new(700), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::ExitClosed { label: "cave".into() }));
+        game.apply(&Command::go(ASH, "cave"), Tick::new(1_200), &mut events);
+        assert_eq!(game.place_of(ASH).unwrap().name, "Tidal Cave");
     }
 
     #[test]
     fn the_tide_turning_is_reported_once_per_side() {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, &["Ash"]);
         let mut events = Vec::new();
         for tick in 1..=600 {
             game.tick(Tick::new(tick), &mut events);
         }
         let closings = events.iter().filter(|event| matches!(event, Event::PassageChanged { open: false, .. })).count();
         assert_eq!(closings, 2);
+    }
+
+    #[test]
+    fn pressure_is_the_worse_of_wear_and_bareness() {
+        let config = eq_nodes::NodeConfig { capacity: 100, regrow_cost: 20, strain_per_unit: 1, recovery_every: 2 };
+        // Emptied gently: no wear, fully bare.
+        let mut bare = Node::new(config);
+        bare.harvest(100);
+        assert_eq!((bare.wear_percent(), bare.bareness_percent(), pressure_percent(&bare)), (0, 100, 100));
+        // Hit hard but still mostly full: worn, not bare.
+        let mut worn = Node::new(eq_nodes::NodeConfig { strain_per_unit: 20, ..config });
+        worn.harvest(40);
+        assert_eq!((worn.wear_percent(), worn.bareness_percent(), pressure_percent(&worn)), (73, 0, 73));
     }
 }

@@ -7,7 +7,7 @@ use alloc::string::String;
 
 use eq_clock::Duration;
 
-use crate::game::Command;
+use crate::game::Action;
 
 /// How long `wait` lasts when no time is given.
 pub const DEFAULT_WAIT: Duration = Duration::minutes(1);
@@ -18,8 +18,8 @@ pub const MAX_WAIT: Duration = Duration::days(1);
 /// What a line of input asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Input {
-    /// Change the world.
-    Do(Command),
+    /// Have the player's character act.
+    Do(Action),
     /// Let time pass.
     Wait(Duration),
     /// Describe the current place.
@@ -54,7 +54,7 @@ pub fn parse(line: &str) -> Input {
         "pack" | "inventory" | "inv" | "i" => Input::Pack,
         "help" | "?" => Input::Help,
         "quit" | "exit" | "q" => Input::Quit,
-        "gather" | "g" | "mine" | "forage" | "harvest" => Input::Do(Command::Gather),
+        "gather" | "g" | "mine" | "forage" | "harvest" => Input::Do(Action::Gather),
         "wait" | "rest" | "z" => parse_wait(rest),
         "go" | "walk" | "enter" => match rest {
             Some(label) => go(label),
@@ -73,7 +73,7 @@ fn go(label: &str) -> Input {
         "w" => "west",
         other => other,
     };
-    Input::Do(Command::Go(label.into()))
+    Input::Do(Action::Go(label.into()))
 }
 
 /// Accepts a bare number of seconds, or a number ending in `s`, `m` or `h`.
@@ -99,7 +99,7 @@ mod tests {
     use super::*;
 
     fn go_to(label: &str) -> Input {
-        Input::Do(Command::Go(label.into()))
+        Input::Do(Action::Go(label.into()))
     }
 
     #[test]
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn gathering_synonyms() {
         for word in ["gather", "g", "mine", "forage", "harvest", "GATHER"] {
-            assert_eq!(parse(word), Input::Do(Command::Gather), "{word}");
+            assert_eq!(parse(word), Input::Do(Action::Gather), "{word}");
         }
     }
 

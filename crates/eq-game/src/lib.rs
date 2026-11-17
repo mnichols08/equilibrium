@@ -1,4 +1,4 @@
-//! The first playable build of Equilibrium: one character on the Rocky
+//! The first playable build of Equilibrium: characters sharing the Rocky
 //! Shoreline.
 //!
 //! It exists to test one claim from the design: that systems feed each
@@ -22,5 +22,5 @@ pub mod narrate;
 pub mod parser;
 mod types;
 
-pub use game::{yield_amount, Character, Command, Event, Game};
+pub use game::{pressure_percent, yield_amount, Action, Character, CharacterId, Command, Event, Game, Outcome};
 pub use types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind};
