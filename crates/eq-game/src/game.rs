@@ -28,7 +28,8 @@ use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
 use crate::pact::{Dealing, Dealt, Pact, PactRefusal, Pacts};
 use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, SkillKind, Standing};
-use crate::zone::{Epitaph, Zone};
+use crate::balance::Balance;
+use crate::zone::{Epitaph, Weather, Zone};
 
 /// How often the world looks for sleepers whose time has run out.
 const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
@@ -50,6 +51,8 @@ pub struct Game {
     meeting_ground: Option<PlaceId>,
     /// How the lands stand to each other.
     pacts: Pacts,
+    /// How far all that peace and war has tipped the world.
+    balance: Balance,
     /// Every place in the world. Each zone is a run of them.
     map: Graph<Place>,
     /// The world's territories, oldest first. There is always one.
@@ -95,6 +98,7 @@ impl Game {
             founders_left: 0,
             meeting_ground: None,
             pacts: Pacts::new(),
+            balance: Balance::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
             characters,
@@ -349,6 +353,30 @@ impl Game {
         self.zones[self.land_of(character)].hall() == Some(character.place())
     }
 
+    /// How far the world leans, and what that is like to live in.
+    pub const fn balance(&self) -> Balance {
+        self.balance
+    }
+
+    /// Lets the pacts between lands push the world, and works out what
+    /// the world does to every deposit this tick. Wars push it toward
+    /// fury and alliances toward stillness; with as many of one as the
+    /// other, or none at all, it eases back toward balance.
+    fn weather(&mut self, now: Tick, events: &mut Vec<Event>) -> Weather {
+        if now.get().is_multiple_of(content::BALANCE_EVERY.as_ticks()) {
+            // A world has only a handful of lands, so these are small.
+            let pull = self.pacts.count(Pact::War) as i64 - self.pacts.count(Pact::Alliance) as i64;
+            let change = if pull == 0 { self.balance.settle() } else { self.balance.tip(pull * content::LEAN_PER_PACT) };
+            events.extend(change.map(|(from, to)| Event::MoodChanged { from, to }));
+        }
+        let mood = self.balance.mood();
+        let storm = mood.storm_percent() > 0 && now.get().is_multiple_of(content::STORM_EVERY.as_ticks());
+        if storm {
+            events.push(Event::Storm);
+        }
+        Weather { growth_percent: mood.growth_percent(), storm_percent: if storm { mood.storm_percent() } else { 0 } }
+    }
+
     /// The land a character belongs to: the one their lives begin in.
     fn land_of(&self, character: &Character) -> usize {
         self.zone_index(character.home())
@@ -392,6 +420,14 @@ impl Game {
                 events.extend(self.zones[theirs].founder().map(|who| Event::Character { who, outcome: offer }));
             }
             Ok((mine, theirs, dealt)) => {
+                // Every pact made or broken is felt by the world at once.
+                let push = match dealt {
+                    Dealt::AtWar => content::LEAN_PER_DEALING,
+                    Dealt::Allied | Dealt::Peace => -content::LEAN_PER_DEALING,
+                    Dealt::Parted | Dealt::Offered => 0,
+                };
+                let change = self.balance.tip(push);
+                events.extend(change.map(|(from, to)| Event::MoodChanged { from, to }));
                 events.push(Event::Pact { by: self.zones[mine].anchor(), with: self.zones[theirs].anchor(), dealt });
             }
         }
@@ -626,6 +662,8 @@ impl Game {
             | Event::PassageChanged { place, .. }
             | Event::CreatureAppeared { place, .. }
             | Event::CreatureGone { place, .. } => self.occupants(*place).to_vec(),
+            // The whole world feels it.
+            Event::MoodChanged { .. } | Event::Storm => self.characters().map(|(id, _)| id).collect(),
             // Everyone who belongs to either land hears of it.
             Event::Pact { by, with, .. } => {
                 let lands = [self.zone_index(*by), self.zone_index(*with)];
@@ -1622,8 +1660,9 @@ impl World for Game {
     type Event = Event;
 
     fn tick(&mut self, now: Tick, events: &mut Vec<Event>) {
+        let weather = self.weather(now, events);
         for zone in &mut self.zones {
-            zone.tick(&mut self.map, now, events);
+            zone.tick(&mut self.map, now, weather, events);
         }
         self.report_passages(now, events);
         self.fade_taint(now, events);
@@ -1658,7 +1697,8 @@ impl World for Game {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::RITE_WINDOW;
+    use crate::balance::Mood;
+    use crate::content::{BALANCE_EVERY, LEAN_PER_DEALING, RITE_WINDOW, STORM_EVERY};
     use crate::haul::pressure_percent;
     use crate::types::{Deposit, Resource, SkillKind};
     use eq_world_graph::PlaceId;
@@ -3506,6 +3546,83 @@ mod tests {
         // It is no roof of Ash's: she is as open here as anywhere at war.
         assert_eq!(game.can_attack(COLE, ASH), Ok(()));
         assert!(crate::narrate::place(&game, COLE, asleep).contains("nobody can strike or rob you"));
+    }
+
+    /// What the first workable place in `land` holds.
+    fn stock_in(game: &Game, land: PlaceId) -> u32 {
+        let zone = game.zone_at(land);
+        zone.place_ids().find_map(|place| game.map().place(place).and_then(|data| data.deposit)).unwrap().node.stock()
+    }
+
+    /// Empties the first workable place in `land`.
+    fn strip(game: &mut Game, land: PlaceId) {
+        let place = game.zone_at(land).place_ids().find(|&place| game.map().place(place).is_some_and(|data| data.deposit.is_some()));
+        let deposit = game.map.place_mut(place.unwrap()).and_then(|data| data.deposit.as_mut()).unwrap();
+        deposit.node.scour(100);
+    }
+
+    #[test]
+    fn lands_that_never_deal_leave_the_world_as_it_is() {
+        let mut game = founders_met();
+        let events = ticks(&mut game, 1, 7_200);
+        assert_eq!((game.balance().lean(), game.balance().mood()), (0, Mood::Even));
+        assert!(!events.iter().any(|event| matches!(event, Event::MoodChanged { .. } | Event::Storm)));
+    }
+
+    #[test]
+    fn too_much_peace_dries_the_world_until_nothing_grows_back() {
+        let mut game = founders_met();
+        let home = game.character(ASH).unwrap().home();
+        deal(&mut game, ASH, "Bryn", Dealing::Ally);
+        deal(&mut game, BRYN, "Ash", Dealing::Ally);
+        assert_eq!(game.balance().lean(), -LEAN_PER_DEALING, "an alliance is felt at once");
+
+        // One alliance and no war: a step toward stillness every ten minutes.
+        let events = ticks(&mut game, 11, 6_000);
+        assert_eq!((game.balance().lean(), game.balance().mood()), (-20, Mood::Dry));
+        let dried = Event::MoodChanged { from: Mood::Even, to: Mood::Dry };
+        assert!(events.contains(&dried));
+        assert_eq!(game.audience(&dried), [ASH, BRYN, COLE], "the whole world feels it");
+
+        // Dry, a stripped place comes back at half the pace. Parched, not at all.
+        let regrown = |game: &Game, lean: i64| {
+            let mut game = game.clone();
+            game.balance.tip(lean - game.balance.lean());
+            strip(&mut game, home);
+            ticks(&mut game, 6_001, 6_300);
+            stock_in(&game, home)
+        };
+        let (even, dry, parched) = (regrown(&game, 0), regrown(&game, -20), regrown(&game, -60));
+        assert!(even > 0 && dry * 2 <= even + 1 && dry > 0, "even {even}, dry {dry}");
+        assert_eq!(parched, 0);
+    }
+
+    #[test]
+    fn too_much_war_brings_storms_and_a_truce_lets_the_world_settle() {
+        let mut game = founders_met();
+        let home = game.character(ASH).unwrap().home();
+        let mut untroubled = game.clone();
+        ticks(&mut untroubled, 11, STORM_EVERY.as_ticks() * 6);
+        deal(&mut game, ASH, "Bryn", Dealing::War);
+        assert_eq!(game.balance().lean(), LEAN_PER_DEALING);
+        let events = ticks(&mut game, 11, 6_000);
+        assert_eq!(game.balance().mood(), Mood::Restless);
+        assert!(events.contains(&Event::MoodChanged { from: Mood::Even, to: Mood::Restless }));
+
+        // The next storm takes a share of everything, in every land.
+        let storm = ticks(&mut game, 6_001, STORM_EVERY.as_ticks() * 6);
+        assert!(storm.contains(&Event::Storm));
+        assert!(stock_in(&game, home) < stock_in(&untroubled, home), "a deposit nobody touched is the poorer for it");
+
+        // Both founders ask for a truce. Peace is felt at once, and with
+        // nothing pushing any more the world eases all the way back.
+        deal(&mut game, ASH, "Bryn", Dealing::Truce);
+        let truce = deal(&mut game, BRYN, "Ash", Dealing::Truce);
+        assert!(truce.contains(&Event::MoodChanged { from: Mood::Restless, to: Mood::Even }));
+        let from = STORM_EVERY.as_ticks() * 6 + 1;
+        let after = ticks(&mut game, from, from + BALANCE_EVERY.as_ticks() * 20);
+        assert_eq!(game.balance().lean(), 0);
+        assert!(!after.contains(&Event::Storm));
     }
 
     #[test]

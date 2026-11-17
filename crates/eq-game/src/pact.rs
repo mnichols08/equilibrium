@@ -98,6 +98,11 @@ impl Pacts {
         self.sealed.iter().find(|(first, second, _)| (*first, *second) == (low, high)).map(|(_, _, pact)| *pact)
     }
 
+    /// How many pairs of lands have `pact`.
+    pub fn count(&self, pact: Pact) -> usize {
+        self.sealed.iter().filter(|(_, _, kind)| *kind == pact).count()
+    }
+
     /// Every land that has `pact` with `land`.
     pub fn with(&self, land: usize, pact: Pact) -> impl Iterator<Item = usize> + '_ {
         self.sealed.iter().filter(move |(_, _, kind)| *kind == pact).filter_map(move |(first, second, _)| {
