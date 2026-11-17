@@ -12,9 +12,10 @@ use alloc::string::String;
 use crate::character::{Character, CharacterId, Death};
 use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RobRefusal};
 use crate::command::{Action, Command};
+use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 use crate::content::{
     self, ATTACK_TIME, BASE_EFFORT, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
-    DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, EFFORT_SPREAD, FADED_CARRYOVER_PERCENT, GATHER_TIME,
+    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, EFFORT_SPREAD, FADED_CARRYOVER_PERCENT, GATHER_TIME,
     HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
     REBIRTH_CARRYOVER_PERCENT, REDEMPTION_CLOCK, RESTED_LASTS, SEEK_TIME, SETTLE_TIME, TAINT_FADES_EVERY,
     TAINT_FOR_ROBBING, TAKE_TIME, TETHERED_WAIT, TRAVEL_TIME,
@@ -40,6 +41,10 @@ pub struct Epitaph {
 /// How often the world looks for sleepers whose time has run out.
 const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
 
+/// How often the world clears away what has had its time: crumbled
+/// relics, spent Body Guards, and lairs due a new lurker.
+const UPKEEP_EVERY: Duration = Duration::seconds(10);
+
 /// The whole world: one zone and the characters in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
@@ -54,6 +59,14 @@ pub struct Game {
     forgotten: Vec<CharacterId>,
     /// Those who faded, oldest first.
     shrine: Vec<Epitaph>,
+    /// Every creature now in the world, oldest first.
+    creatures: Vec<Creature>,
+    /// The id the next creature will get.
+    next_creature: u64,
+    /// Lairs waiting for a new lurker, and when it comes.
+    empty_lairs: Vec<(Tick, PlaceId)>,
+    /// What the dead dropped, oldest first.
+    relics: Vec<Relic>,
     /// Where severed spirits are pulled to and new lives begin.
     anchor: PlaceId,
 }
@@ -68,7 +81,8 @@ impl Game {
         for index in 0..characters.len() {
             occupancy.enter(start, id_at(index));
         }
-        Self {
+        let lairs: Vec<PlaceId> = map.places().filter(|(_, place)| place.lair.is_some()).map(|(id, _)| id).collect();
+        let mut game = Self {
             rng: Rng::from_seed(seed),
             zone: Zone::new(map),
             characters,
@@ -76,8 +90,17 @@ impl Game {
             dead: Vec::new(),
             forgotten: Vec::new(),
             shrine: Vec::new(),
+            creatures: Vec::new(),
+            next_creature: 0,
+            empty_lairs: Vec::new(),
+            relics: Vec::new(),
             anchor: start,
+        };
+        for lair in lairs {
+            let id = game.new_creature_id();
+            game.creatures.push(Creature::lurker(id, lair, Tick::ZERO));
         }
+        game
     }
 
     /// A character, if the id belongs to this world.
@@ -115,6 +138,35 @@ impl Game {
     /// stones at the anchor.
     pub fn shrine(&self) -> &[Epitaph] {
         &self.shrine
+    }
+
+    /// The creatures in `place`, oldest first.
+    pub fn creatures_at(&self, place: PlaceId) -> impl Iterator<Item = &Creature> {
+        self.creatures.iter().filter(move |creature| creature.place == place)
+    }
+
+    /// The relics lying in `place`, oldest first.
+    pub fn relics_at(&self, place: PlaceId) -> impl Iterator<Item = &Relic> {
+        self.relics.iter().filter(move |relic| relic.place == place)
+    }
+
+    /// Whether `who` could open `relic`. Faded and resonant relics open
+    /// for anyone. An ancient one opens only for its owner while the
+    /// owner's body lies beside it or stands guard over it.
+    pub fn can_open(&self, who: CharacterId, relic: &Relic) -> bool {
+        if relic.tier() < RelicTier::Ancient || relic.owner == who {
+            return true;
+        }
+        let body_lies = self.dead.contains(&relic.owner);
+        let guarded = self.creatures_at(relic.place).any(|creature| creature.being.of == Some(relic.owner));
+        !body_lies && !guarded
+    }
+
+    /// Whether there is anything where `who` stands that they could take.
+    pub fn can_take(&self, who: CharacterId) -> bool {
+        self.character(who).is_some_and(|character| {
+            !character.is_spirit() && self.relics_at(character.place()).any(|relic| self.can_open(who, relic))
+        })
     }
 
     /// Everyone whose body lies in `place`, in the order they died.
@@ -198,7 +250,10 @@ impl Game {
         let mut audience: Vec<CharacterId> = match event {
             Event::Character { who, outcome } => self.audience_of_outcome(*who, outcome),
             Event::UnknownCharacter { .. } => Vec::new(),
-            Event::DepositChanged { place, .. } | Event::PassageChanged { place, .. } => self.occupants(*place).to_vec(),
+            Event::DepositChanged { place, .. }
+            | Event::PassageChanged { place, .. }
+            | Event::CreatureAppeared { place, .. }
+            | Event::CreatureGone { place, .. } => self.occupants(*place).to_vec(),
             Event::VitalityChanged { .. } => self.characters().map(|(id, _)| id).collect(),
         };
         audience.sort_unstable();
@@ -230,6 +285,9 @@ impl Game {
             | Outcome::LayDown { .. }
             | Outcome::Stole { .. }
             | Outcome::Returned
+            | Outcome::HitCreature { .. }
+            | Outcome::Slew { .. }
+            | Outcome::Mauled { .. }
             | Outcome::Named { .. }
             | Outcome::Redeemed { .. }
             | Outcome::Faded { .. }
@@ -284,6 +342,7 @@ impl Game {
             Action::Go(label) => self.go(index, label, now, outcomes),
             Action::Gather => self.gather(index, now, outcomes, events),
             Action::Attack(target) => self.attack(index, *target, now, outcomes, events),
+            Action::Fight(creature) => self.fight(index, *creature, now, outcomes, events),
             Action::Take => self.take(index, now, outcomes),
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
@@ -389,6 +448,9 @@ impl Game {
         if character.place() != death.body {
             return Outcome::CannotReturn { why: ReturnRefusal::NotAtBody };
         }
+        if death.risen {
+            return Outcome::CannotReturn { why: ReturnRefusal::Risen };
+        }
         if now < death.ready_at {
             return Outcome::CannotReturn { why: ReturnRefusal::TooSoon(death.ready_at) };
         }
@@ -469,7 +531,7 @@ impl Game {
         self.rouse(victim, now, events);
         if health == 0 {
             let corruption = if caught_lying { CORRUPTION_PER_SLEEPER_DEATH } else { CORRUPTION_PER_DEATH };
-            self.fell(victim, attacker, corruption, now, events);
+            self.fell(victim, Cause::Character(attacker), corruption, now, events);
             return;
         }
         // Someone caught lying down is on their feet now, but too late to
@@ -482,7 +544,7 @@ impl Game {
         events.push(Event::Character { who: target, outcome: Outcome::Struck { target: attacker, damage } });
         outcomes.push(Outcome::Hurt { by: target, damage, health });
         if health == 0 {
-            self.fell(index, target, CORRUPTION_PER_DEATH, now, events);
+            self.fell(index, Cause::Character(target), CORRUPTION_PER_DEATH, now, events);
         }
     }
 
@@ -503,7 +565,7 @@ impl Game {
     /// Kills a character. The body stays where it fell with everything
     /// they carried beside it, and the spirit is left to find its way back.
     /// The zone pays `corruption` for the death.
-    fn fell(&mut self, index: usize, by: CharacterId, corruption: i64, now: Tick, events: &mut Vec<Event>) {
+    fn fell(&mut self, index: usize, by: Cause, corruption: i64, now: Tick, events: &mut Vec<Event>) {
         let who = id_at(index);
         let body = self.characters[index].place();
         let passing = self.passing(who, by, body);
@@ -518,12 +580,8 @@ impl Game {
         let lost_at = now + CORPSE_TIME;
 
         let character = &mut self.characters[index];
-        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at });
-        if let Some(place) = self.zone.map_mut().place_mut(body) {
-            for (lying, more) in place.spoils.iter_mut().zip(dropped) {
-                *lying += more;
-            }
-        }
+        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false });
+        self.relics.extend(Relic::new(who, body, dropped, now));
         // Only a tethered spirit stays by its body.
         if passing != Passing::Tethered {
             character.place = self.anchor;
@@ -532,19 +590,18 @@ impl Game {
         }
         self.zone.mourn(corruption);
         self.dead.push(who);
-        let by = Cause::Character(by);
         events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
     }
 
     /// How a spirit will stand to its body: corrupted in a collapsed
     /// zone, tethered if anyone but the killer stood by, severed if not.
-    fn passing(&self, who: CharacterId, by: CharacterId, place: PlaceId) -> Passing {
+    fn passing(&self, who: CharacterId, by: Cause, place: PlaceId) -> Passing {
         if self.zone.health() == Health::Collapsed {
             return Passing::Corrupted;
         }
         let someone_stood_by = self.occupants(place).iter().any(|&other| {
-            other != who && other != by && self.character(other).is_some_and(|character| !character.is_spirit())
+            other != who && Cause::Character(other) != by && self.character(other).is_some_and(|character| !character.is_spirit())
         });
         if someone_stood_by {
             Passing::Tethered
@@ -553,16 +610,150 @@ impl Game {
         }
     }
 
+    /// Opens every relic here that will open for this character and
+    /// takes what is in them. Trying a sealed one troubles its guard.
     fn take(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
-        let character = &mut self.characters[index];
-        let spoils = self.zone.map_mut().place_mut(character.place()).map(|place| core::mem::take(&mut place.spoils));
-        match spoils {
-            Some(spoils) if spoils.iter().any(|&amount| amount > 0) => {
-                character.stow_all(spoils);
-                character.busy_until = now + TAKE_TIME;
-                outcomes.push(Outcome::Took { spoils });
+        let who = id_at(index);
+        let here = self.characters[index].place();
+        let (open, sealed): (Vec<Relic>, Vec<Relic>) =
+            self.relics_at(here).copied().partition(|relic| self.can_open(who, relic));
+        if open.is_empty() {
+            for relic in &sealed {
+                let guards = self.creatures.iter_mut().filter(|guard| guard.place == here && guard.being.of == Some(relic.owner));
+                guards.for_each(|guard| guard.provoke(who));
             }
-            _ => outcomes.push(Outcome::NothingToTake),
+            outcomes.push(if sealed.is_empty() { Outcome::NothingToTake } else { Outcome::RelicSealed });
+            return;
+        }
+        let mut spoils = [0; crate::types::Resource::ALL.len()];
+        let mut time = Duration::ZERO;
+        for relic in &open {
+            time = time.max(relic.tier().open_time());
+            for (taken, held) in spoils.iter_mut().zip(relic.contents) {
+                *taken += held;
+            }
+        }
+        self.relics.retain(|relic| !open.contains(relic));
+        let character = &mut self.characters[index];
+        character.stow_all(spoils);
+        character.busy_until = now + time;
+        outcomes.push(Outcome::Took { spoils });
+    }
+
+    /// Strikes a creature. It will come for whoever struck it.
+    fn fight(&mut self, index: usize, target: CreatureId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let here = self.characters[index].place();
+        let Some(slot) = self.creatures.iter().position(|creature| creature.id == target && creature.place == here) else {
+            return outcomes.push(Outcome::NoSuchCreature);
+        };
+        // DAMAGE_SPREAD is tiny, so the cast cannot truncate.
+        let roll = self.rng.below(DAMAGE_SPREAD) as u32;
+        let striker = &mut self.characters[index];
+        striker.busy_until = now + ATTACK_TIME;
+        let creature = &mut self.creatures[slot];
+        let blow = Blow {
+            roll,
+            vigor: striker.attribute(Attribute::Vigor).level(),
+            taint: striker.taint(),
+            resilience: creature.resilience,
+        };
+        let damage = blow.damage();
+        let left = creature.hurt(damage);
+        creature.provoke(who);
+        let being = creature.being;
+        outcomes.push(Outcome::HitCreature { being, damage, left });
+        if left == 0 {
+            outcomes.push(Outcome::Slew { being });
+            self.remove_creature(slot, now, events);
+        }
+    }
+
+    fn new_creature_id(&mut self) -> CreatureId {
+        let id = CreatureId::new(self.next_creature);
+        self.next_creature += 1;
+        id
+    }
+
+    /// Takes a creature out of the world. A lurker's lair fills again
+    /// in time. A Body Guard's going frees the spirit whose body it was,
+    /// which must then be reborn.
+    fn remove_creature(&mut self, slot: usize, now: Tick, events: &mut Vec<Event>) {
+        let creature = self.creatures.remove(slot);
+        match creature.being {
+            Being { kind: CreatureKind::Lurker, .. } => self.empty_lairs.push((now + LURKER_RETURNS, creature.place)),
+            Being { kind: CreatureKind::BodyGuard, of } => {
+                let still_guarded = self.creatures.iter().any(|other| other.being.of == of);
+                let bound = of.and_then(|owner| self.index_of(owner)).filter(|&owner| {
+                    !still_guarded && self.characters[owner].death().is_some_and(|death| death.risen)
+                });
+                if let Some(owner) = bound {
+                    let outcome = self.rebirth(owner, now);
+                    events.push(Event::Character { who: id_at(owner), outcome });
+                }
+            }
+        }
+    }
+
+    /// Every creature with someone to go for strikes them, at its own pace.
+    fn creatures_strike(&mut self, now: Tick, events: &mut Vec<Event>) {
+        for slot in 0..self.creatures.len() {
+            if now < self.creatures[slot].next_blow {
+                continue;
+            }
+            self.creatures[slot].next_blow = now + CREATURE_BLOW_EVERY;
+            let Some(victim) = self.quarry(&self.creatures[slot]) else { continue };
+            // DAMAGE_SPREAD is tiny, so the cast cannot truncate.
+            let roll = self.rng.below(DAMAGE_SPREAD) as u32;
+            let creature = &self.creatures[slot];
+            let struck = &mut self.characters[victim];
+            let blow = Blow {
+                roll,
+                vigor: creature.vigor,
+                taint: 0,
+                resilience: struck.attribute(Attribute::Resilience).level(),
+            };
+            let (being, damage) = (creature.being, blow.damage());
+            let caught_lying = struck.is_lying_down();
+            let health = struck.hurt(damage);
+            events.push(Event::Character { who: id_at(victim), outcome: Outcome::Mauled { by: being, damage, health } });
+            self.rouse(victim, now, events);
+            if health == 0 {
+                let corruption = if caught_lying { CORRUPTION_PER_SLEEPER_DEATH } else { CORRUPTION_PER_DEATH };
+                self.fell(victim, Cause::Creature(being), corruption, now, events);
+            }
+        }
+    }
+
+    /// Who a creature would strike: the first of its foes still living
+    /// in its place, or, if it goes for anyone, whoever living is there.
+    fn quarry(&self, creature: &Creature) -> Option<usize> {
+        let living = |who: &CharacterId| self.character(*who).is_some_and(|character| !character.is_spirit());
+        let here = self.occupants(creature.place);
+        let foe = creature.foes.iter().find(|&foe| here.contains(foe) && living(foe));
+        let anyone = || here.iter().find(|&who| creature.being.kind.is_aggressive() && living(who));
+        foe.or_else(anyone).and_then(|&who| self.index_of(who))
+    }
+
+    /// Clears away what has had its time: relics crumble, spent Body
+    /// Guards fall, and empty lairs fill.
+    fn upkeep(&mut self, now: Tick, events: &mut Vec<Event>) {
+        if !now.get().is_multiple_of(UPKEEP_EVERY.as_ticks()) {
+            return;
+        }
+        self.relics.retain(|relic| now < relic.expires_at);
+        while let Some(slot) = self.creatures.iter().position(|creature| creature.gone_at.is_some_and(|at| at <= now)) {
+            let (place, being) = (self.creatures[slot].place, self.creatures[slot].being);
+            events.push(Event::CreatureGone { place, being });
+            self.remove_creature(slot, now, events);
+        }
+        let due: Vec<PlaceId> = self.empty_lairs.iter().filter(|(at, _)| *at <= now).map(|&(_, place)| place).collect();
+        self.empty_lairs.retain(|(at, _)| *at > now);
+        for place in due {
+            let id = self.new_creature_id();
+            let lurker = Creature::lurker(id, place, now);
+            events.push(Event::CreatureAppeared { place, being: lurker.being });
+            self.creatures.push(lurker);
         }
     }
 
@@ -617,11 +808,7 @@ impl Game {
             }
             let (who, place) = (id_at(index), character.place());
             let (dropped, cleansed) = character.sleep_to_death(now);
-            if let Some(ground) = self.zone.map_mut().place_mut(place) {
-                for (lying, more) in ground.spoils.iter_mut().zip(dropped) {
-                    *lying += more;
-                }
-            }
+            self.relics.extend(Relic::new(who, place, dropped, now));
             self.zone.mourn(CORRUPTION_PER_SLEEPER_DEATH);
             self.forgotten.push(who);
             let outcome = Outcome::Died { by: Cause::LongSleep, place, passing: Passing::Forgotten, lost_at: now };
@@ -654,7 +841,9 @@ impl Game {
         }
     }
 
-    /// A body left too long is lost, and its spirit begins a new life.
+    /// A body left too long rises as a Body Guard over what its owner
+    /// dropped. The spirit cannot go back into it: it can give the body
+    /// up, or wait for the guard to fall.
     fn lose_bodies(&mut self, now: Tick, events: &mut Vec<Event>) {
         let overdue: Vec<usize> = self
             .dead
@@ -663,8 +852,15 @@ impl Game {
             .filter(|&index| self.characters[index].death().is_some_and(|death| death.lost_at <= now))
             .collect();
         for index in overdue {
-            let outcome = self.rebirth(index, now);
-            events.push(Event::Character { who: id_at(index), outcome });
+            let who = id_at(index);
+            let Some(death) = self.characters[index].death().copied() else { continue };
+            self.characters[index].lose_body();
+            self.dead.retain(|&spirit| spirit != who);
+            let id = self.new_creature_id();
+            let guard = Creature::body_guard(id, who, &self.characters[index], death.body, now, now + GUARD_LASTS);
+            events.push(Event::Character { who, outcome: Outcome::BodyRose });
+            events.push(Event::CreatureAppeared { place: death.body, being: guard.being });
+            self.creatures.push(guard);
         }
     }
 
@@ -680,8 +876,16 @@ impl Game {
             outcomes.push(Outcome::ExitClosed { label: label.into() });
             return;
         }
+        let arrives_living = !character.is_spirit();
         character.place = exit.to;
         character.busy_until = now + TRAVEL_TIME;
+        // Whatever lives there needs a moment to notice a newcomer.
+        if arrives_living {
+            let noticed_at = now + TRAVEL_TIME + CREATURE_BLOW_EVERY;
+            for creature in self.creatures.iter_mut().filter(|creature| creature.place == exit.to) {
+                creature.next_blow = creature.next_blow.max(noticed_at);
+            }
+        }
         self.occupancy.leave(from, id_at(index));
         self.occupancy.enter(exit.to, id_at(index));
         outcomes.push(Outcome::Moved { from, to: exit.to });
@@ -758,6 +962,8 @@ impl World for Game {
         self.end_long_sleeps(now, events);
         self.run_redemption_clocks(now, events);
         self.lose_bodies(now, events);
+        self.creatures_strike(now, events);
+        self.upkeep(now, events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
@@ -908,7 +1114,7 @@ mod tests {
         let bryn = game.character(BRYN).unwrap();
         assert!(bryn.is_spirit() && !game.character(ASH).unwrap().is_spirit(), "the clean challenger should win");
         assert_eq!((bryn.carried_total(), bryn.taint(), bryn.standing()), (0, 0, Standing::Clean));
-        assert_eq!(game.map().place(LEDGE).unwrap().spoils[Resource::Ore.index()], carried);
+        assert_eq!(game.relics_at(LEDGE).next().unwrap().contents[Resource::Ore.index()], carried);
         assert!(died(&events, BRYN).is_some());
         let cleansed = Outcome::StandingChanged { from: Standing::Marked, to: Standing::Clean };
         assert!(events.contains(&Event::Character { who: BRYN, outcome: cleansed }));
@@ -970,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn a_body_left_too_long_is_lost_and_the_spirit_is_reborn_with_a_share_of_what_it_knew() {
+    fn a_body_left_too_long_rises_as_a_guard_and_the_spirit_can_only_give_it_up() {
         let (mut game, now) = bryn_marked_on_the_ledge();
         let mining_before = game.character(BRYN).unwrap().skill(crate::types::SkillKind::Mining).level();
         assert!(mining_before >= 2, "Bryn should have learned something first: {mining_before}");
@@ -982,7 +1188,21 @@ mod tests {
         assert!(!before.iter().any(|event| matches!(event, Event::Character { outcome: Outcome::Reborn { .. }, .. })));
 
         let after = ticks(&mut game, lost_at, lost_at);
-        assert!(after.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
+        assert!(after.contains(&Event::Character { who: BRYN, outcome: Outcome::BodyRose }));
+        let being = Being { kind: CreatureKind::BodyGuard, of: Some(BRYN) };
+        assert!(after.contains(&Event::CreatureAppeared { place: LEDGE, being }));
+        let guard = game.creatures_at(LEDGE).next().unwrap();
+        assert_eq!((guard.being, guard.health()), (being, 120));
+        assert!(game.character(BRYN).unwrap().is_spirit());
+        assert_eq!(game.bodies_at(LEDGE).count(), 0);
+
+        // The body is the guard now: no going back into it.
+        let mut events = Vec::new();
+        game.apply(&Command::go(BRYN, "north"), Tick::new(lost_at), &mut events);
+        game.apply(&Command::return_to_body(BRYN), Tick::new(lost_at + 30), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::Risen }));
+        game.apply(&Command::relinquish(BRYN), Tick::new(lost_at + 30), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Reborn { life: 2 }));
         let bryn = game.character(BRYN).unwrap();
         assert!(!bryn.is_spirit());
         assert_eq!((bryn.place(), bryn.health(), bryn.rested(), bryn.life()), (CAMP, 100, 100, 2));
@@ -1073,9 +1293,12 @@ mod tests {
         let mut events = Vec::new();
         game.apply(&Command::take(ASH), Tick::new(now), &mut events);
         assert_eq!(game.character(ASH).unwrap().carried(Resource::Ore), carried);
-        assert_eq!(game.place_of(ASH).unwrap().spoils, [0; Resource::ALL.len()]);
+        assert_eq!(game.relics_at(game.character(ASH).unwrap().place()).count(), 0);
 
+        // Ore makes it a resonant relic, which takes a little longer to open.
         game.apply(&Command::take(ASH), Tick::new(now + TAKE_TIME.as_ticks()), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::Busy { .. })));
+        game.apply(&Command::take(ASH), Tick::new(now + RelicTier::Resonant.open_time().as_ticks()), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::NothingToTake));
     }
 
@@ -1400,8 +1623,8 @@ mod tests {
         assert!(ash.is_spirit() && ash.is_dormant() && !ash.is_lying_down());
         assert_eq!(ash.death(), None);
         assert_eq!(ash.carried_total(), 0);
-        let ledge = game.place_of(ASH).unwrap();
-        assert!(ledge.spoils[Resource::Ore.index()] > 0, "what they carried lies where they lay");
+        let relic = game.relics_at(ash.place()).next().expect("what they carried lies where they lay");
+        assert!(relic.contents[Resource::Ore.index()] > 0);
         assert_eq!(game.bodies_at(ash.place()).count(), 0, "there is no body to go back to");
         assert!(events.iter().any(|event| matches!(
             event,
@@ -1524,5 +1747,199 @@ mod tests {
         assert_eq!(ash.skill(SkillKind::Mining).level(), 0, "five percent of a wasted handful is nothing");
         assert_eq!(game.shrine().len(), 1);
         assert_eq!((game.shrine()[0].name.as_str(), game.shrine()[0].life), ("Ash", 1));
+    }
+
+    const GROTTO: PlaceId = PlaceId::new(7);
+
+    /// Walks `who` from camp down into the grotto at low tide. Returns
+    /// the tick at which they are free to act there.
+    fn into_the_grotto(game: &mut Game, who: CharacterId) -> u64 {
+        let mut events = Vec::new();
+        for (step, exit) in ["east", "cave", "down"].into_iter().enumerate() {
+            game.apply(&Command::go(who, exit), Tick::new(step as u64 * 30), &mut events);
+        }
+        assert_eq!(game.character(who).unwrap().place(), GROTTO);
+        90
+    }
+
+    fn lurker(game: &Game) -> Option<&Creature> {
+        game.creatures_at(GROTTO).find(|creature| creature.being.kind == CreatureKind::Lurker)
+    }
+
+    #[test]
+    fn a_lurker_keeps_the_grotto_and_goes_for_whoever_comes_in() {
+        let mut game = Game::new(1, &["Ash"]);
+        assert_eq!(lurker(&game).map(Creature::health), Some(60));
+        let arrived = into_the_grotto(&mut game, ASH);
+
+        // It needs a moment to notice a newcomer.
+        let quiet = ticks(&mut game, 61, arrived + CREATURE_BLOW_EVERY.as_ticks() - 1);
+        assert!(!quiet.iter().any(|event| matches!(event, Event::Character { outcome: Outcome::Mauled { .. }, .. })));
+        let struck = ticks(&mut game, arrived + CREATURE_BLOW_EVERY.as_ticks(), arrived + 30);
+        let blows = struck.iter().filter(|event| matches!(event, Event::Character { who: ASH, outcome: Outcome::Mauled { .. } }));
+        assert_eq!(blows.count(), 5, "one blow every six seconds");
+        assert!(game.character(ASH).unwrap().health() < 100);
+    }
+
+    #[test]
+    fn a_lurker_can_be_brought_down_and_another_comes_in_time() {
+        let mut game = Game::new(1, &["Ash"]);
+        let mut now = into_the_grotto(&mut game, ASH);
+        let id = lurker(&game).unwrap().id;
+        let mut events = Vec::new();
+        while lurker(&game).is_some() {
+            game.tick(Tick::new(now), &mut events);
+            if now.is_multiple_of(ATTACK_TIME.as_ticks()) {
+                game.apply(&Command::fight(ASH, id), Tick::new(now), &mut events);
+            }
+            now += 1;
+        }
+        let being = Being { kind: CreatureKind::Lurker, of: None };
+        assert!(events.contains(&Event::Character { who: ASH, outcome: Outcome::Slew { being } }));
+        assert!(game.character(ASH).unwrap().health() >= 60, "a fit character wins comfortably");
+        game.apply(&Command::fight(ASH, id), Tick::new(now + 3), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NoSuchCreature));
+
+        let later = ticks(&mut game, now, now + LURKER_RETURNS.as_ticks() + 10);
+        assert!(later.contains(&Event::CreatureAppeared { place: GROTTO, being }));
+        assert_ne!(lurker(&game).unwrap().id, id, "ids are never reused");
+    }
+
+    #[test]
+    fn a_lurker_kills_the_unwary_and_their_tide_glass_is_sealed_in_an_ancient_relic() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut now = into_the_grotto(&mut game, ASH);
+        let mut events = Vec::new();
+        while !game.character(ASH).unwrap().is_spirit() {
+            game.tick(Tick::new(now), &mut events);
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += 1;
+        }
+        let being = Being { kind: CreatureKind::Lurker, of: None };
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Character { who: ASH, outcome: Outcome::Died { by: Cause::Creature(by), passing: Passing::Severed, .. } } if *by == being
+        )));
+        let relic = *game.relics_at(GROTTO).next().unwrap();
+        assert_eq!((relic.owner, relic.tier()), (ASH, RelicTier::Ancient));
+        assert!(game.can_open(ASH, &relic));
+        assert!(!game.can_open(BRYN, &relic), "sealed while the body lies beside it");
+    }
+
+    #[test]
+    fn a_body_guard_keeps_an_ancient_relic_until_it_is_brought_down() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut now = into_the_grotto(&mut game, ASH);
+        let mut events = Vec::new();
+        while !game.character(ASH).unwrap().is_spirit() {
+            game.tick(Tick::new(now), &mut events);
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += 1;
+        }
+        // Ten minutes on, the body rises. Bryn comes for what it kept.
+        let risen = now + CORPSE_TIME.as_ticks();
+        ticks(&mut game, now, risen);
+        let guard = game.creatures_at(GROTTO).find(|creature| creature.being.of == Some(ASH)).unwrap().id;
+        let low_tide = (risen / 1_200 + 1) * 1_200;
+        ticks(&mut game, risen + 1, low_tide);
+        for (step, exit) in ["east", "cave", "down"].into_iter().enumerate() {
+            game.apply(&Command::go(BRYN, exit), Tick::new(low_tide + step as u64 * 30), &mut events);
+        }
+        let mut now = low_tide + 90;
+        ticks(&mut game, low_tide + 1, now);
+
+        // The lurker is there too. Bryn deals with it first.
+        let beast = lurker(&game).unwrap().id;
+        while lurker(&game).is_some() {
+            game.apply(&Command::fight(BRYN, beast), Tick::new(now), &mut events);
+            now += ATTACK_TIME.as_ticks();
+            ticks(&mut game, now - 2, now);
+        }
+        game.apply(&Command::take(BRYN), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::RelicSealed));
+        assert_eq!(game.character(BRYN).unwrap().carried_total(), 0);
+
+        // Trying the seal troubled the guard: it strikes back now.
+        let health = game.character(BRYN).unwrap().health();
+        ticks(&mut game, now + 1, now + CREATURE_BLOW_EVERY.as_ticks());
+        assert!(game.character(BRYN).unwrap().health() < health);
+        assert!(game.character(ASH).unwrap().is_spirit(), "Ash is bound until the guard falls");
+
+        assert!(game.creatures_at(GROTTO).any(|creature| creature.id == guard));
+    }
+
+    #[test]
+    fn bringing_down_a_guard_opens_what_it_kept() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut now = into_the_grotto(&mut game, ASH);
+        let mut events = Vec::new();
+        while !game.character(ASH).unwrap().is_spirit() {
+            game.tick(Tick::new(now), &mut events);
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += 1;
+        }
+        let glass = game.relics_at(GROTTO).next().unwrap().contents[Resource::Tideglass.index()];
+        ticks(&mut game, now, now + CORPSE_TIME.as_ticks());
+        let guard = game.creatures_at(GROTTO).find(|creature| creature.being.of == Some(ASH)).unwrap().id;
+
+        // Bryn is put beside it, fresh, without the walk.
+        let mut at = now + CORPSE_TIME.as_ticks() + 1;
+        for exit in ["east", "cave", "down"] {
+            game.characters[1].busy_until = Tick::ZERO;
+            let open = game.map().exit(game.character(BRYN).unwrap().place(), exit).unwrap().to;
+            game.occupancy.leave(game.characters[1].place, BRYN);
+            game.characters[1].place = open;
+            game.occupancy.enter(open, BRYN);
+        }
+        while game.creatures_at(GROTTO).any(|creature| creature.id == guard) {
+            game.apply(&Command::fight(BRYN, guard), Tick::new(at), &mut events);
+            at += ATTACK_TIME.as_ticks();
+        }
+        assert!(events.contains(&Event::Character { who: ASH, outcome: Outcome::Reborn { life: 2 } }));
+        game.apply(&Command::take(BRYN), Tick::new(at), &mut events);
+        assert_eq!(game.character(BRYN).unwrap().carried(Resource::Tideglass), glass);
+    }
+
+    #[test]
+    fn a_guard_that_falls_or_runs_out_of_time_frees_its_spirit_to_be_reborn() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (events, now) = fight_to_the_end(&mut game, now);
+        let lost_at = died(&events, BRYN).unwrap().1.get();
+        ticks(&mut game, now, lost_at);
+        let guard = game.creatures_at(LEDGE).next().unwrap().id;
+
+        // Ash never troubled it, so it leaves Ash alone.
+        let health = game.character(ASH).unwrap().health();
+        ticks(&mut game, lost_at + 1, lost_at + 60);
+        assert!(game.character(ASH).unwrap().health() >= health);
+
+        let mut world = game.clone();
+        let mut events = Vec::new();
+        let mut at = lost_at + 60;
+        while world.creatures_at(LEDGE).next().is_some() {
+            world.apply(&Command::fight(ASH, guard), Tick::new(at), &mut events);
+            at += ATTACK_TIME.as_ticks();
+        }
+        assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
+        assert!(!world.character(BRYN).unwrap().is_spirit());
+
+        // Left alone, it crumbles in the end, with the same result.
+        let later = ticks(&mut game, lost_at + 61, lost_at + GUARD_LASTS.as_ticks() + 10);
+        let being = Being { kind: CreatureKind::BodyGuard, of: Some(BRYN) };
+        assert!(later.contains(&Event::CreatureGone { place: LEDGE, being }));
+        assert!(later.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
+        assert_eq!(game.creatures_at(LEDGE).count(), 0);
+    }
+
+    #[test]
+    fn relics_crumble_when_their_time_is_up() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let relic = *game.relics_at(LEDGE).next().unwrap();
+        assert_eq!(relic.tier(), RelicTier::Resonant);
+        ticks(&mut game, now, relic.expires_at.get() - 1);
+        assert_eq!(game.relics_at(LEDGE).count(), 1);
+        ticks(&mut game, relic.expires_at.get(), relic.expires_at.get() + 10);
+        assert_eq!(game.relics_at(LEDGE).count(), 0);
     }
 }

@@ -8,6 +8,7 @@ use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
 use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal};
+use crate::creature::Being;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
 
 /// What came of one character's action.
@@ -92,6 +93,35 @@ pub enum Outcome {
         /// The health they have left.
         health: u32,
     },
+    /// There is no such creature where they stand.
+    NoSuchCreature,
+    /// They struck a creature.
+    HitCreature {
+        /// What they hit.
+        being: Being,
+        /// The health it took.
+        damage: u32,
+        /// The health the creature has left.
+        left: u32,
+    },
+    /// They brought a creature down.
+    Slew {
+        /// What it was.
+        being: Being,
+    },
+    /// A creature struck them.
+    Mauled {
+        /// What struck them.
+        by: Being,
+        /// The health it took.
+        damage: u32,
+        /// The health they have left.
+        health: u32,
+    },
+    /// Their body lay too long and rose without them as a Body Guard.
+    BodyRose,
+    /// The relics here are sealed against them.
+    RelicSealed,
     /// They died. Everything they carried is on the ground beside the
     /// body, and they are a spirit now.
     Died {
@@ -238,6 +268,20 @@ pub enum Event {
         from: Health,
         /// The band now.
         to: Health,
+    },
+    /// A creature came into the world.
+    CreatureAppeared {
+        /// Where.
+        place: PlaceId,
+        /// What it is.
+        being: Being,
+    },
+    /// A creature left the world without being brought down.
+    CreatureGone {
+        /// Where it stood.
+        place: PlaceId,
+        /// What it was.
+        being: Being,
     },
     /// A cyclic exit opened or closed.
     PassageChanged {

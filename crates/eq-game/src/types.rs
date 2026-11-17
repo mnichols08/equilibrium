@@ -169,6 +169,8 @@ pub enum Cause {
     Character(crate::character::CharacterId),
     /// Sleeping until the body gave out.
     LongSleep,
+    /// A creature.
+    Creature(crate::creature::Being),
 }
 
 /// A resource node and what it gives.
@@ -191,8 +193,8 @@ pub struct Place {
     pub safety: Safety,
     /// What can be gathered, if anything.
     pub deposit: Option<Deposit>,
-    /// What lies dropped on the ground here, by resource, for anyone to take.
-    pub spoils: [u64; Resource::ALL.len()],
+    /// The creature that makes its home here, if any.
+    pub lair: Option<crate::creature::CreatureKind>,
     /// Where it sits on a map seen from above: `x` grows east, `y` grows
     /// south. Only for drawing; the rules never read it.
     pub position: (i32, i32),

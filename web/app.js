@@ -84,6 +84,7 @@ export function pageView(root) {
         canTake: scene.you.can_take,
         targets: scene.company.filter((person) => person.can_attack),
         sleepers: scene.company.filter((person) => person.can_rob),
+        foes: scene.places.find((place) => place.here)?.creatures ?? [],
         body: scene.you.body,
         forgotten: scene.you.forgotten,
       })

@@ -37,6 +37,8 @@ pub enum ReturnRefusal {
     TooSoon(eq_clock::Tick),
     /// There is no body: it died in its sleep and is gone.
     NoBody,
+    /// The body was left too long and has risen as a Body Guard.
+    Risen,
 }
 
 /// Why a name could not be spoken at the shrine.

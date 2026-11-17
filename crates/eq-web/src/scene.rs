@@ -11,7 +11,7 @@
 use eq_clock::Tick;
 use eq_game::content::{LOW_TIDE, MEMORIES_TO_REDEEM, REDEMPTION_CLOCK, TIDE};
 use eq_game::{
-    narrate, pressure_percent, Attribute, CharacterId, Death, Deposit, Game, Place, Resource, SkillKind, Standing,
+    narrate, pressure_percent, Attribute, CharacterId, Creature, Death, Deposit, Game, Resource, SkillKind, Standing,
 };
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
@@ -114,8 +114,10 @@ pub struct PlaceView {
     pub people: Vec<PersonView>,
     /// Whose bodies lie here.
     pub bodies: Vec<String>,
-    /// Whether something lies dropped on the ground here.
+    /// Whether a relic lies here.
     pub spoils: bool,
+    /// The creatures here.
+    pub creatures: Vec<FoeView>,
 }
 
 /// The state of a deposit.
@@ -144,6 +146,19 @@ pub struct BodyView {
     pub held_for: u64,
     /// Seconds until the body is lost and the spirit is reborn.
     pub lost_in: u64,
+}
+
+/// A creature standing in a place.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FoeView {
+    /// What to call it: "lurker", or "Bryn's body".
+    pub name: String,
+    /// The word that names it in a command: `attack lurker`.
+    pub word: &'static str,
+    /// Its health.
+    pub health: u32,
+    /// Whether it goes for anyone it finds.
+    pub aggressive: bool,
 }
 
 /// A forgotten spirit's way back.
@@ -216,7 +231,7 @@ impl Scene {
             place_name: place.name,
             description: place.description,
             can_gather: place.deposit.is_some_and(|deposit| is_workable(&deposit)),
-            can_take: has_spoils(place),
+            can_take: game.can_take(viewer),
             health: character.health(),
             life: character.life(),
             body: character.death().map(|death| body_view(game, death, here, now)),
@@ -272,8 +287,16 @@ fn body_view(game: &Game, death: &Death, here: PlaceId, now: Tick) -> BodyView {
     }
 }
 
-fn has_spoils(place: &Place) -> bool {
-    place.spoils.iter().any(|&amount| amount > 0)
+
+fn foe_view(game: &Game, creature: &Creature) -> FoeView {
+    let kind = creature.being.kind;
+    let owner = creature.being.of.and_then(|owner| game.character(owner));
+    FoeView {
+        name: owner.map_or_else(|| kind.word().to_owned(), |owner| format!("{}'s body", owner.name())),
+        word: kind.word(),
+        health: creature.health(),
+        aggressive: kind.is_aggressive(),
+    }
 }
 
 fn is_workable(deposit: &Deposit) -> bool {
@@ -299,7 +322,8 @@ fn places(game: &Game, viewer: CharacterId, here: PlaceId, now: Tick) -> Vec<Pla
             deposit: place.deposit.as_ref().map(deposit_view),
             people: people(game, viewer, id, now),
             bodies: game.bodies_at(id).map(|(_, body)| body.name().to_owned()).collect(),
-            spoils: has_spoils(place),
+            spoils: game.relics_at(id).next().is_some(),
+            creatures: game.creatures_at(id).map(|creature| foe_view(game, creature)).collect(),
         })
         .collect()
 }
@@ -459,6 +483,47 @@ mod tests {
         solo.handle("seek");
         let after = scene(&solo).you.forgotten.unwrap();
         assert_eq!((after.memories, after.can_seek, after.time_left), (1, false, 36_000 - 600));
+    }
+
+    /// The same hunt the browser test plays (`web/test/e2e.html`), so a
+    /// rule change that would break it shows up here first.
+    #[test]
+    fn the_browser_tests_hunt_for_the_marked_bot_plays_out() {
+        const CIRCUIT: [&str; 14] =
+            ["north", "north", "south", "south", "east", "east", "west", "west", "west", "south", "south", "north", "north", "east"];
+        let mut solo = Solo::with_company(1, 3);
+        solo.handle("wait 10m");
+        let can_attack = |solo: &Solo| scene(solo).company.iter().any(|person| person.can_attack);
+        let mut step = 0;
+        while step < 400 && !can_attack(&solo) {
+            solo.handle(CIRCUIT[step % CIRCUIT.len()]);
+            solo.handle("wait 20");
+            step += 1;
+        }
+        assert!(can_attack(&solo), "never caught the marked bot in the open");
+        let mut said = Vec::new();
+        for _ in 0..20 {
+            if !can_attack(&solo) {
+                break;
+            }
+            said.extend(solo.handle("attack bryn").lines);
+        }
+        assert!(said.iter().any(|line| line.starts_with("Bryn dies.")), "{said:?}");
+        let after = scene(&solo);
+        assert!(after.you.body.is_none(), "the player should come through it alive");
+        let here = after.places.iter().find(|place| place.here).unwrap();
+        assert_eq!(here.bodies, ["Bryn"]);
+        assert!(here.spoils && after.you.can_take, "what Bryn dropped should be there to take: {here:?}");
+    }
+
+    #[test]
+    fn creatures_and_relics_show_where_they_are() {
+        let solo = Solo::new(1);
+        let scene = scene(&solo);
+        let grotto = scene.places.iter().find(|place| place.name == "Deep Grotto").unwrap();
+        let lurker = FoeView { name: "lurker".into(), word: "lurker", health: 60, aggressive: true };
+        assert_eq!(grotto.creatures, [lurker]);
+        assert!(scene.places.iter().filter(|place| place.name != "Deep Grotto").all(|place| place.creatures.is_empty()));
     }
 
     #[test]

@@ -33,6 +33,7 @@ pub mod bots;
 mod character;
 pub mod combat;
 mod command;
+mod creature;
 pub mod content;
 mod event;
 mod game;
@@ -47,6 +48,7 @@ mod zone;
 
 pub use character::{Character, CharacterId, Death, Forgotten};
 pub use command::{Action, Command};
+pub use creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 pub use event::{Event, Outcome};
 pub use game::{Epitaph, Game};
 pub use haul::{pressure_percent, Haul};

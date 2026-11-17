@@ -10,6 +10,7 @@ use eq_skills::Rules;
 use eq_world_graph::{Graph, Passage, PlaceId};
 
 use crate::bots::Leg;
+use crate::creature::CreatureKind;
 use crate::types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind, Standing};
 
 /// How long it takes to walk between places.
@@ -166,6 +167,24 @@ pub const DEGRADATION_FADES_EVERY: Duration = Duration::minutes(30);
 /// The most deaths' worth of wear a spirit can carry.
 pub const MOST_DEGRADATION: i64 = 5;
 
+/// How long a body its spirit never came back for stands as a Body
+/// Guard, counted from when it rose.
+pub const GUARD_LASTS: Duration = Duration::minutes(50);
+
+/// A Body Guard has its owner's strength, toughness and health raised
+/// to this percentage.
+pub const GUARD_THREAT_PERCENT: u32 = 120;
+
+/// A lurker's health.
+pub const LURKER_HEALTH: i64 = 60;
+
+/// How long after a lurker is brought down another takes its lair.
+pub const LURKER_RETURNS: Duration = Duration::minutes(30);
+
+/// How often a creature strikes while it has someone to strike. It
+/// also waits this long after someone walks in before its first blow.
+pub const CREATURE_BLOW_EVERY: Duration = Duration::seconds(6);
+
 /// The health a character has on returning to their body.
 pub const HEALTH_ON_RETURN: i64 = 25;
 
@@ -286,12 +305,13 @@ const fn place(
     safety: Safety,
     resource: Option<Resource>,
     position: (i32, i32),
+    lair: Option<CreatureKind>,
 ) -> Place {
     let deposit = match resource {
         Some(resource) => Some(Deposit { resource, node: Node::new(resource.node()) }),
         None => None,
     };
-    Place { name, description, safety, deposit, spoils: [0; Resource::ALL.len()], position }
+    Place { name, description, safety, deposit, lair, position }
 }
 
 /// Builds the Rocky Shoreline and returns it with the starting place.
@@ -315,7 +335,9 @@ const fn place(
 pub fn rocky_shoreline() -> (Graph<Place>, PlaceId) {
     let mut map = Graph::new();
     let mut add = |name, description, safety, resource, position| {
-        map.add_place(place(name, description, safety, resource, position))
+        // The grotto is the one lair on the shoreline.
+        let lair = (name == "Deep Grotto").then_some(CreatureKind::Lurker);
+        map.add_place(place(name, description, safety, resource, position, lair))
     };
 
     let camp = add(
@@ -369,7 +391,7 @@ pub fn rocky_shoreline() -> (Graph<Place>, PlaceId) {
     );
     let grotto = add(
         "Deep Grotto",
-        "A chamber below the tide line, its walls thick with tide-glass. The only way out is up.",
+        "A chamber below the tide line, its walls thick with tide-glass. Something lives in the black water. The only way out is up.",
         Safety::Contested,
         Some(Resource::Tideglass),
         (3, 4),
