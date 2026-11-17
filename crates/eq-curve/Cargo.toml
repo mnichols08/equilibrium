@@ -1,0 +1,10 @@
+[package]
+name = "eq-curve"
+description = "Deterministic, integer-only progression maths."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

@@ -7,7 +7,15 @@ name = "eq-clock"
 version = "0.1.0"
 
 [[package]]
+name = "eq-curve"
+version = "0.1.0"
+
+[[package]]
 name = "eq-ids"
+version = "0.1.0"
+
+[[package]]
+name = "eq-meter"
 version = "0.1.0"
 
 [[package]]

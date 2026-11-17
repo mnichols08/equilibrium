@@ -1,0 +1,10 @@
+[package]
+name = "eq-meter"
+description = "A bounded value with named bands."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
