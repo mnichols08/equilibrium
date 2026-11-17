@@ -11,7 +11,7 @@ use eq_world_graph::PlaceId;
 
 use crate::content::{
     AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES, HEALTH_ON_RETURN,
-    AFTERLIFE_LEVEL, AFTERLIFE_XP_PER_DRAW, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
+    AFTERLIFE_LEVEL, FIGHTING_XP_PER_BLOW, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
@@ -105,6 +105,8 @@ pub struct Character {
     /// the living. It is learned from nothing, and the next life
     /// begins with it.
     practised: [Proficiency; SkillKind::ALL.len()],
+    /// The health of the shade the spirit is fighting for practice.
+    shade: u32,
     /// Which life this is, counting the first as 1.
     life: u32,
     /// How worn the spirit is by recent deaths. It outlasts rebirth.
@@ -153,6 +155,7 @@ impl Character {
             death: None,
             forgotten: None,
             practised: [Proficiency::new(); SkillKind::ALL.len()],
+            shade: SHADE_HEALTH,
             life: 1,
             degradation: Meter::empty(0, MOST_DEGRADATION),
             rested: Meter::full(0, FULLY_RESTED as i64),
@@ -402,16 +405,34 @@ impl Character {
         self.practised.iter().map(Proficiency::level).max().unwrap_or(0)
     }
 
-    /// Practises, as a spirit, the skill that working `resource` uses.
-    /// It is learned as if for the first time, whatever the living
-    /// character knew. Returns the level reached.
-    pub(crate) fn practise(&mut self, resource: Resource, outcomes: &mut Vec<Outcome>) -> u32 {
-        let skill = resource.skill();
+    /// Practises `skill` as a spirit, by `xp`. It is learned as if for
+    /// the first time, whatever the living character knew. Returns the
+    /// level reached.
+    pub(crate) fn practise(&mut self, skill: SkillKind, xp: u64, outcomes: &mut Vec<Outcome>) -> u32 {
         let progress = &mut self.practised[skill.index()];
-        if progress.practice(AFTERLIFE_XP_PER_DRAW, &SKILL_RULES).levels_gained > 0 {
+        if progress.practice(xp, &SKILL_RULES).levels_gained > 0 {
             outcomes.push(Outcome::Practised { skill, level: progress.level(), needed: AFTERLIFE_LEVEL });
         }
         progress.level()
+    }
+
+    /// Lands a spirit's blow worth `damage` on the shade it is fighting.
+    /// Returns the shade's health afterwards; at 0 a fresh one stands
+    /// in its place for the next blow.
+    pub(crate) fn hurt_shade(&mut self, damage: u32) -> u32 {
+        let left = self.shade.saturating_sub(damage);
+        self.shade = if left == 0 { SHADE_HEALTH } else { left };
+        left
+    }
+
+    /// Learns a little fighting from a blow struck while alive.
+    pub(crate) fn learn_from_blow(&mut self, outcomes: &mut Vec<Outcome>) {
+        let skill = SkillKind::Fighting;
+        let xp = with_rested_bonus(FIGHTING_XP_PER_BLOW, self.rested());
+        let progress = &mut self.skills[skill.index()];
+        if progress.practice(xp, &SKILL_RULES).levels_gained > 0 {
+            outcomes.push(Outcome::SkillRose { skill, level: progress.level() });
+        }
     }
 
     /// Marks the body as risen: it is a Body Guard now, and lost to its spirit.

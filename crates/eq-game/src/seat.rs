@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use eq_clock::{Duration, Tick};
 
 use crate::parser::{parse, Input};
-use crate::{narrate, Action, CharacterId, CreatureId, CreatureKind, Game};
+use crate::{narrate, Action, Character, CharacterId, CreatureId, CreatureKind, Game};
 
 /// What a line of input comes to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +36,10 @@ pub fn interpret(game: &Game, who: CharacterId, now: Tick, line: &str) -> Reques
     let nobody_here = |name: &str| say(format!("There is nobody called \"{name}\" here."));
     match parse(line) {
         Input::Do(action) => Request::Act(action),
+        // Only spirits can see shades, and a spirit can strike nothing else.
+        Input::Attack(name) if name == "shade" && game.character(who).is_some_and(Character::is_spirit) => {
+            Request::Act(Action::Spar)
+        }
         Input::Attack(name) => match (someone_here_called(game, who, &name), creature_here_called(game, who, &name)) {
             (Some(target), _) => Request::Act(Action::Attack(target)),
             (None, Some(creature)) => Request::Act(Action::Fight(creature)),
@@ -116,6 +120,7 @@ mod tests {
     fn names_are_read_from_where_the_speaker_stands() {
         let game = Game::new(1, &["Ash", "Bryn"]);
         assert_eq!(read(&game, ASH, "attack BRYN"), Request::Act(Action::Attack(BRYN)));
+        assert!(matches!(read(&game, ASH, "attack shade"), Request::Say(_)), "the living see no shades");
         assert_eq!(read(&game, BRYN, "rob ash"), Request::Act(Action::Rob(ASH)));
         assert_eq!(read(&game, ASH, "attack ash"), say("There is nobody called \"ash\" here.".into()));
         assert_eq!(read(&game, ASH, "name bryn"), Request::Act(Action::Name(BRYN)));

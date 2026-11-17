@@ -8,6 +8,7 @@
   @prop {null | { place_name: string, state: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit. `state` is "lying", "risen" or "buried".
   @prop {null | { dormant: boolean, unborn: boolean, can_seek: boolean, memories: number, needed: number }} forgotten - Set if you slept too long and are a forgotten spirit, or have not lived yet.
   @prop {null | { level: number, needed: number }} afterlife - How far you have practised in the afterlife, if you are a spirit.
+  @prop {boolean} canSpar - Whether you are a spirit standing where a shade can be fought for practice.
   @prop {string[]} burials - The names of the dead whose bodies lie here, which you could bury.
   @prop {boolean} canRite - Whether the ground here is stripped enough for a Restoration Rite you could take part in.
   @prop {boolean} riteWaiting - Whether someone else has begun a rite here and is waiting for a second voice.
@@ -41,7 +42,7 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} burials={[]} body={null} forgotten={null} afterlife={null} asleep={false} online={false} can-rite={false} rite-waiting={false}>
+<eq-actions exits={[]} can-spar={false} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} burials={[]} body={null} forgotten={null} afterlife={null} asleep={false} online={false} can-rite={false} rite-waiting={false}>
   <div zb-if={spirit} role="group" aria-label="Your way back">
     <button zb-if={dormant} type="button" class="primary" onclick={() => emit('command', 'wake')}>Wake</button>
     <button zb-if={lying} type="button" class="primary" disabled={!canReturn} onclick={() => emit('command', 'return')}>
@@ -89,6 +90,10 @@
   <div role="group" aria-label="Do">
     <button type="button" class="primary" disabled={!canGather} onclick={() => emit('command', 'gather')}>
       {spirit ? "Practise" : "Gather"}
+      <small zb-if={afterlife}>level {afterlife.level} of {afterlife.needed} to live again</small>
+    </button>
+    <button zb-if={canSpar} type="button" class="primary" onclick={() => emit('command', 'attack shade')}>
+      Fight a shade
       <small zb-if={afterlife}>level {afterlife.level} of {afterlife.needed} to live again</small>
     </button>
     <button zb-if={canRite} type="button" class="primary" onclick={() => emit('command', 'rite')}>

@@ -35,6 +35,9 @@ pub enum Action {
     Relinquish,
     /// As a forgotten spirit, search this place for a memory of yourself.
     Seek,
+    /// As a spirit, strike the shade that drifts where the living do
+    /// not work. Nothing is risked; it is practice.
+    Spar,
     /// At the shrine, speak the name of a forgotten spirit to redeem it.
     Name(CharacterId),
     /// As a founder, give your land its name. It keeps it for good.
@@ -129,6 +132,11 @@ impl Command {
     /// `who`, a spirit, gives up their body and is reborn.
     pub const fn relinquish(who: CharacterId) -> Self {
         Self { who, action: Action::Relinquish }
+    }
+
+    /// `who`, a spirit, strikes a shade for practice.
+    pub const fn spar(who: CharacterId) -> Self {
+        Self { who, action: Action::Spar }
     }
 
     /// `who`, a forgotten spirit, searches where they stand for a memory.

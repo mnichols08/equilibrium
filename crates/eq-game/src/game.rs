@@ -16,7 +16,7 @@ use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTie
 use crate::content::{
     self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, BURY_TIME, MOST_VIGIL, RITE_CLEANSES, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
     VIGIL_PER_TENDING, WARD_TIME, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
-    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, AFTERLIFE_LEVEL, EFFORT_SPREAD,
+    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, AFTERLIFE_LEVEL, AFTERLIFE_XP_PER_DRAW, FIGHTING_XP_PER_BLOW, EFFORT_SPREAD,
     FADED_CARRYOVER_PERCENT, GATHER_TIME,
     HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
     REBIRTH_CARRYOVER_PERCENT, REDEMPTION_CLOCK, RESTED_LASTS, SEEK_TIME, SETTLE_TIME, TAINT_FADES_EVERY,
@@ -26,7 +26,7 @@ use crate::rest::FULLY_RESTED;
 use crate::event::{Event, Outcome};
 use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
-use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, Standing};
+use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, SkillKind, Standing};
 use crate::zone::{Epitaph, Zone};
 
 /// How often the world looks for sleepers whose time has run out.
@@ -611,6 +611,7 @@ impl Game {
         match action {
             Action::Return | Action::Relinquish => return outcomes.push(Outcome::NotDead),
             Action::Seek => return outcomes.push(Outcome::NotForgotten),
+            Action::Spar => return outcomes.push(Outcome::NoShade),
             _ => {}
         }
         // Waking is the one thing a sleeper, or someone settling, can do.
@@ -646,7 +647,7 @@ impl Game {
             Action::Accept(id) => self.accept(index, *id, now, outcomes, events),
             Action::Withdraw(id) => self.withdraw(index, *id, now, outcomes),
             Action::Collect => self.collect(index, now, outcomes),
-            Action::Wake | Action::Return | Action::Relinquish | Action::Seek | Action::Join(_) => {}
+            Action::Wake | Action::Return | Action::Relinquish | Action::Seek | Action::Spar | Action::Join(_) => {}
         }
     }
 
@@ -662,6 +663,7 @@ impl Game {
             Action::Go(label) => self.go(index, label, now, outcomes),
             Action::Gather => self.draw(index, now, outcomes),
             Action::Seek => self.seek(index, now, outcomes),
+            Action::Spar => self.spar(index, now, outcomes),
             Action::Return => outcomes.push(self.return_to_body(index, now)),
             // There is no giving up and starting again. The way back is the afterlife.
             Action::Relinquish => outcomes.push(Outcome::CannotReturn { why: ReturnRefusal::Unredeemed }),
@@ -694,6 +696,7 @@ impl Game {
             Action::Go(label) => self.go(index, label, now, outcomes),
             Action::Gather => self.draw(index, now, outcomes),
             Action::Seek => self.seek(index, now, outcomes),
+            Action::Spar => self.spar(index, now, outcomes),
             Action::Rest => {
                 character.forgotten_mut().expect("checked above").dormant = true;
                 outcomes.push(Outcome::WentDormant);
@@ -716,7 +719,29 @@ impl Game {
         outcomes.push(Outcome::Drew { amount, held: character.ectoplasm() });
         outcomes.append(&mut risen);
         // The work is practice too, and enough practice is the way back.
-        if character.practise(deposit.resource, outcomes) >= AFTERLIFE_LEVEL {
+        if character.practise(deposit.resource.skill(), AFTERLIFE_XP_PER_DRAW, outcomes) >= AFTERLIFE_LEVEL {
+            self.arise(index, now, outcomes);
+        }
+    }
+
+    /// A spirit strikes a shade. Shades drift wherever the living do
+    /// not work; they do not strike back, and there is always another.
+    /// It is fighting learned from nothing, with nothing at risk.
+    fn spar(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let character = &self.characters[index];
+        if self.map.place(character.place()).is_none_or(|place| place.deposit.is_some()) {
+            return outcomes.push(Outcome::NoShade);
+        }
+        // DAMAGE_SPREAD is tiny, so the cast cannot truncate.
+        let roll = self.rng.below(DAMAGE_SPREAD) as u32;
+        // A spirit has only what it has practised here to strike with.
+        let fighting = character.practised(SkillKind::Fighting).level();
+        let blow = Blow { roll, vigor: 0, fighting, taint: 0, resilience: 0 };
+        let character = &mut self.characters[index];
+        character.busy_until = now + ATTACK_TIME;
+        let (damage, left) = (blow.damage(), character.hurt_shade(blow.damage()));
+        outcomes.push(Outcome::Sparred { damage, left });
+        if character.practise(SkillKind::Fighting, FIGHTING_XP_PER_BLOW, outcomes) >= AFTERLIFE_LEVEL {
             self.arise(index, now, outcomes);
         }
     }
@@ -1013,6 +1038,7 @@ impl Game {
         let caught_lying = self.characters[victim].is_lying_down();
         let (damage, health) = self.strike(index, victim);
         outcomes.push(Outcome::Struck { target, damage });
+        self.characters[index].learn_from_blow(outcomes);
         events.push(Event::Character { who: target, outcome: Outcome::Hurt { by: attacker, damage, health } });
         self.rouse(victim, now, events);
         if health == 0 {
@@ -1041,6 +1067,7 @@ impl Game {
         let blow = Blow {
             roll,
             vigor: self.characters[striker].attribute(Attribute::Vigor).level(),
+            fighting: self.characters[striker].skill(SkillKind::Fighting).level(),
             taint: self.characters[striker].taint(),
             resilience: self.characters[struck].attribute(Attribute::Resilience).level(),
         };
@@ -1149,9 +1176,11 @@ impl Game {
         let blow = Blow {
             roll,
             vigor: striker.attribute(Attribute::Vigor).level(),
+            fighting: striker.skill(SkillKind::Fighting).level(),
             taint: striker.taint(),
             resilience: creature.resilience,
         };
+        striker.learn_from_blow(outcomes);
         let (damage, left) = creature.hurt(blow.damage());
         creature.provoke(who);
         let being = creature.being;
@@ -1198,6 +1227,7 @@ impl Game {
             let blow = Blow {
                 roll,
                 vigor: creature.vigor,
+                fighting: 0,
                 taint: 0,
                 resilience: struck.attribute(Attribute::Resilience).level(),
             };
@@ -1838,6 +1868,46 @@ mod tests {
         }
         assert_eq!(game.place_of(who).unwrap().name, "Shingle Beach");
         now
+    }
+
+    #[test]
+    fn a_spirit_can_fight_shades_where_the_living_do_not_work_and_comes_back_a_fighter() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let mut events = Vec::new();
+
+        // The living see no shades. Bryn, severed, is at camp, where nothing is worked.
+        game.apply(&Command::spar(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NoShade));
+        game.apply(&Command::spar(BRYN), Tick::new(now), &mut events);
+        let Some(&Outcome::Sparred { damage, left }) = outcome(&events) else { panic!("no blow landed: {events:?}") };
+        assert_eq!(left, crate::content::SHADE_HEALTH - damage);
+        assert_eq!(game.character(BRYN).unwrap().busy_until(), Tick::new(now) + ATTACK_TIME);
+        assert_eq!(game.character(BRYN).unwrap().health(), 0, "a shade never strikes back");
+
+        // Blow after blow, shade after shade, until there is enough to live on.
+        let (events, then) = through_the_afterlife(&mut game, BRYN, now + ATTACK_TIME.as_ticks());
+        assert!(events.iter().any(|event| matches!(event, Event::Character { outcome: Outcome::Sparred { left: 0, .. }, .. })));
+        let minutes = (then - now) / 60;
+        assert!((15..=25).contains(&minutes), "about as long as gathering takes: {minutes} minutes");
+        let bryn = game.character(BRYN).unwrap();
+        assert_eq!((bryn.life(), bryn.skill(SkillKind::Fighting).level()), (2, AFTERLIFE_LEVEL));
+
+        // Where the living work there is work to practise, not shades.
+        let (mut game, now) = bryn_a_spirit_on_the_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::spar(BRYN), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NoShade));
+    }
+
+    #[test]
+    fn the_living_learn_to_fight_by_fighting_and_hit_harder_for_it() {
+        let mut game = Game::new(1, &["Ash"]);
+        let now = into_the_grotto(&mut game, ASH);
+        let mut events = Vec::new();
+        game.apply(&Command::fight(ASH, lurker(&game).unwrap().id), Tick::new(now), &mut events);
+        // One blow is three points of the hundred a level takes, and more when rested.
+        assert!(game.character(ASH).unwrap().skill(SkillKind::Fighting).progress() >= FIGHTING_XP_PER_BLOW);
     }
 
     #[test]
