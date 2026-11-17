@@ -1,0 +1,10 @@
+[package]
+name = "eq-clock"
+description = "Ticks, durations, cycles and pausable stopwatches."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

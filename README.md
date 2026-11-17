@@ -1,0 +1,30 @@
+# Equilibrium
+
+A text-first MMO whose world is shaped by its players, built from small,
+reusable Rust crates that compile natively for the server and to wasm for
+the browser.
+
+## Crates
+
+| Crate | Job |
+| --- | --- |
+| `eq-ids` | Typed ids that cannot be mixed up |
+| `eq-rng` | Seeded, splittable, deterministic random source |
+| `eq-clock` | Ticks, durations, cycles and pausable stopwatches |
+
+Every crate is `no_std`, has no dependencies and is usable without the game.
+
+## Ground rules
+
+- Pure functions over plain data. No I/O, wall clock or global RNG in the core.
+- Deterministic: the same seed and commands always give the same world.
+- One tick is one second of world time.
+
+## Develop
+
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets
+rustup target add wasm32-unknown-unknown
+cargo build --workspace --target wasm32-unknown-unknown
+```

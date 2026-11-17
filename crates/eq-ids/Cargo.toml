@@ -1,0 +1,10 @@
+[package]
+name = "eq-ids"
+description = "Typed ids that cannot be mixed up."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

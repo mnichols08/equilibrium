@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mnichols08/equilibrium"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
