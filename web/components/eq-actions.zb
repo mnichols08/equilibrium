@@ -1,12 +1,14 @@
 <!--
   What you can do right now: walk out by an exit, gather, pick things up, challenge someone, or let time pass.
-  A spirit can only walk, return to its body, or give the body up.
+  A spirit can only walk, draw ectoplasm, return to its body while it still lies there, or seek memories of itself until it lives again.
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
   @prop {{ name: string }[]} targets - Everyone here you may attack right now.
   @prop {{ name: string }[]} sleepers - Everyone asleep here whose pack you may go through.
   @prop {{ name: string, word: string, health: number }[]} foes - The creatures here, which you may strike.
-  @prop {null | { place_name: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit.
-  @prop {null | { dormant: boolean, can_seek: boolean, memories: number, needed: number }} forgotten - Your way back, if you slept too long and are a forgotten spirit.
+  @prop {null | { place_name: string, state: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit. `state` is "lying", "risen" or "buried".
+  @prop {null | { dormant: boolean, unborn: boolean }} forgotten - Set if you slept too long and are a forgotten spirit, or have not lived yet.
+  @prop {null | { can_seek: boolean, memories: number, needed: number }} afterlife - Your way back to the living, if you are a spirit and awake.
+  @prop {string[]} burials - The names of the dead whose bodies lie here, which you could bury.
   @prop {boolean} canRite - Whether the ground here is stripped enough for a Restoration Rite you could take part in.
   @prop {boolean} riteWaiting - Whether someone else has begun a rite here and is waiting for a second voice.
   @prop {boolean} asleep - Whether you are lying down. If so, waking is the thing to do.
@@ -23,7 +25,8 @@
   ]
   const spirit = Boolean(body) || Boolean(forgotten)
   const dormant = Boolean(forgotten) && forgotten.dormant
-  const canReturn = spirit && body.can_return
+  const lying = Boolean(body) && body.state === 'lying'
+  const canReturn = lying && body.can_return
 </script>
 <style>
   :host { display: block; }
@@ -38,25 +41,25 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} body={null} forgotten={null} asleep={false} online={false} can-rite={false} rite-waiting={false}>
-  <div zb-if={forgotten} role="group" aria-label="Your redemption">
+<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} burials={[]} body={null} forgotten={null} afterlife={null} asleep={false} online={false} can-rite={false} rite-waiting={false}>
+  <div zb-if={spirit} role="group" aria-label="Your way back">
     <button zb-if={dormant} type="button" class="primary" onclick={() => emit('command', 'wake')}>Wake</button>
-    <button zb-if={!dormant} type="button" class="primary" disabled={!forgotten.can_seek} onclick={() => emit('command', 'seek')}>
-      Seek a memory
-      <small>{forgotten.memories} of {forgotten.needed} found</small>
-    </button>
-  </div>
-  <div zb-if={spirit} role="group" aria-label="Your body">
-    <button type="button" class="primary" disabled={!canReturn} onclick={() => emit('command', 'return')}>
+    <button zb-if={lying} type="button" class="primary" disabled={!canReturn} onclick={() => emit('command', 'return')}>
       Return to your body
       <small>{canReturn ? "it lies here" : body.place_name}</small>
     </button>
-    <button type="button" class="danger" onclick={() => emit('command', 'relinquish')}>
-      Give it up
-      <small>be reborn</small>
+    <button zb-if={afterlife} type="button" class="primary" disabled={!afterlife.can_seek} onclick={() => emit('command', 'seek')}>
+      Seek a memory
+      <small>{afterlife.memories} of {afterlife.needed} found</small>
     </button>
   </div>
-  <div zb-if={targets.length + sleepers.length + foes.length > 0} role="group" aria-label="Others here">
+  <div zb-if={targets.length + sleepers.length + foes.length + burials.length > 0} role="group" aria-label="Others here">
+    <zb-each items={burials} as="name" key={name}>
+      <button type="button" onclick={() => emit('command', `bury ${name}`)}>
+        Bury {name}
+        <small>they will remember</small>
+      </button>
+    </zb-each>
     <zb-each items={foes} as="foe" key={foe.name}>
       <button type="button" class="danger" disabled={spirit} onclick={() => emit('command', `attack ${foe.word}`)}>
         Fight {foe.name}

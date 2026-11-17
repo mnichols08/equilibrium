@@ -34,7 +34,7 @@ fn value<T: std::str::FromStr>(flag: &str, given: Option<String>) -> Result<T, S
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
         address: "127.0.0.1:4000".into(),
-        config: Config { seed: 1, bots: 0, founders: 6, data: Some(PathBuf::from("realm")) },
+        config: Config { seed: 1, bots: 0, founders: 12, data: Some(PathBuf::from("realm")) },
         tick_ms: 1_000,
     };
     let mut args = args.skip(1);
@@ -101,7 +101,7 @@ mod tests {
     fn defaults_are_a_local_saved_realm_in_real_time() {
         let options = parse_args(args("equilibrium-server")).unwrap();
         assert_eq!(options.address, "127.0.0.1:4000");
-        assert_eq!(options.config, Config { seed: 1, bots: 0, founders: 6, data: Some(PathBuf::from("realm")) });
+        assert_eq!(options.config, Config { seed: 1, bots: 0, founders: 12, data: Some(PathBuf::from("realm")) });
         assert_eq!(options.tick_ms, 1_000);
     }
 

@@ -41,6 +41,9 @@ pub struct Death {
     pub lost_at: Tick,
     /// Whether the body has risen. There is no returning to it then.
     pub risen: bool,
+    /// Whether someone buried the body. There is no returning to it,
+    /// but the next life will remember this one.
+    pub buried: bool,
 }
 
 /// A spirit whose body died in its sleep. It has no body to return to
@@ -53,6 +56,9 @@ pub struct Forgotten {
     pub dormant: bool,
     /// The places where it has recovered a memory.
     pub found_in: Vec<PlaceId>,
+    /// Whether it has never lived: it came into a world whose lands
+    /// were all founded, uninvited. No clock runs on the unborn.
+    pub unborn: bool,
 }
 
 impl Forgotten {
@@ -84,6 +90,9 @@ pub struct Character {
     health: Meter,
     death: Option<Death>,
     forgotten: Option<Forgotten>,
+    /// The places where a dead spirit has recovered a memory of itself
+    /// on its way back to the living.
+    memories: Vec<PlaceId>,
     /// Which life this is, counting the first as 1.
     life: u32,
     /// How worn the spirit is by recent deaths. It outlasts rebirth.
@@ -131,6 +140,7 @@ impl Character {
             health: Meter::full(0, MAX_HEALTH),
             death: None,
             forgotten: None,
+            memories: Vec::new(),
             life: 1,
             degradation: Meter::empty(0, MOST_DEGRADATION),
             rested: Meter::full(0, FULLY_RESTED as i64),
@@ -345,10 +355,41 @@ impl Character {
             self.waste(now.since(from));
         }
         self.vigil = Duration::ZERO;
-        self.forgotten = Some(Forgotten { played: Duration::ZERO, dormant: true, found_in: Vec::new() });
+        self.forgotten = Some(Forgotten { played: Duration::ZERO, dormant: true, found_in: Vec::new(), unborn: false });
         self.degradation.adjust(1);
         let cleansed = self.shift_taint(-i64::from(self.taint()));
         (core::mem::take(&mut self.pack), cleansed)
+    }
+
+    /// Makes this character a spirit that has not yet lived.
+    pub(crate) fn be_unborn(&mut self) {
+        self.forgotten = Some(Forgotten { played: Duration::ZERO, dormant: false, found_in: Vec::new(), unborn: true });
+    }
+
+    /// Marks the body as buried.
+    pub(crate) fn be_buried(&mut self) {
+        if let Some(death) = &mut self.death {
+            death.buried = true;
+        }
+    }
+
+    /// The places where this spirit has recovered a memory of itself.
+    pub fn memories(&self) -> &[PlaceId] {
+        match &self.forgotten {
+            Some(forgotten) => &forgotten.found_in,
+            None => &self.memories,
+        }
+    }
+
+    /// Records a memory recovered at `place`. Returns how many there are now.
+    pub(crate) fn remember(&mut self, place: PlaceId) -> u32 {
+        let found = match &mut self.forgotten {
+            Some(forgotten) => &mut forgotten.found_in,
+            None => &mut self.memories,
+        };
+        found.push(place);
+        // A world has only so many places.
+        found.len() as u32
     }
 
     /// Marks the body as risen: it is a Body Guard now, and lost to its spirit.
@@ -361,6 +402,7 @@ impl Character {
     /// Goes back into the body, weak but alive. Returns where the body lay.
     pub(crate) fn return_to_body(&mut self) -> Option<PlaceId> {
         let death = self.death.take()?;
+        self.memories.clear();
         self.place = death.body;
         self.health.set(HEALTH_ON_RETURN);
         Some(death.body)
@@ -379,22 +421,37 @@ impl Character {
         let inheritance = inheritance(rebirth.base, self.attributes[lineage].level(), held);
         self.ectoplasm = held - inheritance.spent;
         self.kept = inheritance.percent;
+        // Whoever was buried remembers what they were, and learns it again fast.
+        let buried = self.death.is_some_and(|death| death.buried);
+        let unborn = self.forgotten.as_ref().is_some_and(|forgotten| forgotten.unborn);
         self.death = None;
         self.forgotten = None;
+        self.memories.clear();
         self.place = place;
+        self.home = place;
         self.busy_until = now;
-        self.life += 1;
+        // The unborn have had no life yet: this is their first.
+        self.life += u32::from(!unborn);
         self.health.set(MAX_HEALTH);
         self.rested.set(i64::from(FULLY_RESTED));
         let favoured = rebirth.favoured.map(Attribute::index);
+        let carry = |known: &Proficiency, percent: u32| {
+            if buried {
+                known.reborn_remembering(percent)
+            } else {
+                known.reborn(percent)
+            }
+        };
         for skill in &mut self.skills {
-            *skill = skill.reborn(inheritance.percent);
+            *skill = carry(skill, inheritance.percent);
         }
         for (index, attribute) in self.attributes.iter_mut().enumerate().filter(|(index, _)| *index != lineage) {
             let times = if favoured == Some(index) { DEATH_PLACE_CARRYOVER_TIMES } else { 1 };
-            *attribute = attribute.reborn((inheritance.percent * times).min(100));
+            *attribute = carry(attribute, (inheritance.percent * times).min(100));
         }
-        self.attributes[lineage].practice(LINEAGE_XP_PER_LIFE, &ATTRIBUTE_RULES);
+        if !unborn {
+            self.attributes[lineage].practice(LINEAGE_XP_PER_LIFE, &ATTRIBUTE_RULES);
+        }
     }
 
     /// What the character is called.

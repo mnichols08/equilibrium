@@ -254,14 +254,15 @@ impl Bots {
     }
 
     /// A dead bot makes for its body by the shortest way and returns to
-    /// it as soon as it may. If it is too late, it gives the body up.
+    /// it as soon as it may. If it is too late, or the body is in the
+    /// ground, it goes looking for its memories.
     fn haunt(&mut self, index: usize, death: &Death, session: &mut Session<Game>, events: &mut Events<Game>, now: Tick) -> Result<(), OutOfOrder> {
         let who = self.bots[index].who;
         let world = session.world();
         let here = world.character(who).map(Character::place);
-        let command = if death.risen {
-            // Too late: the body stands guard now. Start again.
-            Some(Command::relinquish(who))
+        let command = if death.risen || death.buried {
+            // No body to go back to: the way to the living is the afterlife.
+            afterlife(world, who)
         } else if here == Some(death.body) {
             if now < death.ready_at {
                 self.bots[index].free_at = death.ready_at;
@@ -291,7 +292,8 @@ impl Bots {
             bot.free_at = now + IDLE;
             return Ok(());
         };
-        let tried = session.submit(now, Command::go(bot.who, leg.exit))?;
+        let exit = way_on(session.world(), bot.who, leg.exit, bot.step);
+        let tried = session.submit(now, Command::go(bot.who, &exit))?;
         let closed = tried.iter().any(|stamped| {
             matches!(stamped.value, Event::Character { outcome: Outcome::ExitClosed { .. }, .. })
         });
@@ -304,6 +306,24 @@ impl Bots {
             bot.free_at = busy_until(session, bot.who, now).max(now + PAUSE);
         }
         Ok(())
+    }
+}
+
+/// The exit a bot takes for a leg of its plan. Plans are written for
+/// the land a bot began in; one reborn elsewhere finds its legs lead
+/// nowhere, and wanders its new land instead, a different way each step.
+fn way_on(game: &Game, who: CharacterId, planned: &str, step: usize) -> alloc::string::String {
+    let Some(here) = game.character(who).map(Character::place) else { return planned.into() };
+    let land = game.zone_at(here);
+    // Plans are written for the first land of all, and on it they are kept to.
+    let planned_for_here = game.zones().first().is_some_and(|first| first.contains(here));
+    if planned_for_here || game.map().exit(here, planned).is_some() {
+        return planned.into();
+    }
+    let ways: Vec<_> = game.map().exits(here).iter().filter(|exit| land.contains(exit.to)).collect();
+    match ways.get(step % ways.len().max(1)) {
+        Some(exit) => exit.label.clone(),
+        None => planned.into(),
     }
 }
 
@@ -371,6 +391,27 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
         return Some(Command::attack(bot.who, target));
     }
     game.can_take(bot.who).then(|| Command::take(bot.who))
+}
+
+/// A spirit's next step through the afterlife: search here if there is
+/// a memory to find, or else make for the first place in this land
+/// that still holds one.
+pub(crate) fn afterlife(game: &Game, who: CharacterId) -> Option<Command> {
+    let me = game.character(who)?;
+    let unsearched = |place: eq_world_graph::PlaceId| {
+        game.map().place(place).is_some_and(|data| data.deposit.is_some()) && !me.memories().contains(&place)
+    };
+    if unsearched(me.place()) {
+        return Some(Command::seek(who));
+    }
+    // Water is nothing to a spirit, so every exit will do.
+    // This land first; another only if this one has too little to find.
+    let near = game.zone_at(me.place()).place_ids();
+    let far = game.zones().iter().flat_map(crate::zone::Zone::place_ids);
+    near.chain(far)
+        .filter(|&place| unsearched(place))
+        .find_map(|place| game.map().first_step(me.place(), place, |_| true))
+        .map(|exit| Command::go(who, &exit.label))
 }
 
 /// A careful bot mends what it would not work. It answers a rite
@@ -454,7 +495,7 @@ mod tests {
             (BRYN, Plan::camp(Policy::Greedy, grotto)),
         ]);
         // Contested ground: the warden only strikes once Bryn is marked.
-        let events = bots.run(&mut session, Tick::new(6_000)).unwrap();
+        let events = bots.run(&mut session, Tick::new(12_000)).unwrap();
         let died = happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { .. } }));
         assert!(died, "Bryn was never killed");
         let bryn = session.world().character(BRYN).unwrap();

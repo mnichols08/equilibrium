@@ -69,8 +69,14 @@ fn a_life_ends_in_the_grotto_and_the_spirit_buys_a_better_next_one() {
 
     // By now the body has risen in the grotto. Nothing to go back to.
     assert!(said(&mut solo, "return").contains("risen as a guard") || said(&mut solo, "return").contains("not here"));
-    let reborn = said(&mut solo, "relinquish");
+    assert!(said(&mut solo, "relinquish").contains("no giving up"));
+    // The long way: a memory here on the beach, and one on each ore shelf.
+    for way in ["seek", "west", "north", "seek", "north"] {
+        solo.handle(way);
+    }
+    let reborn = said(&mut solo, "seek");
     assert!(reborn.contains("into life 2"), "{reborn}");
+    assert_eq!(you(&solo).place(), solo.game().anchor(), "alone in the world, so home is where they arise");
 
     let next = you(&solo);
     assert!(!next.is_spirit());

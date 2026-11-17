@@ -70,8 +70,13 @@ pub struct You {
     pub life: u32,
     /// Their body, if they have died and are walking as a spirit.
     pub body: Option<BodyView>,
-    /// Their redemption, if they slept too long and are a forgotten spirit.
+    /// Their redemption, if they slept too long and are a forgotten
+    /// spirit, or have not been born yet.
     pub forgotten: Option<ForgottenView>,
+    /// The way through the afterlife, for any spirit that is awake.
+    pub afterlife: Option<AfterlifeView>,
+    /// The names of the dead whose bodies lie here and could be buried.
+    pub can_bury: Vec<String>,
     /// Ectoplasm held: the one thing death does not take.
     pub ectoplasm: u64,
     /// Their spirit tier, by name.
@@ -155,6 +160,9 @@ pub struct BodyView {
     pub place: u64,
     /// That place's name.
     pub place_name: &'static str,
+    /// `"lying"` where it fell, `"risen"` as a guard, or `"buried"`.
+    /// Only a body that is lying can be returned to.
+    pub state: &'static str,
     /// Whether the spirit may return to it right now.
     pub can_return: bool,
     /// Seconds until the spirit is free to return, 0 once it is.
@@ -176,9 +184,23 @@ pub struct FoeView {
     pub aggressive: bool,
 }
 
+/// Any spirit's way back to the living: memories of itself, found one
+/// to a place.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AfterlifeView {
+    /// Memories recovered so far.
+    pub memories: u32,
+    /// Memories needed to live again.
+    pub needed: u32,
+    /// Whether there is a memory to seek where the spirit stands.
+    pub can_seek: bool,
+}
+
 /// A forgotten spirit's way back.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ForgottenView {
+    /// Whether the spirit has never lived. The unborn do not fade.
+    pub unborn: bool,
     /// Whether the spirit lies dormant and must wake before anything else.
     pub dormant: bool,
     /// Memories recovered so far.
@@ -260,7 +282,18 @@ impl Scene {
             health: character.health(),
             life: character.life(),
             body: character.death().map(|death| body_view(game, death, here, now)),
+            afterlife: (character.is_spirit() && !character.is_dormant()).then(|| AfterlifeView {
+                memories: character.memories().len() as u32,
+                needed: MEMORIES_TO_REDEEM,
+                can_seek: place.deposit.is_some() && !character.memories().contains(&here),
+            }),
+            can_bury: if character.is_spirit() {
+                Vec::new()
+            } else {
+                game.bodies_at(here).map(|(_, body)| body.name().to_owned()).collect()
+            },
             forgotten: character.forgotten().map(|forgotten| ForgottenView {
+                unborn: forgotten.unborn,
                 dormant: forgotten.dormant,
                 memories: forgotten.memories(),
                 needed: MEMORIES_TO_REDEEM,
@@ -307,10 +340,16 @@ impl Scene {
 
 fn body_view(game: &Game, death: &Death, here: PlaceId, now: Tick) -> BodyView {
     let held_for = death.ready_at.get().saturating_sub(now.get());
+    let state = match (death.buried, death.risen) {
+        (true, _) => "buried",
+        (false, true) => "risen",
+        (false, false) => "lying",
+    };
     BodyView {
+        state,
         place: death.body.get(),
         place_name: game.map().place(death.body).map_or("", |place| place.name),
-        can_return: death.body == here && held_for == 0,
+        can_return: state == "lying" && death.body == here && held_for == 0,
         held_for,
         lost_in: death.lost_at.get().saturating_sub(now.get()),
     }
@@ -493,6 +532,7 @@ mod tests {
         let here = killer.places.iter().find(|place| place.here).unwrap();
         assert_eq!(here.bodies, ["Bryn"]);
         assert!(here.spoils);
+        assert_eq!((killer.you.can_bury.clone(), killer.you.afterlife.clone()), (vec!["Bryn".to_owned()], None));
 
         // Nobody else stood by, so Bryn was pulled back to camp.
         let spirit = Scene::of(&game, bryn, died).unwrap();
@@ -500,10 +540,21 @@ mod tests {
         let body = spirit.you.body.clone().unwrap();
         assert_eq!(body.place, here.id);
         assert_eq!((body.can_return, body.held_for, body.lost_in), (false, 0, CORPSE_TIME.as_ticks()));
+        // Camp holds no memories; the way through the afterlife is out where the work is.
+        assert_eq!(spirit.you.afterlife, Some(AfterlifeView { memories: 0, needed: 3, can_seek: false }));
+        assert!(spirit.you.can_bury.is_empty(), "spirits bury nobody");
 
         game.apply(&Command::go(bryn, "north"), died, &mut events);
         let back = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap();
+        assert!(back.you.afterlife.clone().unwrap().can_seek);
         assert!(back.you.body.unwrap().can_return);
+
+        // Buried, there is no body to go back to, and nothing left to take.
+        game.apply(&Command::bury(ash, bryn), died + TETHERED_WAIT, &mut events);
+        let buried = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap().you.body.unwrap();
+        assert_eq!((buried.state, buried.can_return), ("buried", false));
+        let after = Scene::of(&game, ash, died + TETHERED_WAIT).unwrap();
+        assert!(after.you.can_bury.is_empty() && !after.you.can_take);
         assert_eq!(back.company.len(), 1, "spirits see the living");
     }
 

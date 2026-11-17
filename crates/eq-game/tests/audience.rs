@@ -45,7 +45,7 @@ fn audience_matches_who_the_narrator_speaks_to() {
             16 => Command::rest(who),
             17..=18 => Command::wake(who),
             19..=20 => Command::return_to_body(who),
-            21 => Command::relinquish(who),
+            21 => Command::bury(who, someone),
             22 => Command::seek(who),
             23 => Command::name(who, someone),
             // Creature ids only grow, so the low ones cover every lurker and guard so far.

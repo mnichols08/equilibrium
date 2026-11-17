@@ -37,6 +37,8 @@ pub enum Input {
     Sleep(Duration),
     /// Go through a sleeper's pack, by name.
     Rob(String),
+    /// Bury a body, by the name of whose it is.
+    Bury(String),
     /// Speak a forgotten spirit's name at the shrine.
     Name(String),
     /// Tend a sleeper, by name.
@@ -122,6 +124,10 @@ pub fn parse(line: &str) -> Input {
             None => Input::Unknown(alloc::format!("Which contract? Try \"{verb} 3\". \"board\" lists them.")),
         },
         "collect" => Input::Do(Action::Collect),
+        "bury" => match rest {
+            Some(name) => Input::Bury(name.into()),
+            None => Input::Unknown("Bury whom? Try \"bury bryn\".".into()),
+        },
         "rob" | "steal" => match rest {
             Some(name) => Input::Rob(name.into()),
             None => Input::Unknown("Rob whom? Try \"rob bryn\".".into()),

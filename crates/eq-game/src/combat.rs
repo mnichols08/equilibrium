@@ -39,6 +39,11 @@ pub enum ReturnRefusal {
     NoBody,
     /// The body was left too long and has risen as a Body Guard.
     Risen,
+    /// The body has been buried.
+    Buried,
+    /// There is no giving up and starting again: the way back to the
+    /// living is through the afterlife, memory by memory.
+    Unredeemed,
 }
 
 /// Why something only a founder can do was not done.
