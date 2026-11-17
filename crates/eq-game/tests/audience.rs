@@ -37,7 +37,7 @@ fn audience_matches_who_the_narrator_speaks_to() {
 
         let who = CharacterId::new(script.below(NAMES.len() as u64));
         let someone = CharacterId::new(script.below(NAMES.len() as u64));
-        let command = match script.below(33) {
+        let command = match script.below(35) {
             0..=7 => Command::gather(who),
             8..=12 => Command::go(who, EXITS[script.below(EXITS.len() as u64) as usize]),
             13..=14 => Command::attack(who, someone),
@@ -58,6 +58,7 @@ fn audience_matches_who_the_narrator_speaks_to() {
             29..=30 => Command::accept(who, ContractId::new(script.below(40))),
             31 => Command::withdraw(who, ContractId::new(script.below(40))),
             32 => Command::collect(who),
+            33..=34 => Command::rite(who),
             _ => Command::rob(who, someone),
         };
         let mut events = Vec::new();

@@ -55,6 +55,11 @@ pub struct You {
     pub can_take: bool,
     /// Whether they are lying down, asleep or settling.
     pub asleep: bool,
+    /// Whether they could take part in a rite here: the deposit is hard
+    /// pressed, unwarded, and the land has not marked them.
+    pub can_rite: bool,
+    /// Whether someone else has begun a rite here that waits for an answer.
+    pub rite_waiting: bool,
     /// Health, 0 to 100.
     pub health: u32,
     /// Which life this is, counting the first as 1.
@@ -244,6 +249,10 @@ impl Scene {
             },
             can_take: game.can_take(viewer),
             asleep: character.is_lying_down(),
+            can_rite: !character.is_spirit()
+                && character.standing() != Standing::Marked
+                && place.deposit.is_some_and(|deposit| deposit.needs_rite(now)),
+            rite_waiting: place.deposit.and_then(|deposit| deposit.rite_open(now)).is_some_and(|beginner| beginner != viewer),
             health: character.health(),
             life: character.life(),
             body: character.death().map(|death| body_view(game, death, here, now)),

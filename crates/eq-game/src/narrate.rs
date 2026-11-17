@@ -12,7 +12,7 @@ use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
 use crate::board::{Lot, TradeRefusal};
-use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal, TendRefusal};
+use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
@@ -35,6 +35,8 @@ Commands:
   gather               as a spirit, draw ectoplasm where the living would work
   seek                 as a forgotten spirit, search here for a memory
   name <name>          at camp, speak a forgotten spirit's name to redeem it
+  rite                 begin a Restoration Rite over the deposit here, or
+                       answer one someone else has begun
   tend <name>          look after someone asleep here, so they last longer
   board                at camp, read the Contract Board
   post 10 ore for 30 kelp   at camp, pin up an offer (what you offer is held)
@@ -62,6 +64,12 @@ Ectoplasm is the one thing you keep through death. At rebirth it is
 spent, twenty for each extra percent of the old life you keep, up to
 fifteen. Your Lineage grows with every life and raises it further. Die
 where something can be worked and you remember that work best.
+
+Two people can mend a stripped deposit with a Restoration Rite: one
+begins it, the other answers within a minute and a half. Its strain
+eases, it is brought back to half full, and for fifteen minutes it is
+warded: it yields only while it is
+pristine and at least half full. The land will not answer the marked.
 
 What the dead drop lies in a relic. Common things anyone can take. A
 relic holding tide-glass is sealed to all but its owner until the body
@@ -216,6 +224,23 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             "Your old body is gone. You walk out of the tide at {}, whole and rested, into life {life}. Little of what you knew has come with you.",
             place_name(game, game.anchor()),
         ),
+        Outcome::Warded { resource } => format!(
+            "A ward lies on the {} here. It will not yield until it is pristine and at least half full again.",
+            resource.name(),
+        ),
+        Outcome::CannotRite { why: RiteRefusal::NothingToMend } => "There is nothing here for a rite to mend.".into(),
+        Outcome::CannotRite { why: RiteRefusal::NoNeed } => "The ground here is not hard pressed enough to need a rite.".into(),
+        Outcome::CannotRite { why: RiteRefusal::Marked } => "The land will not answer you while it has you marked.".into(),
+        Outcome::CannotRite { why: RiteRefusal::Warded } => "A ward already lies on this place.".into(),
+        Outcome::RiteBegun => "You begin the rite. It needs a second voice: someone here must answer it soon.".into(),
+        Outcome::RiteDone { with } => format!(
+            "You answer {}'s rite. The ground eases, some of what was taken comes back, and a ward settles over the place.",
+            name_of(game, *with),
+        ),
+        Outcome::RiteAnswered { by } => format!(
+            "{} answers your rite. The ground eases, some of what was taken comes back, and a ward settles over the place.",
+            name_of(game, *by),
+        ),
         Outcome::CannotTend { target, why } => cannot_tend(name_of(game, *target), *why),
         Outcome::Tended { target, vigil } => format!(
             "You see to {} as they sleep. They can lie {} longer than they could alone.",
@@ -299,6 +324,12 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         Outcome::Mauled { by, .. } if actor.place() == here => {
             Some(format!("{} strikes {name}.", capitalise(&being_name(game, *by, viewer))))
         }
+        Outcome::RiteBegun if actor.place() == here => {
+            Some(format!("{name} begins a rite over the ground here. It needs a second voice (rite)."))
+        }
+        Outcome::RiteDone { with } if actor.place() == here && *with != viewer => {
+            Some(format!("{name} answers {}'s rite, and a ward settles over the place.", name_of(game, *with)))
+        }
         Outcome::Tended { target, .. } if actor.place() == here => {
             Some(format!("{name} sees to {} as they sleep.", name_of(game, *target)))
         }
@@ -371,6 +402,13 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     }
     for (id, body) in game.bodies_at(character.place()) {
         lines.push(if id == viewer { "Your body lies here.".into() } else { format!("{}'s body lies here.", body.name()) });
+    }
+    if let Some(deposit) = here.deposit {
+        if deposit.is_warded(now) {
+            lines.push("A ward lies on this place: it yields only while it is pristine and at least half full.".into());
+        } else if let Some(beginner) = deposit.rite_open(now).filter(|beginner| *beginner != viewer) {
+            lines.push(format!("{} has begun a rite here. It needs a second voice (rite).", name_of(game, beginner)));
+        }
     }
     for creature in game.creatures_at(character.place()) {
         lines.push(match creature.being.kind {

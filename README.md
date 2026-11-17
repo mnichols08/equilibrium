@@ -18,6 +18,8 @@ The dead walk as spirits the living cannot see. A spirit can only walk, `return`
 
 A spirit can `gather` too: it draws ectoplasm from any place the living could work. Ectoplasm is the one thing you keep through death. At rebirth it is spent, twenty for each extra percent of the old life you keep (fifteen percent to start, up to fifteen more). Lineage grows with every life and raises it further, and dying where something can be worked keeps twice the share of that work's attribute. Draw a hundred ectoplasm over your lives and your spirit travels twice as fast.
 
+Two people can mend what has been stripped. One begins a Restoration Rite over a hard-pressed deposit (`rite`), another answers within a minute and a half (`rite`): the strain eases, the deposit is brought back to half full, and for fifteen minutes it is warded, yielding nothing unless it is pristine and at least half full. The land will not answer anyone it has marked. This is what lets a careful majority hold a zone against people who strip it.
+
 At camp there is a Contract Board for trading with people who are not there: `post 10 ore for 30 kelp` pins up an offer and the board holds what you offered; `board` lists what is up; `accept 3` pays a contract's price and takes what it holds; the price waits for whoever posted it to `collect`. `withdraw 3` takes your own down.
 
 Being up wears off your rested bonus, and the rested learn faster. `sleep` puts it back, but sleep is only safe at camp: anywhere else a sleeper can be robbed (`rob <name>`), and robbing someone the land has not marked marks the robber. Sleep for more than three days and the body starts to waste, though what it loses comes back four times faster than it was first learned. Someone who looks after a sleeper (`tend <name>`) buys them a day for each tending, up to two weeks more. Sleep for two weeks untended and the body dies where it lies: you wake a forgotten spirit with ten waking hours to `seek` three memories of yourself around the shoreline, or to be named at camp by someone living (`name <name>`). Run out of time and you fade, your name is cut in the camp's stones, and you begin again with almost nothing. Type `help` in the game for commands.
@@ -37,7 +39,7 @@ The server holds one world and keeps it going whether anyone is connected or not
 
 Your character does not leave when you do. Close the connection and they stay on their feet for two minutes, then lie down to sleep where they stand, so where you stop for the night matters. `wait` does nothing here, and `sleep` lasts until you `wake`.
 
-The world is saved in `realm/` as it goes (`--data DIR` to put it elsewhere): every command, in order. Stop the server with Ctrl-C and the next start replays them and carries on from the same tick. `--seed` and `--bots` only matter the first time. The server's bots are all careful, half of them wardens.
+The world is saved in `realm/` as it goes (`--data DIR` to put it elsewhere): every command, in order. Stop the server with Ctrl-C and the next start replays them and carries on from the same tick. `--seed` and `--bots` only matter the first time. The server's bots are mostly careful, with wardens among them and one greedy roamer in every eight for them to deal with.
 
 - `--addr HOST:PORT` to listen somewhere other than `127.0.0.1:4000`.
 - `--tick-ms N` to run world time faster or slower than real time.

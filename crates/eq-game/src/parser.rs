@@ -97,6 +97,7 @@ pub fn parse(line: &str) -> Input {
             Some(name) => Input::Name(name.into()),
             None => Input::Unknown("Name whom? Try \"name bryn\".".into()),
         },
+        "rite" | "mend" => Input::Do(Action::Rite),
         "tend" | "vigil" => match rest {
             Some(name) => Input::Tend(name.into()),
             None => Input::Unknown("Tend whom? Try \"tend bryn\".".into()),

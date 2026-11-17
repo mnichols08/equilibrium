@@ -41,6 +41,19 @@ pub enum ReturnRefusal {
     Risen,
 }
 
+/// Why a Restoration Rite could not be held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RiteRefusal {
+    /// There is nothing here that could be mended.
+    NothingToMend,
+    /// The deposit here is not hard pressed enough to need a rite.
+    NoNeed,
+    /// The land will not answer someone it has marked.
+    Marked,
+    /// A ward already lies on this place.
+    Warded,
+}
+
 /// Why a sleeper could not be tended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TendRefusal {

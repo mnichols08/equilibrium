@@ -124,43 +124,39 @@ fn the_zone_feeds_a_fixed_total_so_more_heads_means_less_each() {
 }
 
 #[test]
-fn one_greedy_player_among_careful_ones_loses_by_it_and_still_ruins_the_rest() {
+fn one_greedy_player_among_careful_ones_loses_by_it_and_the_rest_mend_what_they_strip() {
     let fair = roamers(Policy::Careful, 4);
     let fair_share = fair.carried_by_all() / 4;
 
     let crowd = mixed(1);
     let defector = crowd.carried(0);
-    let best_of_the_rest = (1..4).map(|index| crowd.carried(index)).max().unwrap();
+    let worst_of_the_rest = (1..4).map(|index| crowd.carried(index)).min().unwrap();
 
     // Taint: the defector would have done far better by staying careful.
     assert!(defector * 2 < fair_share, "defecting should not pay: {defector} vs a fair share of {fair_share}");
-    // But nothing yet stops them, so the careful still pay for it.
-    assert!(best_of_the_rest * 3 < fair_share, "the careful should suffer: {best_of_the_rest} vs {fair_share}");
-    assert!(crowd.carried_by_all() < fair.carried_by_all(), "the group as a whole should end up poorer");
-    assert!(crowd.lowest_vitality() < 81, "the zone should lose peak health");
+    // Rites: the careful mend what the defector strips and ward it, so
+    // restraint still earns them most of a fair share. (Before rites
+    // they were left with under a third of one.)
+    assert!(worst_of_the_rest * 5 > fair_share * 4, "the careful should hold their own: {worst_of_the_rest} vs {fair_share}");
+    assert!(crowd.lowest_vitality() > 60, "the zone should stay well clear of collapse: {}", crowd.lowest_vitality());
 }
 
 #[test]
-fn wardens_protect_the_commons() {
+fn wardens_leave_a_defector_with_nothing() {
     let fair_share = roamers(Policy::Careful, 4).carried_by_all() / 4;
     let unguarded = mixed(1);
     let guarded = warded();
 
-    let defector = guarded.carried(0);
     let wardens: Vec<u64> = (1..4).map(|index| guarded.carried(index)).collect();
-    let unguarded_best = (1..4).map(|index| unguarded.carried(index)).max().unwrap();
     let worst_warden = *wardens.iter().min().unwrap();
 
-    // The careful keep most of what restraint should earn them.
-    // (Half as much again, not double: the lurker in the grotto now costs
-    // a careless warden a pack from time to time.)
-    assert!(worst_warden * 2 > unguarded_best * 3, "wardens {wardens:?} vs unguarded {unguarded_best}");
-    assert!(worst_warden * 2 > fair_share, "wardens {wardens:?} vs a fair share of {fair_share}");
-    // The defector is left with next to nothing.
-    assert!(defector * 10 < fair_share, "the defector kept {defector}");
-    // And the zone is spared the worst of it.
-    assert!(guarded.lowest_vitality() > unguarded.lowest_vitality() + 10);
-    assert!(guarded.lowest_vitality() > 30);
+    // Rites already protect the careful. What wardens add is that the
+    // defector is left with next to nothing instead of a poor living.
+    assert!(guarded.carried(0) * 10 < unguarded.carried(0), "{} vs {}", guarded.carried(0), unguarded.carried(0));
+    assert!(guarded.carried(0) * 10 < fair_share, "the defector kept {}", guarded.carried(0));
+    // And it costs the wardens nothing to speak of.
+    assert!(worst_warden * 5 > fair_share * 4, "wardens {wardens:?} vs a fair share of {fair_share}");
+    assert!(guarded.lowest_vitality() > 60);
 }
 
 #[test]
@@ -226,26 +222,29 @@ fn print_crowd_numbers() {
     }
 }
 
-/// An open problem, recorded so that whatever rule solves it has to
-/// change this test.
+/// This was an open problem until Restoration Rites.
 ///
-/// Wardens stop one defector among four (above). They do not stop a few
-/// among many who do not mind dying: three greedy bots among twenty,
-/// eight of them wardens, collapse the shoreline within the hour and
-/// hold it there. Killing a defector wipes their mark and costs them
-/// ten minutes; in a collapsed zone hauls are too thin to earn a new
-/// mark quickly, so they are back at the deposits unmarked. Two trial
-/// fixes (a mark that does not fade while the zone is collapsed; the
-/// land holding the spirit of anyone who dies marked in a collapsed
-/// zone) each left it collapsed for most of a week.
+/// Three greedy bots among twenty, eight of them wardens, used to
+/// collapse the shoreline within the hour and hold it there: bots do
+/// not mind dying, so killing them did not stop them. Now the careful
+/// majority mends each stripped deposit and wards it, and a warded
+/// deposit yields nothing until it is thriving again. Restoring
+/// outpaces stripping.
 #[test]
-fn a_few_defectors_who_do_not_mind_dying_hold_a_crowded_zone_collapsed() {
+fn a_careful_majority_holds_a_crowded_zone_against_defectors_who_do_not_mind_dying() {
     let warden = Plan::roam(Policy::Careful).as_warden();
     let careful = Plan::roam(Policy::Careful);
     let mut plans = vec![Plan::roam(Policy::Greedy); 3];
     plans.extend([warden; 8]);
     plans.extend([careful; 9]);
     let crowd = run(&plans);
-    let collapsed = collapsed_samples(&crowd);
-    assert!(collapsed * 10 >= crowd.samples.len() * 6, "collapsed for only {collapsed} of {} samples", crowd.samples.len());
+    assert_eq!(collapsed_samples(&crowd), 0, "lowest vitality {}", crowd.lowest_vitality());
+}
+
+/// Rites need someone to hold them. With nobody careful about, the
+/// greedy still strip the zone and keep it stripped.
+#[test]
+fn rites_do_nothing_for_a_zone_with_nobody_careful_in_it() {
+    let crowd = roamers(Policy::Greedy, 4);
+    assert!(collapsed_samples(&crowd) * 2 > crowd.samples.len());
 }

@@ -181,6 +181,37 @@ pub struct Deposit {
     pub resource: Resource,
     /// The stock and its wear.
     pub node: Node,
+    /// Until when a rite's ward lies on the deposit. A warded deposit
+    /// yields only to careful hands.
+    pub warded_until: eq_clock::Tick,
+    /// Who has begun a rite here that nobody has yet answered, and when.
+    pub rite_begun: Option<(crate::character::CharacterId, eq_clock::Tick)>,
+}
+
+impl Deposit {
+    /// Whether the deposit could be worked without harm: it is pristine
+    /// and at least half full. This is what a ward insists on.
+    pub fn is_thriving(&self) -> bool {
+        self.node.quality() == eq_nodes::Quality::Pristine && self.node.stock() * 2 >= self.node.capacity()
+    }
+
+    /// Whether the deposit is hard pressed enough for a rite and has no
+    /// ward on it at `now`.
+    pub fn needs_rite(&self, now: eq_clock::Tick) -> bool {
+        !self.is_warded(now) && crate::haul::pressure_percent(&self.node) >= crate::content::RITE_NEEDS_PRESSURE
+    }
+
+    /// Whether a rite's ward lies on the deposit at `now`.
+    pub fn is_warded(&self, now: eq_clock::Tick) -> bool {
+        now < self.warded_until
+    }
+
+    /// Who has begun a rite here that is still waiting to be answered.
+    pub fn rite_open(&self, now: eq_clock::Tick) -> Option<crate::character::CharacterId> {
+        self.rite_begun
+            .filter(|(_, begun)| now.since(*begun) <= crate::content::RITE_WINDOW)
+            .map(|(who, _)| who)
+    }
 }
 
 /// One location on the map.

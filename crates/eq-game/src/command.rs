@@ -37,6 +37,9 @@ pub enum Action {
     Seek,
     /// At the shrine, speak the name of a forgotten spirit to redeem it.
     Name(CharacterId),
+    /// Take part in a Restoration Rite over the deposit here. One
+    /// person begins it; a second, answering in time, completes it.
+    Rite,
     /// Tend someone asleep in the same place, so they can sleep longer
     /// before the long sleep takes them.
     Tend(CharacterId),
@@ -126,6 +129,11 @@ impl Command {
     /// `who` speaks `target`'s name at the shrine.
     pub const fn name(who: CharacterId, target: CharacterId) -> Self {
         Self { who, action: Action::Name(target) }
+    }
+
+    /// `who` takes part in a rite where they stand.
+    pub const fn rite(who: CharacterId) -> Self {
+        Self { who, action: Action::Rite }
     }
 
     /// `who` tends `target` as they sleep.

@@ -7,6 +7,8 @@
   @prop {{ name: string, word: string, health: number }[]} foes - The creatures here, which you may strike.
   @prop {null | { place_name: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit.
   @prop {null | { dormant: boolean, can_seek: boolean, memories: number, needed: number }} forgotten - Your way back, if you slept too long and are a forgotten spirit.
+  @prop {boolean} canRite - Whether the ground here is stripped enough for a Restoration Rite you could take part in.
+  @prop {boolean} riteWaiting - Whether someone else has begun a rite here and is waiting for a second voice.
   @prop {boolean} asleep - Whether you are lying down. If so, waking is the thing to do.
   @prop {boolean} online - Whether the game is on a server, where time passes by itself: no waiting, and sleep lasts until you wake.
   @fires command - A button was pressed; `detail` is the line to send to the game, such as "north" or "wait 10m".
@@ -36,7 +38,7 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} body={null} forgotten={null} asleep={false} online={false}>
+<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} body={null} forgotten={null} asleep={false} online={false} can-rite={false} rite-waiting={false}>
   <div zb-if={forgotten} role="group" aria-label="Your redemption">
     <button zb-if={dormant} type="button" class="primary" onclick={() => emit('command', 'wake')}>Wake</button>
     <button zb-if={!dormant} type="button" class="primary" disabled={!forgotten.can_seek} onclick={() => emit('command', 'seek')}>
@@ -83,6 +85,10 @@
   </div>
   <div role="group" aria-label="Do">
     <button type="button" class="primary" disabled={!canGather} onclick={() => emit('command', 'gather')}>{spirit ? "Draw ectoplasm" : "Gather"}</button>
+    <button zb-if={canRite} type="button" class="primary" onclick={() => emit('command', 'rite')}>
+      {riteWaiting ? "Answer the rite" : "Begin a rite"}
+      <small>{riteWaiting ? "mends this place" : "needs a second voice"}</small>
+    </button>
     <button zb-if={canTake} type="button" class="primary" disabled={spirit} onclick={() => emit('command', 'take')}>Take what's here</button>
     <button type="button" onclick={() => emit('command', 'inspect')}>Inspect</button>
     <button zb-if={asleep} type="button" class="primary" onclick={() => emit('command', 'wake')}>Wake up</button>

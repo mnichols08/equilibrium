@@ -123,17 +123,18 @@ impl Plan {
         CAST.into_iter().cycle().take(size).collect()
     }
 
-    /// A cast for a shared world that has to last: all careful, half of
-    /// them wardens who will answer a player who is not.
+    /// A cast for a shared world that has to last: one greedy roamer
+    /// among every eight, the rest careful, and wardens among them.
     ///
-    /// There are no greedy bots in it on purpose. Bots do not mind
-    /// dying, so a few greedy ones hold a zone collapsed however often
-    /// the wardens kill them (see `eq-server/tests/week.rs`).
+    /// The careful hold Restoration Rites over what the greedy strip,
+    /// which is what keeps the zone standing (`eq-server/tests/week.rs`).
     pub fn settlement(size: usize) -> Vec<Self> {
-        const CAST: [Plan; 6] = [
+        const CAST: [Plan; 8] = [
             Plan::roam(Policy::Careful).as_warden(),
             Plan::camp(Policy::Careful, DEPOSIT_ROUTES[3]),
             Plan::roam(Policy::Careful),
+            Plan::roam(Policy::Greedy),
+            Plan::roam(Policy::Careful).as_warden(),
             Plan::camp(Policy::Careful, DEPOSIT_ROUTES[8]),
             Plan::roam(Policy::Careful).as_warden(),
             Plan::camp(Policy::Careful, DEPOSIT_ROUTES[0]),
@@ -240,6 +241,7 @@ impl Bots {
             Sleep::NotNow => beast_duty(world, bot)
                 .or_else(|| warden_duty(world, bot))
                 .or_else(|| thieving(world, bot, now))
+                .or_else(|| rite_duty(world, bot, now))
                 .map(|command| (command, PAUSE))
                 .or_else(|| bot.plan.policy.wants_to_gather(world, who).then(|| (Command::gather(who), IDLE))),
         };
@@ -371,6 +373,26 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
     game.can_take(bot.who).then(|| Command::take(bot.who))
 }
 
+/// A careful bot mends what it would not work. It answers a rite
+/// someone has begun, and begins one itself if there is anyone awake to
+/// answer. The marked cannot, and the greedy do not.
+fn rite_duty(game: &Game, bot: &Bot, now: Tick) -> Option<Command> {
+    let me = game.character(bot.who)?;
+    if bot.plan.policy != Policy::Careful || me.standing() == Standing::Marked {
+        return None;
+    }
+    let deposit = game.place_of(bot.who)?.deposit?;
+    if !deposit.needs_rite(now) {
+        return None;
+    }
+    let answering = deposit.rite_open(now).is_some_and(|beginner| beginner != bot.who);
+    let waiting = deposit.rite_open(now) == Some(bot.who);
+    let company = game.occupants(me.place()).iter().any(|&other| {
+        other != bot.who && game.character(other).is_some_and(|other| !other.is_spirit() && !other.is_lying_down())
+    });
+    (answering || (company && !waiting)).then(|| Command::rite(bot.who))
+}
+
 /// Any bot fit to fight goes for a creature that would go for it.
 fn beast_duty(game: &Game, bot: &Bot) -> Option<Command> {
     let me = game.character(bot.who)?;
@@ -414,7 +436,9 @@ mod tests {
             (ASH, Plan::camp(Policy::Careful, ledge).as_warden()),
             (BRYN, Plan::camp(Policy::Greedy, ledge)),
         ]);
-        let events = bots.run(&mut session, Tick::new(3_000)).unwrap();
+        // Long enough for one death and the walk back; a second death soon
+        // after would hold the spirit too long to reach the body.
+        let events = bots.run(&mut session, Tick::new(1_500)).unwrap();
         assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Returned })));
         assert!(!happened(&events, |event| matches!(event, Event::Character { outcome: Outcome::Reborn { .. }, .. })));
         assert_eq!(session.world().character(BRYN).unwrap().life(), 1);
