@@ -21,6 +21,10 @@ pub enum Action {
     Wake,
     /// Go through the pack of someone asleep in the same place.
     Rob(CharacterId),
+    /// As a spirit, go back into your body.
+    Return,
+    /// As a spirit, give up your body and be reborn.
+    Relinquish,
 }
 
 /// An action and the character asked to take it.
@@ -61,6 +65,16 @@ impl Command {
     /// `who` goes through `target`'s pack as they sleep.
     pub const fn rob(who: CharacterId, target: CharacterId) -> Self {
         Self { who, action: Action::Rob(target) }
+    }
+
+    /// `who`, a spirit, goes back into their body.
+    pub const fn return_to_body(who: CharacterId) -> Self {
+        Self { who, action: Action::Return }
+    }
+
+    /// `who`, a spirit, gives up their body and is reborn.
+    pub const fn relinquish(who: CharacterId) -> Self {
+        Self { who, action: Action::Relinquish }
     }
 
     /// `who` gathers from the deposit where they stand.

@@ -45,11 +45,11 @@ mod solo;
 mod types;
 mod zone;
 
-pub use character::{Character, CharacterId};
+pub use character::{Character, CharacterId, Death};
 pub use command::{Action, Command};
 pub use event::{Event, Outcome};
 pub use game::Game;
 pub use haul::{pressure_percent, Haul};
 pub use solo::{Reply, Solo};
-pub use types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind, Standing};
+pub use types::{Attribute, Deposit, Health, Passing, Place, Resource, Safety, SkillKind, Standing};
 pub use zone::Zone;

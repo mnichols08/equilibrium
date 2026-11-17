@@ -10,7 +10,9 @@
 
 use eq_clock::Tick;
 use eq_game::content::{LOW_TIDE, TIDE};
-use eq_game::{narrate, pressure_percent, Attribute, CharacterId, Deposit, Game, Place, Resource, SkillKind, Standing};
+use eq_game::{
+    narrate, pressure_percent, Attribute, CharacterId, Death, Deposit, Game, Place, Resource, SkillKind, Standing,
+};
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 use serde::Serialize;
@@ -53,8 +55,10 @@ pub struct You {
     pub can_take: bool,
     /// Health, 0 to 100.
     pub health: u32,
-    /// Whether they have lost a fight and not yet got up.
-    pub down: bool,
+    /// Which life this is, counting the first as 1.
+    pub life: u32,
+    /// Their body, if they have died and are walking as a spirit.
+    pub body: Option<BodyView>,
     /// How rested they are, 0 to 100. The rested learn faster.
     pub rested: u32,
     /// Taint, 0 to 100.
@@ -106,6 +110,8 @@ pub struct PlaceView {
     pub deposit: Option<DepositView>,
     /// Who is here.
     pub people: Vec<PersonView>,
+    /// Whose bodies lie here.
+    pub bodies: Vec<String>,
     /// Whether something lies dropped on the ground here.
     pub spoils: bool,
 }
@@ -123,6 +129,21 @@ pub struct DepositView {
     pub pressure: u32,
 }
 
+/// The viewer's own body, lying where they died.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BodyView {
+    /// The id of the place it lies in.
+    pub place: u64,
+    /// That place's name.
+    pub place_name: &'static str,
+    /// Whether the spirit may return to it right now.
+    pub can_return: bool,
+    /// Seconds until the spirit is free to return, 0 once it is.
+    pub held_for: u64,
+    /// Seconds until the body is lost and the spirit is reborn.
+    pub lost_in: u64,
+}
+
 /// Someone standing in a place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PersonView {
@@ -132,8 +153,6 @@ pub struct PersonView {
     pub you: bool,
     /// Whether the land has marked them.
     pub marked: bool,
-    /// Whether they are down.
-    pub down: bool,
     /// Whether they are asleep.
     pub asleep: bool,
     /// Whether the viewer may attack them right now.
@@ -182,7 +201,8 @@ impl Scene {
             can_gather: place.deposit.is_some_and(|deposit| is_workable(&deposit)),
             can_take: has_spoils(place),
             health: character.health(),
-            down: character.is_down(),
+            life: character.life(),
+            body: character.death().map(|death| body_view(game, death, here, now)),
             rested: character.rested(),
             taint: character.taint(),
             marked: character.standing() == Standing::Marked,
@@ -217,6 +237,17 @@ impl Scene {
     }
 }
 
+fn body_view(game: &Game, death: &Death, here: PlaceId, now: Tick) -> BodyView {
+    let held_for = death.ready_at.get().saturating_sub(now.get());
+    BodyView {
+        place: death.body.get(),
+        place_name: game.map().place(death.body).map_or("", |place| place.name),
+        can_return: death.body == here && held_for == 0,
+        held_for,
+        lost_in: death.lost_at.get().saturating_sub(now.get()),
+    }
+}
+
 fn has_spoils(place: &Place) -> bool {
     place.spoils.iter().any(|&amount| amount > 0)
 }
@@ -243,6 +274,7 @@ fn places(game: &Game, viewer: CharacterId, here: PlaceId, now: Tick) -> Vec<Pla
             here: id == here,
             deposit: place.deposit.as_ref().map(deposit_view),
             people: people(game, viewer, id, now),
+            bodies: game.bodies_at(id).map(|(_, body)| body.name().to_owned()).collect(),
             spoils: has_spoils(place),
         })
         .collect()
@@ -270,12 +302,12 @@ const fn quality_name(quality: Quality) -> &'static str {
 fn people(game: &Game, viewer: CharacterId, place: PlaceId, now: Tick) -> Vec<PersonView> {
     game.occupants(place)
         .iter()
+        .filter(|&&id| game.can_see(viewer, id))
         .filter_map(|&id| Some((id, game.character(id)?)))
         .map(|(id, character)| PersonView {
             name: character.name().to_owned(),
             you: id == viewer,
             marked: character.standing() == Standing::Marked,
-            down: character.is_down(),
             asleep: character.is_asleep(now),
             can_attack: game.can_attack(viewer, id).is_ok(),
             can_rob: game.can_rob(viewer, id, now).is_ok(),
@@ -337,15 +369,58 @@ mod tests {
             name: "You".into(),
             you: true,
             marked: false,
-            down: false,
             asleep: false,
             can_attack: false,
             can_rob: false,
         };
         assert_eq!(scene.you.rested, 100);
         assert_eq!(here[0].people, [you]);
-        assert_eq!((scene.you.health, scene.you.down, scene.you.can_take), (100, false, false));
+        assert_eq!((scene.you.health, scene.you.life, scene.you.can_take), (100, 1, false));
+        assert_eq!(scene.you.body, None);
+        assert!(scene.places.iter().all(|place| place.bodies.is_empty()));
         assert!(scene.places.iter().all(|place| !place.spoils));
+    }
+
+    #[test]
+    fn the_dead_see_their_body_and_the_living_see_only_the_body() {
+        use eq_events::World;
+        use eq_game::content::{ATTACK_TIME, CORPSE_TIME, GATHER_TIME, TETHERED_WAIT};
+        use eq_game::Command;
+
+        let (ash, bryn) = (CharacterId::new(0), CharacterId::new(1));
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ash, "north"), Tick::new(0), &mut events);
+        game.apply(&Command::go(bryn, "north"), Tick::new(0), &mut events);
+        let mut now = 30;
+        while game.character(bryn).unwrap().standing() == Standing::Clean {
+            game.apply(&Command::gather(bryn), Tick::new(now), &mut events);
+            now += GATHER_TIME.as_ticks();
+        }
+        while !game.character(bryn).unwrap().is_spirit() {
+            game.apply(&Command::attack(ash, bryn), Tick::new(now), &mut events);
+            now += ATTACK_TIME.as_ticks();
+        }
+        // The blow that killed landed one exchange before `now`.
+        let died = Tick::new(now - ATTACK_TIME.as_ticks());
+
+        let killer = Scene::of(&game, ash, died).unwrap();
+        assert!(killer.company.is_empty(), "the living do not see spirits");
+        let here = killer.places.iter().find(|place| place.here).unwrap();
+        assert_eq!(here.bodies, ["Bryn"]);
+        assert!(here.spoils);
+
+        // Nobody else stood by, so Bryn was pulled back to camp.
+        let spirit = Scene::of(&game, bryn, died).unwrap();
+        assert_eq!(spirit.you.place_name, "Tidewatch Camp");
+        let body = spirit.you.body.clone().unwrap();
+        assert_eq!(body.place, here.id);
+        assert_eq!((body.can_return, body.held_for, body.lost_in), (false, 0, CORPSE_TIME.as_ticks()));
+
+        game.apply(&Command::go(bryn, "north"), died, &mut events);
+        let back = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap();
+        assert!(back.you.body.unwrap().can_return);
+        assert_eq!(back.company.len(), 1, "spirits see the living");
     }
 
     #[test]

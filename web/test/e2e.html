@@ -138,14 +138,16 @@
         expect(button('Attack')?.textContent.trim() === 'Attack Bryn', 'an Attack Bryn button once the marked bot is caught in the open')
         expect(page.querySelector('eq-status').textContent.includes('Bryn (marked)'), 'the status to show Bryn as marked')
 
-        // Fight until Bryn is down, then pick up what was dropped.
+        // Fight until Bryn dies, then pick up what was dropped.
         for (let blow = 0; blow < 20 && button('Attack'); blow++) {
             press(button('Attack'))
             await sleep(0)
         }
-        await until(() => logText().includes('Bryn goes down.'), 'Bryn to go down')
+        await until(() => logText().includes('Bryn dies.'), 'Bryn to die')
         expect(/You strike Bryn for \d+\./.test(logText()), 'your blows to be logged')
-        expect(page.querySelector('eq-status').textContent.includes('Bryn (down)'), 'the status to show Bryn as down')
+        expect(!page.querySelector('eq-status').textContent.includes('Bryn'), 'the dead to be out of sight of the living')
+        expect(page.querySelector('eq-map .tile.here .body'), 'a body to show on your tile')
+        expect(!button('Return'), 'no Return button for the living')
         expect(page.querySelector('eq-map .tile.here .spoils'), 'dropped goods to show on your tile')
 
         press(await until(() => button('Take'), 'a Take button'))

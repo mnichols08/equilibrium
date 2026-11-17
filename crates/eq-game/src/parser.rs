@@ -82,6 +82,8 @@ pub fn parse(line: &str) -> Input {
             None => Input::Unknown("Sleep how long? Try \"sleep\", \"sleep 8h\" or \"sleep 4d\".".into()),
         },
         "wake" => Input::Do(Action::Wake),
+        "return" => Input::Do(Action::Return),
+        "relinquish" | "rebirth" => Input::Do(Action::Relinquish),
         "rob" | "steal" => match rest {
             Some(name) => Input::Rob(name.into()),
             None => Input::Unknown("Rob whom? Try \"rob bryn\".".into()),
@@ -179,6 +181,8 @@ mod tests {
         assert_eq!(parse("sleep 999d"), Input::Sleep(MAX_SLEEP));
         assert!(matches!(parse("sleep soundly"), Input::Unknown(_)));
         assert_eq!(parse("wake"), Input::Do(Action::Wake));
+        assert_eq!(parse("return"), Input::Do(Action::Return));
+        assert_eq!(parse("relinquish"), Input::Do(Action::Relinquish));
         assert_eq!(parse("rob Ash"), Input::Rob("ash".into()));
         assert!(matches!(parse("rob"), Input::Unknown(_)));
     }

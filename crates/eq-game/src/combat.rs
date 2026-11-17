@@ -19,14 +19,22 @@ use crate::types::{Safety, Standing};
 pub enum Refusal {
     /// The target is the attacker.
     Yourself,
-    /// The target is not in the same place.
+    /// The target is not in the same place, or is a spirit and cannot
+    /// be touched.
     NotHere,
-    /// The target is already down.
-    AlreadyDown,
     /// This place is a haven.
     Haven,
     /// This is wilderness and the target carries no mark.
     Unmarked,
+}
+
+/// Why a spirit could not return to its body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReturnRefusal {
+    /// The spirit is not where its body lies.
+    NotAtBody,
+    /// The spirit is held back until this tick.
+    TooSoon(eq_clock::Tick),
 }
 
 /// Why a robbery was not allowed.

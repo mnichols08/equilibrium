@@ -124,11 +124,40 @@ pub const MENDING: i64 = 1;
 /// Health mended each time in a haven.
 pub const HAVEN_MENDING: i64 = 5;
 
-/// How long a character stays down after losing a fight.
-pub const DOWNED_TIME: Duration = Duration::minutes(5);
+/// How long a body lies where it fell before it is lost and its spirit
+/// must be reborn.
+pub const CORPSE_TIME: Duration = Duration::minutes(10);
 
-/// The health a character has when they get back up.
-pub const HEALTH_ON_RISING: i64 = 25;
+/// How long a tethered spirit waits before it can return to its body.
+pub const TETHERED_WAIT: Duration = Duration::minutes(1);
+
+/// How long a corrupted spirit is held before it can start back.
+pub const CORRUPTED_WAIT: Duration = Duration::minutes(5);
+
+/// Dying wears the spirit. Each recent death holds the next one back
+/// this much longer before it can return, so someone killed again and
+/// again soon cannot reach their body in time and must be reborn.
+pub const DEGRADATION_WAIT: Duration = Duration::minutes(3);
+
+/// How long one death's wear on the spirit takes to fade.
+pub const DEGRADATION_FADES_EVERY: Duration = Duration::minutes(30);
+
+/// The most deaths' worth of wear a spirit can carry.
+pub const MOST_DEGRADATION: i64 = 5;
+
+/// The health a character has on returning to their body.
+pub const HEALTH_ON_RETURN: i64 = 25;
+
+/// The share of each skill and attribute that carries into a new life,
+/// as a percentage.
+pub const REBIRTH_CARRYOVER_PERCENT: u32 = 15;
+
+/// Vitality a zone loses for each death in it. Small on purpose: one
+/// death is a scratch, and it takes a massacre to sicken a zone.
+pub const CORRUPTION_PER_DEATH: i64 = 2;
+
+/// How long one point of corruption takes to fade.
+pub const CORRUPTION_FADES_EVERY: Duration = Duration::minutes(2);
 
 /// How long it takes to pick up what lies on the ground.
 pub const TAKE_TIME: Duration = Duration::seconds(5);

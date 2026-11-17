@@ -87,6 +87,7 @@ name = "eq-web"
 version = "0.1.0"
 dependencies = [
  "eq-clock",
+ "eq-events",
  "eq-game",
  "eq-nodes",
  "eq-world-graph",

@@ -256,14 +256,15 @@ mod tests {
         let mut said = Vec::new();
         for _ in 0..12 {
             said.extend(solo.handle("ATTACK Bryn").lines);
-            if said.iter().any(|line| line.starts_with("Bryn goes down.")) {
+            if said.iter().any(|line| line.starts_with("Bryn dies.")) {
                 break;
             }
         }
         assert!(said.iter().any(|line| line.starts_with("You strike Bryn for ")), "{said:?}");
         assert!(said.iter().any(|line| line.starts_with("Bryn strikes you for ")), "{said:?}");
-        assert!(said.iter().any(|line| line.starts_with("Bryn goes down.")), "{said:?}");
-        assert!(solo.look().contains("Bryn (down)"));
+        assert!(said.iter().any(|line| line.starts_with("Bryn dies.")), "{said:?}");
+        assert!(solo.look().contains("Bryn's body lies here."));
+        assert!(!solo.look().contains("Also here: Bryn"), "the living do not see spirits");
         assert!(solo.look().contains("Lying on the ground: "));
 
         let took = solo.handle("take").lines;
