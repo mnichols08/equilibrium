@@ -13,8 +13,8 @@ use eq_clock::{Duration, Tick};
 use eq_events::{Events, OutOfOrder, Session};
 use eq_nodes::Quality;
 
-use crate::content::{CIRCUIT, DEPOSIT_ROUTES, MIN_WORKABLE_STOCK};
-use crate::{CharacterId, Command, Event, Game, Outcome, Standing};
+use crate::content::{CIRCUIT, DEPOSIT_ROUTES, FULL_REST, MIN_WORKABLE_STOCK};
+use crate::{CharacterId, Command, Event, Game, Outcome, Safety, Standing};
 
 /// A warden with less health than this leaves fighting to others.
 const HEALTH_TO_FIGHT: u32 = 40;
@@ -178,32 +178,50 @@ impl Bots {
         (0..self.bots.len()).min_by_key(|&index| self.bots[index].free_at).filter(|&index| self.bots[index].free_at < until)
     }
 
-    /// One bot's turn. In order of preference: a warden deals with a
-    /// marked character or with spoils on the ground; any bot gathers if
-    /// its policy says so; otherwise it walks the next leg of its plan.
+    /// One bot's turn. In order of preference: sleep if worn out and
+    /// somewhere it would sleep; a warden deals with a marked character
+    /// or with spoils on the ground; a greedy bot robs a sleeper; any bot
+    /// gathers if its policy says so; otherwise it walks the next leg of
+    /// its plan.
     fn take_turn(&mut self, index: usize, session: &mut Session<Game>, events: &mut Events<Game>) -> Result<(), OutOfOrder> {
-        let bot = &mut self.bots[index];
-        let now = bot.free_at.max(session.now());
+        let now = self.bots[index].free_at.max(session.now());
         // Bring the world up to the bot's turn first, so it decides on
         // what is there now and not on what was there when someone last
         // acted.
         events.extend(session.advance_to(now)?);
-        let busy_until = |session: &Session<Game>| session.world().character(bot.who).map_or(now, |character| character.busy_until());
 
-        if let Some(until) = session.world().character(bot.who).and_then(|character| character.down_until()) {
-            bot.free_at = until.max(now + PAUSE);
+        let (bot, world) = (&self.bots[index], session.world());
+        let who = bot.who;
+        if let Some(until) = world.character(who).and_then(|character| character.down_until()) {
+            self.bots[index].free_at = until.max(now + PAUSE);
             return Ok(());
         }
-        if let Some(duty) = warden_duty(session.world(), bot) {
-            events.extend(session.submit(now, duty)?);
-            bot.free_at = busy_until(session).max(now + PAUSE);
-            return Ok(());
-        }
-        if bot.plan.policy.wants_to_gather(session.world(), bot.who) {
-            events.extend(session.submit(now, Command::gather(bot.who))?);
-            bot.free_at = busy_until(session).max(now + IDLE);
-            return Ok(());
-        }
+        // The command to give, and the least time before the next turn.
+        let choice = match sleep_duty(world, bot, now) {
+            Sleep::Until(wake_at) => {
+                self.bots[index].free_at = wake_at.max(now + PAUSE);
+                return Ok(());
+            }
+            // Worn out: no stopping to gather on the way to shelter.
+            Sleep::HeadHome => None,
+            Sleep::Do(command) => Some((command, PAUSE)),
+            Sleep::NotNow => warden_duty(world, bot)
+                .or_else(|| thieving(world, bot, now))
+                .map(|command| (command, PAUSE))
+                .or_else(|| bot.plan.policy.wants_to_gather(world, who).then(|| (Command::gather(who), IDLE))),
+        };
+        let Some((command, pause)) = choice else {
+            return self.walk(index, session, events, now);
+        };
+        events.extend(session.submit(now, command)?);
+        self.bots[index].free_at = busy_until(session, who, now).max(now + pause);
+        Ok(())
+    }
+
+    /// Walks the next leg of the bot's plan, or stands idle if it has
+    /// nowhere to go.
+    fn walk(&mut self, index: usize, session: &mut Session<Game>, events: &mut Events<Game>, now: Tick) -> Result<(), OutOfOrder> {
+        let bot = &mut self.bots[index];
         let Some(leg) = bot.plan.leg(bot.step) else {
             bot.free_at = now + IDLE;
             return Ok(());
@@ -218,10 +236,58 @@ impl Bots {
         } else {
             // A step that led nowhere (somewhere flooded) is skipped.
             bot.step += 1;
-            bot.free_at = busy_until(session).max(now + PAUSE);
+            bot.free_at = busy_until(session, bot.who, now).max(now + PAUSE);
         }
         Ok(())
     }
+}
+
+/// When `who` will be free to act again, or `now` if they are unknown.
+fn busy_until(session: &Session<Game>, who: CharacterId, now: Tick) -> Tick {
+    session.world().character(who).map_or(now, |character| character.busy_until())
+}
+
+/// What a bot should do about sleep on this turn.
+enum Sleep {
+    /// Nothing: carry on with the day.
+    NotNow,
+    /// Lie down, or wake up.
+    Do(Command),
+    /// Already asleep: nothing to do before this tick.
+    Until(Tick),
+    /// Worn out but not somewhere it would sleep: keep walking.
+    HeadHome,
+}
+
+/// A bot sleeps a full night once its rest is spent. Roamers walk on
+/// until they reach a haven; campers sleep where they work, and take
+/// their chances.
+fn sleep_duty(game: &Game, bot: &Bot, now: Tick) -> Sleep {
+    let Some(me) = game.character(bot.who) else { return Sleep::NotNow };
+    if let Some(asleep_from) = me.asleep_from() {
+        let wake_at = asleep_from + FULL_REST;
+        return if now < wake_at { Sleep::Until(wake_at) } else { Sleep::Do(Command::wake(bot.who)) };
+    }
+    if me.rested() > 0 {
+        return Sleep::NotNow;
+    }
+    let in_haven = game.place_of(bot.who).is_some_and(|place| place.safety == Safety::Haven);
+    let camps = bot.plan.circuit.is_empty() && bot.step >= bot.plan.approach.len();
+    if in_haven || camps {
+        Sleep::Do(Command::rest(bot.who))
+    } else {
+        Sleep::HeadHome
+    }
+}
+
+/// A greedy bot goes through the pack of any sleeper it finds unguarded.
+fn thieving(game: &Game, bot: &Bot, now: Tick) -> Option<Command> {
+    if bot.plan.policy != Policy::Greedy {
+        return None;
+    }
+    let here = game.character(bot.who)?.place();
+    let sleeper = game.occupants(here).iter().copied().find(|&other| game.can_rob(bot.who, other, now).is_ok())?;
+    Some(Command::rob(bot.who, sleeper))
 }
 
 /// What a warden would do before anything else: challenge a marked
@@ -264,6 +330,73 @@ mod tests {
         assert!(!events.iter().any(|stamped| {
             matches!(stamped.value, Event::Character { who: ASH, outcome: Outcome::Downed { .. } })
         }));
+    }
+
+    /// How long a bot stays up before it must sleep, with a little over.
+    const A_LONG_DAY: u64 = crate::content::RESTED_LASTS.as_ticks() + 3_600;
+
+    fn woke(events: &Events<Game>, who: CharacterId) -> Option<Outcome> {
+        events.iter().find_map(|stamped| match &stamped.value {
+            Event::Character { who: woken, outcome: outcome @ Outcome::Woke { .. } } if *woken == who => Some(outcome.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_worn_out_roamer_walks_home_sleeps_a_night_and_wakes_rested() {
+        let mut session = session(&["Ash"]);
+        let mut bots = Bots::new([(ASH, Plan::roam(Policy::Careful))]);
+        let mut events = bots.run(&mut session, Tick::new(A_LONG_DAY)).unwrap();
+
+        let ash = session.world().character(ASH).unwrap();
+        assert!(ash.is_asleep(session.now()), "Ash should be asleep by now");
+        assert_eq!(session.world().place_of(ASH).unwrap().name, "Tidewatch Camp");
+
+        events.extend(bots.run(&mut session, Tick::new(A_LONG_DAY + FULL_REST.as_ticks())).unwrap());
+        let Some(Outcome::Woke { slept, rested, wasted }) = woke(&events, ASH) else { panic!("Ash never woke") };
+        assert_eq!((slept, rested, wasted), (FULL_REST, 100, 0));
+    }
+
+    #[test]
+    fn a_camper_sleeps_where_it_works() {
+        let mut session = session(&["Ash"]);
+        let mut bots = Bots::new([(ASH, Plan::camp(Policy::Careful, DEPOSIT_ROUTES[0]))]);
+        bots.run(&mut session, Tick::new(A_LONG_DAY)).unwrap();
+        assert!(session.world().character(ASH).unwrap().is_asleep(session.now()));
+        assert_eq!(session.world().place_of(ASH).unwrap().name, "Ore Ledge");
+    }
+
+    #[test]
+    fn a_greedy_bot_robs_a_sleeper_in_the_wilds_and_is_marked_for_it() {
+        // Ash is played by hand: walk to the ledge, gather, lie down.
+        let mut session = session(&["Ash", "Bryn"]);
+        session.submit(Tick::new(0), Command::go(ASH, "north")).unwrap();
+        session.submit(Tick::new(30), Command::gather(ASH)).unwrap();
+        session.submit(Tick::new(35), Command::rest(ASH)).unwrap();
+
+        let mut bots = Bots::new([(BRYN, Plan::camp(Policy::Greedy, DEPOSIT_ROUTES[0]))]);
+        let events = bots.run(&mut session, Tick::new(200)).unwrap();
+
+        let robbed = Event::Character { who: ASH, outcome: Outcome::Robbed };
+        assert!(events.iter().any(|stamped| stamped.value == robbed), "Ash was never robbed");
+        let (ash, bryn) = (session.world().character(ASH).unwrap(), session.world().character(BRYN).unwrap());
+        assert_eq!(ash.carried_total(), 0);
+        assert!(ash.is_asleep(session.now()), "being robbed should not wake you");
+        assert_eq!(bryn.standing(), Standing::Marked);
+    }
+
+    #[test]
+    fn nobody_is_robbed_asleep_at_camp() {
+        let mut session = session(&["Ash", "Bryn"]);
+        session.submit(Tick::new(0), Command::go(ASH, "north")).unwrap();
+        session.submit(Tick::new(30), Command::gather(ASH)).unwrap();
+        session.submit(Tick::new(35), Command::go(ASH, "south")).unwrap();
+        session.submit(Tick::new(65), Command::rest(ASH)).unwrap();
+
+        // Bryn never leaves camp, and would rob Ash if it could.
+        let mut bots = Bots::new([(BRYN, Plan::camp(Policy::Greedy, &[]))]);
+        bots.run(&mut session, Tick::new(1_000)).unwrap();
+        assert!(session.world().character(ASH).unwrap().carried_total() > 0);
     }
 
     #[test]

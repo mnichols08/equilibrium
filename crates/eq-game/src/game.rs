@@ -8,12 +8,14 @@ use eq_rng::Rng;
 use eq_world_graph::{Graph, PlaceId};
 
 use crate::character::{Character, CharacterId};
-use crate::combat::{may_attack, Blow, Refusal};
+use crate::combat::{may_attack, may_rob, Blow, Refusal, RobRefusal};
 use crate::command::{Action, Command};
 use crate::content::{
     self, ATTACK_TIME, BASE_EFFORT, DAMAGE_SPREAD, DOWNED_TIME, EFFORT_SPREAD, GATHER_TIME, HAVEN_MENDING,
-    HEALTH_MENDS_EVERY, MENDING, MIN_WORKABLE_STOCK, TAINT_FADES_EVERY, TAKE_TIME, TRAVEL_TIME,
+    HEALTH_MENDS_EVERY, MENDING, MIN_WORKABLE_STOCK, RESTED_LASTS, SETTLE_TIME, TAINT_FADES_EVERY, TAINT_FOR_ROBBING,
+    TAKE_TIME, TRAVEL_TIME,
 };
+use crate::rest::FULLY_RESTED;
 use crate::event::{Event, Outcome};
 use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
@@ -107,6 +109,28 @@ impl Game {
         may_attack(safety, victim.standing())
     }
 
+    /// Whether `robber` may go through `target`'s pack at `now`.
+    pub fn can_rob(&self, robber: CharacterId, target: CharacterId, now: Tick) -> Result<(), RobRefusal> {
+        if robber == target {
+            return Err(RobRefusal::Yourself);
+        }
+        let (Some(thief), Some(victim)) = (self.character(robber), self.character(target)) else {
+            return Err(RobRefusal::NotHere);
+        };
+        if thief.place() != victim.place() {
+            return Err(RobRefusal::NotHere);
+        }
+        if !victim.is_asleep(now) {
+            return Err(RobRefusal::Awake);
+        }
+        let safety = self.place_of(robber).map_or(Safety::Haven, |place| place.safety);
+        may_rob(safety)?;
+        if victim.carried_total() == 0 {
+            return Err(RobRefusal::NothingToSteal);
+        }
+        Ok(())
+    }
+
     /// Everyone who should be told about `event`, in id order.
     ///
     /// This is who is close enough to notice, not who the event is about.
@@ -126,7 +150,8 @@ impl Game {
 
     /// The actor always learns their own outcome. Bystanders see only
     /// what is visible: coming, going, gathering, being marked, blows
-    /// landing, falling, rising and picking things up.
+    /// landing, falling, rising, picking things up, lying down, waking
+    /// and going through a sleeper's pack.
     fn audience_of_outcome(&self, who: CharacterId, outcome: &Outcome) -> Vec<CharacterId> {
         let mut audience = alloc::vec![who];
         let here = self.character(who).map(Character::place);
@@ -144,7 +169,13 @@ impl Game {
             | Outcome::StandingChanged { to: Standing::Marked, .. }
             | Outcome::Downed { .. }
             | Outcome::Rose
-            | Outcome::Took { .. } => {
+            | Outcome::Took { .. }
+            | Outcome::LayDown { .. }
+            | Outcome::Stole { .. } => {
+                audience.extend_from_slice(here.map_or(&[], |place| self.occupants(place)));
+            }
+            // Getting up before sleep came is nobody else's business.
+            Outcome::Woke { slept, .. } if slept.as_ticks() > 0 => {
                 audience.extend_from_slice(here.map_or(&[], |place| self.occupants(place)));
             }
             _ => {}
@@ -161,6 +192,15 @@ impl Game {
             outcomes.push(Outcome::Down { until });
             return;
         }
+        // Waking is the one thing a sleeper, or someone settling, can do.
+        if matches!(action, Action::Wake) {
+            outcomes.push(self.characters[index].wake(now).unwrap_or(Outcome::NotAsleep));
+            return;
+        }
+        if self.characters[index].is_asleep(now) {
+            outcomes.push(Outcome::Asleep);
+            return;
+        }
         let busy_until = self.characters[index].busy_until();
         if now < busy_until {
             outcomes.push(Outcome::Busy { until: busy_until });
@@ -171,6 +211,45 @@ impl Game {
             Action::Gather => self.gather(index, now, outcomes, events),
             Action::Attack(target) => self.attack(index, *target, now, outcomes, events),
             Action::Take => self.take(index, now, outcomes),
+            Action::Rest => self.rest(index, now, outcomes),
+            Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
+            Action::Wake => {}
+        }
+    }
+
+    /// Settles down. Sleep begins after a short while if nothing disturbs it.
+    fn rest(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let asleep_at = now + SETTLE_TIME;
+        self.characters[index].lie_down(asleep_at);
+        outcomes.push(Outcome::LayDown { asleep_at });
+    }
+
+    /// Goes through a sleeper's pack. Robbing someone the land has not
+    /// marked taints the robber enough to be marked for it.
+    fn rob(&mut self, index: usize, target: CharacterId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        if let Err(why) = self.can_rob(id_at(index), target, now) {
+            outcomes.push(Outcome::CannotRob { target, why });
+            return;
+        }
+        let Some(victim) = self.index_of(target) else { return };
+        let wronged = self.characters[victim].standing() == Standing::Clean;
+        let spoils = self.characters[victim].empty_pack();
+        events.push(Event::Character { who: target, outcome: Outcome::Robbed });
+
+        let robber = &mut self.characters[index];
+        robber.stow_all(spoils);
+        robber.busy_until = now + TAKE_TIME;
+        outcomes.push(Outcome::Stole { target, spoils });
+        if wronged {
+            outcomes.extend(robber.shift_taint(TAINT_FOR_ROBBING));
+        }
+    }
+
+    /// Wakes a character who has been struck. A blow ends sleep at once,
+    /// and stops someone who was only settling from getting there.
+    fn rouse(&mut self, index: usize, now: Tick, events: &mut Vec<Event>) {
+        if let Some(outcome) = self.characters[index].wake(now) {
+            events.push(Event::Character { who: id_at(index), outcome });
         }
     }
 
@@ -185,11 +264,18 @@ impl Game {
         let Some(victim) = self.index_of(target) else { return };
         self.characters[index].busy_until = now + ATTACK_TIME;
 
+        let caught_lying = self.characters[victim].is_lying_down();
         let (damage, health) = self.strike(index, victim);
         outcomes.push(Outcome::Struck { target, damage });
         events.push(Event::Character { who: target, outcome: Outcome::Hurt { by: attacker, damage, health } });
+        self.rouse(victim, now, events);
         if health == 0 {
             self.fell(victim, attacker, now, events);
+            return;
+        }
+        // Someone caught lying down is on their feet now, but too late to
+        // answer this blow.
+        if caught_lying {
             return;
         }
 
@@ -243,8 +329,19 @@ impl Game {
         }
     }
 
-    /// Health mends slowly everywhere and quickly in a haven. Those who
-    /// are down mend only by getting up.
+    /// The rested bonus wears off while a character is up and about.
+    fn tire(&mut self, now: Tick) {
+        let every = RESTED_LASTS.as_ticks() / u64::from(FULLY_RESTED);
+        if !now.get().is_multiple_of(every) {
+            return;
+        }
+        for character in self.characters.iter_mut().filter(|character| !character.is_lying_down()) {
+            character.tire();
+        }
+    }
+
+    /// Health mends slowly everywhere, and quickly in a haven or asleep.
+    /// Those who are down mend only by getting up.
     fn mend(&mut self, now: Tick) {
         if !now.get().is_multiple_of(HEALTH_MENDS_EVERY.as_ticks()) {
             return;
@@ -252,7 +349,8 @@ impl Game {
         let map = self.zone.map();
         for character in self.characters.iter_mut().filter(|character| !character.is_down()) {
             let in_haven = map.place(character.place()).is_some_and(|place| place.safety == Safety::Haven);
-            character.mend(if in_haven { HAVEN_MENDING } else { MENDING });
+            let mending_well = in_haven || character.is_asleep(now);
+            character.mend(if mending_well { HAVEN_MENDING } else { MENDING });
         }
     }
 
@@ -355,6 +453,7 @@ impl World for Game {
     fn tick(&mut self, now: Tick, events: &mut Vec<Event>) {
         self.zone.tick(now, events);
         self.fade_taint(now, events);
+        self.tire(now);
         self.mend(now);
         self.raise_the_fallen(now, events);
     }
@@ -378,6 +477,7 @@ impl World for Game {
 mod tests {
     use super::*;
     use crate::types::Resource;
+    use eq_clock::Duration;
 
     const ASH: CharacterId = CharacterId::new(0);
     const BRYN: CharacterId = CharacterId::new(1);
@@ -558,6 +658,207 @@ mod tests {
             game.tick(Tick::new(tick), &mut events);
         }
         assert_eq!(game.character(ASH).unwrap().health(), 100);
+    }
+
+    fn ticks(game: &mut Game, from: u64, to: u64) -> Vec<Event> {
+        let mut events = Vec::new();
+        for tick in from..=to {
+            game.tick(Tick::new(tick), &mut events);
+        }
+        events
+    }
+
+    fn woke(events: &[Event]) -> Option<(Duration, u32, u32)> {
+        events.iter().rev().find_map(|event| match event {
+            Event::Character { outcome: Outcome::Woke { slept, rested, wasted }, .. } => Some((*slept, *rested, *wasted)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn sleep_comes_after_settling_and_a_sleeper_can_only_wake() {
+        let mut game = Game::new(1, &["Ash"]);
+        let mut events = Vec::new();
+        game.apply(&Command::rest(ASH), Tick::new(0), &mut events);
+        let asleep_at = Tick::ZERO + SETTLE_TIME;
+        assert_eq!(outcome(&events), Some(&Outcome::LayDown { asleep_at }));
+        assert!(game.character(ASH).unwrap().is_lying_down());
+        assert!(!game.character(ASH).unwrap().is_asleep(Tick::new(10)));
+
+        game.apply(&Command::gather(ASH), Tick::new(10), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::Busy { .. })), "still settling");
+        game.apply(&Command::go(ASH, "north"), asleep_at, &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Asleep));
+        assert_eq!(game.place_of(ASH).unwrap().name, "Tidewatch Camp");
+
+        game.apply(&Command::wake(ASH), Tick::new(100), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::Woke { .. })));
+        game.apply(&Command::wake(ASH), Tick::new(101), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NotAsleep));
+    }
+
+    #[test]
+    fn being_up_spends_rest_and_a_nights_sleep_restores_it() {
+        let mut game = Game::new(1, &["Ash"]);
+        let day = RESTED_LASTS.as_ticks();
+        ticks(&mut game, 1, day / 2);
+        assert_eq!(game.character(ASH).unwrap().rested(), 50);
+        ticks(&mut game, day / 2 + 1, day);
+        assert_eq!(game.character(ASH).unwrap().rested(), 0);
+
+        let mut events = Vec::new();
+        game.apply(&Command::rest(ASH), Tick::new(day), &mut events);
+        let asleep_at = day + SETTLE_TIME.as_ticks();
+        let night = crate::content::FULL_REST.as_ticks();
+        ticks(&mut game, day + 1, asleep_at + night);
+        assert_eq!(game.character(ASH).unwrap().rested(), 0, "rest is counted on waking, and sleepers do not tire");
+
+        game.apply(&Command::wake(ASH), Tick::new(asleep_at + night), &mut events);
+        assert_eq!(woke(&events), Some((crate::content::FULL_REST, 100, 0)));
+    }
+
+    #[test]
+    fn the_rested_learn_faster() {
+        let haul = |tired: bool| {
+            let mut game = Game::new(1, &["Ash"]);
+            let mut events = Vec::new();
+            let start = if tired { RESTED_LASTS.as_ticks() } else { 0 };
+            ticks(&mut game, 1, start);
+            game.apply(&Command::go(ASH, "north"), Tick::new(start), &mut events);
+            game.apply(&Command::gather(ASH), Tick::new(start + 30), &mut events);
+            game.character(ASH).unwrap().skill(crate::types::SkillKind::Mining).progress()
+        };
+        let (fresh, tired) = (haul(false), haul(true));
+        assert!(fresh > tired, "fresh {fresh} vs tired {tired}");
+    }
+
+    #[test]
+    fn lying_too_long_wastes_the_body_to_a_floor_and_it_comes_back_fast() {
+        use crate::types::SkillKind;
+        let mut game = Game::new(1, &["Ash"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        let mut now = 30;
+        let mut hauls = 0;
+        while game.character(ASH).unwrap().skill(SkillKind::Mining).level() < 6 {
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            game.tick(Tick::new(now + 1), &mut events);
+            now += 600; // leave the ledge time to regrow
+            for tick in now - 598..=now {
+                game.tick(Tick::new(tick), &mut events);
+            }
+            hauls += 1;
+        }
+        let peak = game.character(ASH).unwrap().skill(SkillKind::Mining).level();
+
+        // Inside the forgiving stretch nothing is lost.
+        game.apply(&Command::rest(ASH), Tick::new(now), &mut events);
+        let three_days = now + Duration::days(3).as_ticks();
+        game.apply(&Command::wake(ASH), Tick::new(three_days), &mut events);
+        assert_eq!(woke(&events).unwrap().2, 0);
+
+        // Ten days is far past it: down to the floor, and no further.
+        game.apply(&Command::rest(ASH), Tick::new(three_days), &mut events);
+        let much_later = three_days + Duration::days(10).as_ticks();
+        game.apply(&Command::wake(ASH), Tick::new(much_later), &mut events);
+        let mining = *game.character(ASH).unwrap().skill(SkillKind::Mining);
+        assert_eq!((mining.level(), mining.peak()), (peak / 2, peak));
+        assert!(woke(&events).unwrap().2 >= peak - peak / 2);
+
+        // Muscle memory: back to the old peak in far fewer hauls.
+        let mut now = much_later;
+        let mut hauls_back = 0;
+        while game.character(ASH).unwrap().skill(SkillKind::Mining).level() < peak {
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += GATHER_TIME.as_ticks();
+            hauls_back += 1;
+        }
+        assert!(hauls_back * 3 < hauls, "{hauls_back} hauls to get back what took {hauls}");
+    }
+
+    #[test]
+    fn a_blow_wakes_a_sleeper_who_cannot_answer_it() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::rest(BRYN), Tick::new(now), &mut events);
+        let later = now + 1_000;
+
+        events.clear();
+        game.apply(&Command::attack(ASH, BRYN), Tick::new(later), &mut events);
+        assert_eq!(game.character(ASH).unwrap().health(), 100, "a sleeper should not strike back");
+        assert!(!game.character(BRYN).unwrap().is_lying_down());
+        assert!(woke(&events).is_some());
+
+        // Awake now, Bryn answers the next blow.
+        game.apply(&Command::attack(ASH, BRYN), Tick::new(later + ATTACK_TIME.as_ticks()), &mut events);
+        assert!(game.character(ASH).unwrap().health() < 100);
+    }
+
+    #[test]
+    fn a_blow_while_settling_leaves_you_standing() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::rest(BRYN), Tick::new(now), &mut events);
+        game.apply(&Command::attack(ASH, BRYN), Tick::new(now + 5), &mut events);
+        assert_eq!(woke(&events).map(|(slept, ..)| slept), Some(Duration::ZERO));
+        assert!(!game.character(BRYN).unwrap().is_lying_down());
+    }
+
+    #[test]
+    fn robbing_needs_a_sleeper_outside_a_haven_with_something_to_take() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        assert_eq!(game.can_rob(ASH, ASH, Tick::ZERO), Err(RobRefusal::Yourself));
+        assert_eq!(game.can_rob(ASH, BRYN, Tick::ZERO), Err(RobRefusal::Awake));
+
+        game.apply(&Command::rest(BRYN), Tick::new(0), &mut events);
+        assert_eq!(game.can_rob(ASH, BRYN, Tick::new(10)), Err(RobRefusal::Awake), "still settling");
+        assert_eq!(game.can_rob(ASH, BRYN, Tick::new(30)), Err(RobRefusal::Haven));
+        game.apply(&Command::wake(BRYN), Tick::new(40), &mut events);
+
+        for who in [ASH, BRYN] {
+            game.apply(&Command::go(who, "north"), Tick::new(40), &mut events);
+        }
+        game.apply(&Command::rest(BRYN), Tick::new(70), &mut events);
+        assert_eq!(game.can_rob(ASH, BRYN, Tick::new(100)), Err(RobRefusal::NothingToSteal));
+        game.apply(&Command::go(ASH, "south"), Tick::new(100), &mut events);
+        assert_eq!(game.can_rob(ASH, BRYN, Tick::new(130)), Err(RobRefusal::NotHere));
+    }
+
+    #[test]
+    fn robbing_the_clean_marks_you_and_robbing_the_marked_does_not() {
+        // Bryn is marked and carries ore. Ash robs Bryn asleep: no taint.
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let carried = game.character(BRYN).unwrap().carried_total();
+        let mut events = Vec::new();
+        game.apply(&Command::rest(BRYN), Tick::new(now), &mut events);
+        let asleep = now + SETTLE_TIME.as_ticks();
+        game.apply(&Command::rob(ASH, BRYN), Tick::new(asleep), &mut events);
+        let ash = game.character(ASH).unwrap();
+        assert_eq!((ash.carried_total(), ash.taint()), (carried, 0));
+        assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::Robbed }));
+        assert!(game.character(BRYN).unwrap().is_asleep(Tick::new(asleep)), "robbery should not wake the sleeper");
+
+        // Now Ash, clean and carrying it all, sleeps; Bryn wakes and robs it back.
+        game.apply(&Command::rest(ASH), Tick::new(asleep + 5), &mut events);
+        let much_later = asleep + 3_000; // long enough for Bryn's mark to fade
+        ticks(&mut game, asleep + 6, much_later);
+        game.apply(&Command::wake(BRYN), Tick::new(much_later), &mut events);
+        assert_eq!(game.character(BRYN).unwrap().standing(), Standing::Clean);
+        game.apply(&Command::rob(BRYN, ASH), Tick::new(much_later), &mut events);
+        assert_eq!(game.character(BRYN).unwrap().standing(), Standing::Marked);
+    }
+
+    #[test]
+    fn sleepers_mend_as_fast_as_in_a_haven() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::attack(ASH, BRYN), Tick::new(now), &mut events);
+        let hurt = game.character(ASH).unwrap().health();
+        game.apply(&Command::rest(ASH), Tick::new(now + 3), &mut events);
+        let asleep = now + 3 + SETTLE_TIME.as_ticks();
+        ticks(&mut game, now + 4, asleep + 20);
+        assert!(game.character(ASH).unwrap().health() >= (hurt + 10).min(100));
     }
 
     #[test]

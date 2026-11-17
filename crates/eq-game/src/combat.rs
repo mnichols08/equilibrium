@@ -1,4 +1,5 @@
-//! Fighting: who may be attacked, and how hard a blow lands.
+//! Fighting and theft: who may be attacked or robbed, and how hard a
+//! blow lands.
 //!
 //! The rule for who may be attacked is the middle ground between open
 //! PvP and none:
@@ -26,6 +27,30 @@ pub enum Refusal {
     Haven,
     /// This is wilderness and the target carries no mark.
     Unmarked,
+}
+
+/// Why a robbery was not allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RobRefusal {
+    /// The target is the robber.
+    Yourself,
+    /// The target is not in the same place.
+    NotHere,
+    /// The target is awake.
+    Awake,
+    /// This place is a haven.
+    Haven,
+    /// The target carries nothing.
+    NothingToSteal,
+}
+
+/// Whether a sleeper may be robbed in a place of this `safety`. Sleep is
+/// safe only in a haven.
+pub const fn may_rob(safety: Safety) -> Result<(), RobRefusal> {
+    match safety {
+        Safety::Haven => Err(RobRefusal::Haven),
+        Safety::Buffer | Safety::Contested => Ok(()),
+    }
 }
 
 /// Whether someone of `target` standing may be attacked in a place of
@@ -86,6 +111,13 @@ mod tests {
         }
         assert_eq!(may_attack(Safety::Buffer, Standing::Clean), Err(Refusal::Unmarked));
         assert_eq!(may_attack(Safety::Buffer, Standing::Marked), Ok(()));
+    }
+
+    #[test]
+    fn sleepers_can_be_robbed_anywhere_but_a_haven() {
+        assert_eq!(may_rob(Safety::Haven), Err(RobRefusal::Haven));
+        assert_eq!(may_rob(Safety::Buffer), Ok(()));
+        assert_eq!(may_rob(Safety::Contested), Ok(()));
     }
 
     #[test]

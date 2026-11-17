@@ -15,6 +15,12 @@ pub const DEFAULT_WAIT: Duration = Duration::minutes(1);
 /// The longest single `wait`.
 pub const MAX_WAIT: Duration = Duration::days(1);
 
+/// How long `sleep` lasts when no time is given.
+pub const DEFAULT_SLEEP: Duration = Duration::hours(8);
+
+/// The longest single `sleep`.
+pub const MAX_SLEEP: Duration = Duration::days(30);
+
 /// What a line of input asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Input {
@@ -25,6 +31,10 @@ pub enum Input {
     Attack(String),
     /// Let time pass.
     Wait(Duration),
+    /// Lie down, sleep this long, and wake.
+    Sleep(Duration),
+    /// Go through a sleeper's pack, by name.
+    Rob(String),
     /// Describe the current place.
     Look,
     /// Examine the deposit here and the zone's health.
@@ -63,7 +73,19 @@ pub fn parse(line: &str) -> Input {
             Some(name) => Input::Attack(name.into()),
             None => Input::Unknown("Attack whom? Try \"attack bryn\".".into()),
         },
-        "wait" | "rest" | "z" => parse_wait(rest),
+        "wait" | "z" => match time(rest, DEFAULT_WAIT, MAX_WAIT) {
+            Some(span) => Input::Wait(span),
+            None => Input::Unknown("Wait how long? Try \"wait 30\", \"wait 10m\" or \"wait 2h\".".into()),
+        },
+        "sleep" | "rest" => match time(rest, DEFAULT_SLEEP, MAX_SLEEP) {
+            Some(span) => Input::Sleep(span),
+            None => Input::Unknown("Sleep how long? Try \"sleep\", \"sleep 8h\" or \"sleep 4d\".".into()),
+        },
+        "wake" => Input::Do(Action::Wake),
+        "rob" | "steal" => match rest {
+            Some(name) => Input::Rob(name.into()),
+            None => Input::Unknown("Rob whom? Try \"rob bryn\".".into()),
+        },
         "go" | "walk" | "enter" => match rest {
             Some(label) => go(label),
             None => Input::Unknown("Go where? Try \"go north\".".into()),
@@ -87,22 +109,20 @@ fn go(label: &str) -> Input {
     Input::Do(Action::Go(label.into()))
 }
 
-/// Accepts a bare number of seconds, or a number ending in `s`, `m` or `h`.
-fn parse_wait(amount: Option<&str>) -> Input {
-    let Some(amount) = amount else { return Input::Wait(DEFAULT_WAIT) };
+/// Reads a length of time: a bare number of seconds, or a number ending
+/// in `s`, `m`, `h` or `d`. Nothing at all means `default`; anything
+/// longer than `most` is cut to `most`. Returns `None` for nonsense.
+fn time(amount: Option<&str>, default: Duration, most: Duration) -> Option<Duration> {
+    let Some(amount) = amount else { return Some(default) };
     let (digits, unit_seconds) = match amount.as_bytes().last() {
+        Some(b'd') => (&amount[..amount.len() - 1], 86_400),
         Some(b'h') => (&amount[..amount.len() - 1], 3_600),
         Some(b'm') => (&amount[..amount.len() - 1], 60),
         Some(b's') => (&amount[..amount.len() - 1], 1),
         _ => (amount, 1),
     };
-    match digits.parse::<u64>() {
-        Ok(count) if count > 0 => {
-            let seconds = count.saturating_mul(unit_seconds).min(MAX_WAIT.as_ticks());
-            Input::Wait(Duration::seconds(seconds))
-        }
-        _ => Input::Unknown("Wait how long? Try \"wait 30\", \"wait 10m\" or \"wait 2h\".".into()),
-    }
+    let count = digits.parse::<u64>().ok().filter(|&count| count > 0)?;
+    Some(Duration::seconds(count.saturating_mul(unit_seconds).min(most.as_ticks())))
 }
 
 #[cfg(test)]
@@ -147,8 +167,20 @@ mod tests {
         assert_eq!(parse("wait"), Input::Wait(DEFAULT_WAIT));
         assert_eq!(parse("wait 30"), Input::Wait(Duration::seconds(30)));
         assert_eq!(parse("wait 45s"), Input::Wait(Duration::seconds(45)));
-        assert_eq!(parse("rest 10m"), Input::Wait(Duration::minutes(10)));
+        assert_eq!(parse("z 10m"), Input::Wait(Duration::minutes(10)));
         assert_eq!(parse("wait 2h"), Input::Wait(Duration::hours(2)));
+    }
+
+    #[test]
+    fn sleeping_waking_and_robbing() {
+        assert_eq!(parse("sleep"), Input::Sleep(DEFAULT_SLEEP));
+        assert_eq!(parse("rest 2h"), Input::Sleep(Duration::hours(2)));
+        assert_eq!(parse("sleep 4d"), Input::Sleep(Duration::days(4)));
+        assert_eq!(parse("sleep 999d"), Input::Sleep(MAX_SLEEP));
+        assert!(matches!(parse("sleep soundly"), Input::Unknown(_)));
+        assert_eq!(parse("wake"), Input::Do(Action::Wake));
+        assert_eq!(parse("rob Ash"), Input::Rob("ash".into()));
+        assert!(matches!(parse("rob"), Input::Unknown(_)));
     }
 
     #[test]

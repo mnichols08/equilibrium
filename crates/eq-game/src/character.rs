@@ -3,7 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use eq_clock::Tick;
+use eq_clock::{Duration, Tick};
 use eq_curve::stepped_bonus;
 use eq_meter::Meter;
 use eq_skills::Proficiency;
@@ -14,6 +14,7 @@ use crate::content::{
     TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
+use crate::rest::{atrophy, atrophy_floor, rest_gained, with_rested_bonus, FULLY_RESTED};
 use crate::types::{Attribute, Resource, SkillKind, Standing};
 
 eq_ids::define_id!(
@@ -33,7 +34,13 @@ pub struct Character {
     taint: Meter,
     health: Meter,
     down_until: Option<Tick>,
+    rested: Meter,
+    /// When sleep began, or will begin once they have settled.
+    asleep_from: Option<Tick>,
 }
+
+/// The attributes that waste when the body lies too long.
+const BODY: [Attribute; 3] = [Attribute::Vigor, Attribute::Finesse, Attribute::Resilience];
 
 impl Character {
     pub(crate) fn new(name: &str, place: PlaceId) -> Self {
@@ -47,7 +54,68 @@ impl Character {
             taint: Meter::empty(0, 100),
             health: Meter::full(0, MAX_HEALTH),
             down_until: None,
+            rested: Meter::full(0, FULLY_RESTED as i64),
+            asleep_from: None,
         }
+    }
+
+    /// How rested the character is, from 0 to 100.
+    pub const fn rested(&self) -> u32 {
+        // The meter is bounded to 0..=100.
+        self.rested.value() as u32
+    }
+
+    /// Whether the character is lying down, asleep or still settling.
+    pub const fn is_lying_down(&self) -> bool {
+        self.asleep_from.is_some()
+    }
+
+    /// When sleep began, or will begin once they have settled.
+    pub const fn asleep_from(&self) -> Option<Tick> {
+        self.asleep_from
+    }
+
+    /// Whether the character is asleep at `now`.
+    pub fn is_asleep(&self, now: Tick) -> bool {
+        self.asleep_from.is_some_and(|from| from <= now)
+    }
+
+    /// Lies down, to be asleep from `asleep_from` if nothing disturbs them.
+    pub(crate) fn lie_down(&mut self, asleep_from: Tick) {
+        self.asleep_from = Some(asleep_from);
+        self.busy_until = asleep_from;
+    }
+
+    /// Spends one point of rest.
+    pub(crate) fn tire(&mut self) {
+        self.rested.adjust(-1);
+    }
+
+    /// Gets up. Returns `None` if they were not lying down; otherwise
+    /// what the sleep did, as a [`Outcome::Woke`].
+    pub(crate) fn wake(&mut self, now: Tick) -> Option<Outcome> {
+        let from = self.asleep_from.take()?;
+        let slept = now.since(from);
+        self.rested.adjust(i64::from(rest_gained(slept)));
+        Some(Outcome::Woke { slept, rested: self.rested(), wasted: self.waste(slept) })
+    }
+
+    /// Applies atrophy for a sleep of `slept` and returns the levels lost
+    /// across every body skill and attribute.
+    fn waste(&mut self, slept: Duration) -> u32 {
+        let levels = atrophy(slept);
+        let body = BODY.map(Attribute::index);
+        let attributes = self.attributes.iter_mut().enumerate().filter(|(index, _)| body.contains(index));
+        self.skills
+            .iter_mut()
+            .chain(attributes.map(|(_, attribute)| attribute))
+            .map(|proficiency| proficiency.lose(levels, atrophy_floor(proficiency.peak())))
+            .sum()
+    }
+
+    /// Empties the pack and returns what was in it.
+    pub(crate) fn empty_pack(&mut self) -> [u64; Resource::ALL.len()] {
+        core::mem::take(&mut self.pack)
     }
 
     /// Health, from 0 to 100.
@@ -159,13 +227,16 @@ impl Character {
     /// Trains the skill and attributes that gathering `resource` uses.
     pub(crate) fn train(&mut self, resource: Resource, units: u32, outcomes: &mut Vec<Outcome>) {
         let units = u64::from(units);
+        let rested = self.rested();
         let skill = resource.skill();
         let progress = &mut self.skills[skill.index()];
-        if progress.practice(units * SKILL_XP_PER_UNIT, &SKILL_RULES).levels_gained > 0 {
+        let xp = with_rested_bonus(units * SKILL_XP_PER_UNIT, rested);
+        if progress.practice(xp, &SKILL_RULES).levels_gained > 0 {
             outcomes.push(Outcome::SkillRose { skill, level: progress.level() });
         }
 
         let xp = stepped_bonus(units * ATTRIBUTE_XP_PER_UNIT, resource.tier(), TIERS_PER_WHOLE);
+        let xp = with_rested_bonus(xp, rested);
         for &attribute in resource.attributes() {
             let progress = &mut self.attributes[attribute.index()];
             if progress.practice(xp, &ATTRIBUTE_RULES).levels_gained > 0 {

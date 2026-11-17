@@ -83,6 +83,7 @@ export function pageView(root) {
         canGather: scene.you.can_gather,
         canTake: scene.you.can_take,
         targets: scene.company.filter((person) => person.can_attack),
+        sleepers: scene.company.filter((person) => person.can_rob),
         down: scene.you.down,
       })
       log.lines = lines

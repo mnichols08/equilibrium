@@ -2,12 +2,12 @@
 
 use alloc::string::String;
 
-use eq_clock::Tick;
+use eq_clock::{Duration, Tick};
 use eq_nodes::Quality;
 use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
-use crate::combat::Refusal;
+use crate::combat::{Refusal, RobRefusal};
 use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
 
 /// What came of one character's action.
@@ -107,6 +107,40 @@ pub enum Outcome {
     },
     /// There was nothing on the ground to pick up.
     NothingToTake,
+    /// They are asleep and must wake before doing that.
+    Asleep,
+    /// They settled down to sleep.
+    LayDown {
+        /// When sleep begins, if nothing disturbs them first.
+        asleep_at: Tick,
+    },
+    /// They tried to wake but were not lying down.
+    NotAsleep,
+    /// They woke, or got up before sleep came.
+    Woke {
+        /// How long they slept. Zero if sleep never came.
+        slept: Duration,
+        /// How rested they now are, 0 to 100.
+        rested: u32,
+        /// Levels lost across body skills and attributes to lying too long.
+        wasted: u32,
+    },
+    /// They were not allowed to rob someone.
+    CannotRob {
+        /// Whose pack they meant to go through.
+        target: CharacterId,
+        /// Why not.
+        why: RobRefusal,
+    },
+    /// They went through a sleeper's pack.
+    Stole {
+        /// Whose pack it was.
+        target: CharacterId,
+        /// How much of each resource they took, in pack order.
+        spoils: [u64; Resource::ALL.len()],
+    },
+    /// Their pack was emptied while they slept. They do not learn by whom.
+    Robbed,
     /// Their taint carried them from one standing to another.
     StandingChanged {
         /// Their standing before.

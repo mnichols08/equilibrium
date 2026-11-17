@@ -1,14 +1,14 @@
 //! Use-based proficiency.
 //!
 //! A [`Proficiency`] is a level that rises by doing. Each use earns less
-//! as the level nears its cap, and the highest level ever reached is
-//! remembered, so that lost ground can later be regained faster than it
-//! was first won.
+//! as the level nears its cap. The highest level ever reached is
+//! remembered, and ground lost below it is regained faster than it was
+//! first won: muscle memory.
 //!
 //! ```
 //! use eq_skills::{Proficiency, Rules};
 //!
-//! const RULES: Rules = Rules { cap: 100, xp_per_level: 100 };
+//! const RULES: Rules = Rules { cap: 100, xp_per_level: 100, relearning_percent: 300 };
 //!
 //! let mut mining = Proficiency::new();
 //! let practice = mining.practice(250, &RULES);
@@ -26,6 +26,9 @@ pub struct Rules {
     pub cap: u32,
     /// Experience needed for each level.
     pub xp_per_level: u64,
+    /// How fast a level below the remembered peak is regained, as a
+    /// percentage of the normal pace. 100 means no faster.
+    pub relearning_percent: u32,
 }
 
 /// What one use earned.
@@ -69,8 +72,10 @@ impl Proficiency {
     /// Earns experience from one use worth `base_xp`.
     ///
     /// The amount is scaled by `(1 − level/cap)^1.5` at the level held
-    /// when the use began. Below the cap a use always earns at least one
-    /// point, so the last levels are slow but never impossible.
+    /// when the use began, and again by `relearning_percent` if that
+    /// level is below the remembered peak. Below the cap a use always
+    /// earns at least one point, so the last levels are slow but never
+    /// impossible.
     ///
     /// # Panics
     /// Panics if `rules.cap` or `rules.xp_per_level` is zero.
@@ -80,7 +85,8 @@ impl Proficiency {
             return Practice { xp_gained: 0, levels_gained: 0 };
         }
         let scaled = diminishing_returns(base_xp, u64::from(self.level), u64::from(rules.cap));
-        let xp_gained = scaled.max(1);
+        let pace = if self.level < self.peak { u64::from(rules.relearning_percent) } else { 100 };
+        let xp_gained = (scaled.saturating_mul(pace) / 100).max(1);
         let total = self.progress.saturating_add(xp_gained);
         let room = rules.cap - self.level;
         let levels_gained = u32::try_from(total / rules.xp_per_level).unwrap_or(u32::MAX).min(room);
@@ -111,7 +117,7 @@ impl Proficiency {
 mod tests {
     use super::*;
 
-    const RULES: Rules = Rules { cap: 100, xp_per_level: 100 };
+    const RULES: Rules = Rules { cap: 100, xp_per_level: 100, relearning_percent: 300 };
 
     #[test]
     fn progress_carries_between_uses() {
@@ -147,9 +153,34 @@ mod tests {
     #[test]
     fn tiny_uses_near_the_cap_still_count() {
         let mut skill = Proficiency::new();
-        skill.practice(u64::MAX, &Rules { cap: 99, xp_per_level: 100 });
+        skill.practice(u64::MAX, &Rules { cap: 99, ..RULES });
         assert_eq!(skill.level(), 99);
         assert_eq!(skill.practice(1, &RULES).xp_gained, 1);
+    }
+
+    #[test]
+    fn lost_levels_come_back_faster_than_they_were_first_won() {
+        let mut skill = Proficiency::new();
+        let mut first_time = 0;
+        while skill.level() < 20 {
+            skill.practice(50, &RULES);
+            first_time += 1;
+        }
+        skill.lose(10, 0);
+
+        let mut second_time = 0;
+        while skill.level() < 20 {
+            skill.practice(50, &RULES);
+            second_time += 1;
+        }
+        // Ten levels regained against twenty won: without muscle memory
+        // that would take more than half as long.
+        assert!(second_time * 4 < first_time, "{second_time} uses against {first_time}");
+
+        // Past the old peak it is back to the normal pace.
+        let before = skill.progress();
+        assert_eq!(skill.practice(50, &RULES).xp_gained, 35);
+        assert!(skill.progress() > before || skill.level() > 20);
     }
 
     #[test]

@@ -7,11 +7,11 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use eq_clock::Tick;
+use eq_clock::{Duration, Tick};
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
-use crate::combat::Refusal;
+use crate::combat::{Refusal, RobRefusal};
 use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, TIDE};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
 use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
@@ -25,13 +25,19 @@ Commands:
   inspect (x)          study the deposit and the health of the shoreline
   attack <name>        trade blows with someone here (see below)
   take                 pick up what lies dropped on the ground
+  sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
+  rob <name>           go through the pack of someone asleep here
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
   stats                show your skills and attributes
   pack (i)             show what you carry
   quit (q)             stop playing
 
 Nobody can be harmed in a haven. In the wilderness only those the land
-has marked can be attacked. In contested places, anyone can.";
+has marked can be attacked. In contested places, anyone can.
+
+Sleep keeps you rested, and the rested learn faster. It is only safe in
+a haven: anywhere else a sleeper can be robbed. Sleep for more than a
+few days and the body starts to waste.";
 
 /// Shown when a view is asked for a character who is not in the world.
 const NOBODY: &str = "There is nobody by that name here.";
@@ -89,6 +95,15 @@ fn own(outcome: &Outcome, game: &Game) -> String {
         Outcome::Rose => "You get back on your feet, weak but standing.".into(),
         Outcome::Took { spoils } => format!("You take {} from the ground.", pile(spoils)),
         Outcome::NothingToTake => "There is nothing lying here to take.".into(),
+        Outcome::Asleep => "You are asleep. Wake first.".into(),
+        Outcome::LayDown { .. } => "You settle down to sleep.".into(),
+        Outcome::NotAsleep => "You are not asleep.".into(),
+        Outcome::Woke { slept, rested, wasted } => woke(*slept, *rested, *wasted),
+        Outcome::CannotRob { target, why } => cannot_rob(name_of(game, *target), *why),
+        Outcome::Stole { target, spoils } => {
+            format!("You go through {}'s pack and take {}.", name_of(game, *target), pile(spoils))
+        }
+        Outcome::Robbed => "Something stirs at the edge of your sleep. Your pack is lighter than it was.".into(),
         Outcome::StandingChanged { to: Standing::Marked, .. } => {
             "The land has marked you for what you have taken. Until it fades, your hauls are thin and anyone may challenge you in the wilds.".into()
         }
@@ -122,6 +137,13 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
             Some(format!("{name} goes down. What they carried spills onto the ground."))
         }
         Outcome::Rose if actor.place() == here => Some(format!("{name} gets back up.")),
+        Outcome::LayDown { .. } if actor.place() == here => Some(format!("{name} settles down to sleep.")),
+        Outcome::Woke { slept, .. } if actor.place() == here && slept.as_ticks() > 0 => {
+            Some(format!("{name} wakes."))
+        }
+        Outcome::Stole { target, .. } if actor.place() == here => {
+            Some(format!("{name} goes through {}'s pack.", name_of(game, *target)))
+        }
         Outcome::Took { .. } if actor.place() == here => {
             Some(format!("{name} takes what was lying on the ground."))
         }
@@ -150,10 +172,9 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         .iter()
         .filter(|&&id| id != viewer)
         .filter_map(|&id| game.character(id))
-        .map(|other| match (other.is_down(), other.standing()) {
-            (true, _) => format!("{} (down)", other.name()),
-            (false, Standing::Marked) => format!("{} (marked)", other.name()),
-            (false, Standing::Clean) => other.name().into(),
+        .map(|other| match condition(other, now) {
+            Some(note) => format!("{} ({note})", other.name()),
+            None => other.name().into(),
         })
         .collect();
     if !others.is_empty() {
@@ -209,6 +230,7 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
         lines.push(format!("  {:<11}{:>3}", attribute.name(), character.attribute(attribute).level()));
     }
     lines.push(format!("Health       {:>3}", character.health()));
+    lines.push(format!("Rested       {:>3}", character.rested()));
     let standing = match character.standing() {
         Standing::Clean => "clean",
         Standing::Marked => "marked",
@@ -241,6 +263,65 @@ fn pile(amounts: &[u64; Resource::ALL.len()]) -> String {
 
 fn name_of(game: &Game, who: CharacterId) -> &str {
     game.character(who).map_or("someone", |character| character.name())
+}
+
+/// The one thing most worth knowing about someone at a glance.
+pub fn condition(character: &crate::Character, now: Tick) -> Option<&'static str> {
+    if character.is_down() {
+        Some("down")
+    } else if character.is_asleep(now) {
+        Some("asleep")
+    } else if character.standing() == Standing::Marked {
+        Some("marked")
+    } else {
+        None
+    }
+}
+
+fn woke(slept: Duration, rested: u32, wasted: u32) -> String {
+    if slept.as_ticks() == 0 {
+        return "You are on your feet again before sleep comes.".into();
+    }
+    let how = match rested {
+        90.. => "well rested",
+        40..=89 => "somewhat rested",
+        _ => "still tired",
+    };
+    let woke = format!("You wake after {}, {how}.", span(slept));
+    if wasted == 0 {
+        woke
+    } else {
+        format!("{woke} You have lain too long. Your body has wasted, though it will remember its strength faster than it first learned it.")
+    }
+}
+
+/// A length of time in its two largest units: "3 days 4 hours".
+fn span(time: Duration) -> String {
+    const UNITS: [(u64, &str); 4] = [(86_400, "day"), (3_600, "hour"), (60, "minute"), (1, "second")];
+    let mut left = time.as_ticks();
+    let mut parts: Vec<String> = Vec::new();
+    for (size, name) in UNITS {
+        let count = left / size;
+        left %= size;
+        if count > 0 && parts.len() < 2 {
+            parts.push(format!("{count} {name}{}", if count == 1 { "" } else { "s" }));
+        }
+    }
+    if parts.is_empty() {
+        "no time".into()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn cannot_rob(name: &str, why: RobRefusal) -> String {
+    match why {
+        RobRefusal::Yourself => "Your pack is already yours.".into(),
+        RobRefusal::NotHere => format!("{name} is not here."),
+        RobRefusal::Awake => format!("{name} is awake."),
+        RobRefusal::Haven => "Sleepers are safe here.".into(),
+        RobRefusal::NothingToSteal => format!("{name} carries nothing."),
+    }
 }
 
 fn cannot_attack(name: &str, why: Refusal) -> String {
@@ -390,6 +471,22 @@ mod tests {
             outcome: Outcome::Gathered { resource: Resource::Kelp, amount: 0, quality: Quality::Depleted },
         };
         assert!(event(&haul, &Game::new(1, &["Ash"]), ASH).unwrap().contains("nothing worth keeping"));
+    }
+
+    #[test]
+    fn spans_read_naturally() {
+        assert_eq!(span(Duration::hours(8)), "8 hours");
+        assert_eq!(span(Duration::days(3) + Duration::hours(4) + Duration::minutes(9)), "3 days 4 hours");
+        assert_eq!(span(Duration::seconds(61)), "1 minute 1 second");
+        assert_eq!(span(Duration::ZERO), "no time");
+    }
+
+    #[test]
+    fn waking_says_how_it_went() {
+        assert_eq!(woke(Duration::hours(8), 100, 0), "You wake after 8 hours, well rested.");
+        assert_eq!(woke(Duration::hours(1), 20, 0), "You wake after 1 hour, still tired.");
+        assert!(woke(Duration::days(9), 100, 30).contains("lain too long"));
+        assert!(woke(Duration::ZERO, 50, 0).contains("before sleep comes"));
     }
 
     #[test]

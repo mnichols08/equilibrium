@@ -15,6 +15,12 @@ pub enum Action {
     Attack(CharacterId),
     /// Pick up whatever lies dropped on the ground here.
     Take,
+    /// Settle down to sleep where you stand.
+    Rest,
+    /// Wake up, or get up again before sleep comes.
+    Wake,
+    /// Go through the pack of someone asleep in the same place.
+    Rob(CharacterId),
 }
 
 /// An action and the character asked to take it.
@@ -40,6 +46,21 @@ impl Command {
     /// `who` picks up what lies on the ground where they stand.
     pub const fn take(who: CharacterId) -> Self {
         Self { who, action: Action::Take }
+    }
+
+    /// `who` settles down to sleep.
+    pub const fn rest(who: CharacterId) -> Self {
+        Self { who, action: Action::Rest }
+    }
+
+    /// `who` wakes up.
+    pub const fn wake(who: CharacterId) -> Self {
+        Self { who, action: Action::Wake }
+    }
+
+    /// `who` goes through `target`'s pack as they sleep.
+    pub const fn rob(who: CharacterId, target: CharacterId) -> Self {
+        Self { who, action: Action::Rob(target) }
     }
 
     /// `who` gathers from the deposit where they stand.
