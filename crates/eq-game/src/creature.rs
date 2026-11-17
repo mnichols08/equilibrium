@@ -11,7 +11,9 @@ use eq_meter::Meter;
 use eq_world_graph::PlaceId;
 
 use crate::character::{Character, CharacterId};
-use crate::content::{GUARD_THREAT_PERCENT, LURKER_HEALTH, MAX_HEALTH, TAKE_TIME};
+use crate::content::{
+    GUARD_THREAT_PERCENT, LURKER_HEALTH, MAX_HEALTH, SENTINEL_HEALTH, SENTINEL_HIDE, SENTINEL_MIGHT, TAKE_TIME,
+};
 use crate::types::{Attribute, Resource};
 
 eq_ids::define_id!(
@@ -28,6 +30,9 @@ crate::wire::as_number!(CreatureId);
 pub enum CreatureKind {
     /// A thing that lives in the deep places and goes for anyone it finds.
     Lurker,
+    /// What bars the pass out of a land: too much for anyone new, and
+    /// it goes for whoever comes.
+    Sentinel,
     /// A body its spirit did not come back for. It keeps what its owner
     /// dropped and fights whoever troubles it.
     BodyGuard,
@@ -37,13 +42,14 @@ impl CreatureKind {
     /// Whether it goes for anyone living it finds, or only for those
     /// who trouble it.
     pub const fn is_aggressive(self) -> bool {
-        matches!(self, Self::Lurker)
+        matches!(self, Self::Lurker | Self::Sentinel)
     }
 
     /// The one word a player can call it by.
     pub const fn word(self) -> &'static str {
         match self {
             Self::Lurker => "lurker",
+            Self::Sentinel => "sentinel",
             Self::BodyGuard => "guard",
         }
     }
@@ -73,6 +79,8 @@ pub struct Creature {
     pub vigor: u32,
     /// How much it shrugs off, on the same scale as Resilience.
     pub resilience: u32,
+    /// A blow that would take this much or less glances off.
+    pub hide: u32,
     /// Everyone who has troubled it, oldest first.
     pub(crate) foes: Vec<CharacterId>,
     /// The earliest it will next strike.
@@ -82,15 +90,21 @@ pub struct Creature {
 }
 
 impl Creature {
-    /// A lurker in its lair.
-    pub(crate) fn lurker(id: CreatureId, place: PlaceId, now: Tick) -> Self {
+    /// A creature of the kind that makes its home in a place: a lurker
+    /// or a sentinel. (A Body Guard is made from a body, not a lair.)
+    pub(crate) fn native(kind: CreatureKind, id: CreatureId, place: PlaceId, now: Tick) -> Self {
+        let (health, might, hide) = match kind {
+            CreatureKind::Sentinel => (SENTINEL_HEALTH, SENTINEL_MIGHT, SENTINEL_HIDE),
+            CreatureKind::Lurker | CreatureKind::BodyGuard => (LURKER_HEALTH, 0, 0),
+        };
         Self {
             id,
-            being: Being { kind: CreatureKind::Lurker, of: None },
+            being: Being { kind, of: None },
             place,
-            health: Meter::full(0, LURKER_HEALTH),
-            vigor: 0,
-            resilience: 0,
+            health: Meter::full(0, health),
+            vigor: might,
+            resilience: might,
+            hide,
             foes: Vec::new(),
             next_blow: now,
             gone_at: None,
@@ -110,6 +124,7 @@ impl Creature {
             health: Meter::full(0, MAX_HEALTH * GUARD_THREAT_PERCENT as i64 / 100),
             vigor: raised(body.attribute(Attribute::Vigor).level()),
             resilience: raised(body.attribute(Attribute::Resilience).level()),
+            hide: 0,
             foes: Vec::new(),
             next_blow: now,
             gone_at: Some(gone_at),
@@ -122,10 +137,12 @@ impl Creature {
         self.health.value() as u32
     }
 
-    /// Takes `damage` from health and returns what is left.
-    pub(crate) fn hurt(&mut self, damage: u32) -> u32 {
-        self.health.adjust(-i64::from(damage));
-        self.health()
+    /// Lands a blow worth `damage`. A blow too weak to get through its
+    /// hide takes nothing. Returns what the blow took and what is left.
+    pub(crate) fn hurt(&mut self, damage: u32) -> (u32, u32) {
+        let taken = if damage <= self.hide { 0 } else { damage };
+        self.health.adjust(-i64::from(taken));
+        (taken, self.health())
     }
 
     /// Remembers `who` as someone to go for.
@@ -260,12 +277,28 @@ mod tests {
     }
 
     #[test]
+    fn a_sentinel_is_far_more_than_a_lurker() {
+        let sentinel = Creature::native(CreatureKind::Sentinel, CreatureId::new(1), HERE, Tick::ZERO);
+        let lurker = Creature::native(CreatureKind::Lurker, CreatureId::new(2), HERE, Tick::ZERO);
+        assert_eq!((sentinel.health(), sentinel.vigor, sentinel.resilience, sentinel.hide), (300, 35, 35, 16));
+        assert_eq!((lurker.health(), lurker.vigor, lurker.resilience), (60, 0, 0));
+        assert!(sentinel.being.kind.is_aggressive());
+    }
+
+    #[test]
+    fn weak_blows_glance_off_a_sentinel() {
+        let mut sentinel = Creature::native(CreatureKind::Sentinel, CreatureId::new(1), HERE, Tick::ZERO);
+        assert_eq!(sentinel.hurt(16), (0, 300));
+        assert_eq!(sentinel.hurt(17), (17, 283));
+    }
+
+    #[test]
     fn a_creature_remembers_each_foe_once() {
-        let mut lurker = Creature::lurker(CreatureId::new(0), HERE, Tick::ZERO);
+        let mut lurker = Creature::native(CreatureKind::Lurker, CreatureId::new(0), HERE, Tick::ZERO);
         lurker.provoke(OWNER);
         lurker.provoke(OWNER);
         assert_eq!(lurker.foes, [OWNER]);
-        assert_eq!(lurker.hurt(25), 35);
-        assert_eq!(lurker.hurt(99), 0);
+        assert_eq!(lurker.hurt(25), (25, 35));
+        assert_eq!(lurker.hurt(99), (99, 0));
     }
 }

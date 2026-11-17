@@ -401,7 +401,8 @@ fn links(game: &Game, here: PlaceId, now: Tick) -> Vec<LinkView> {
     let land = game.zone_at(here);
     game.map()
         .all_exits()
-        .filter(|(from, exit)| *from < exit.to && land.contains(*from))
+        // A way out of the land is an exit, but it is not on the land's map.
+        .filter(|(from, exit)| *from < exit.to && land.contains(*from) && land.contains(exit.to))
         .map(|(from, exit)| LinkView {
             from: from.get(),
             to: exit.to.get(),
@@ -567,12 +568,12 @@ mod tests {
 
         let hers = Scene::of(&game, ada, Tick::new(1)).unwrap();
         let his = Scene::of(&game, ben, Tick::new(1)).unwrap();
-        assert_eq!((hers.places.len(), his.places.len()), (10, 10));
+        assert_eq!((hers.places.len(), his.places.len()), (11, 11));
         assert_eq!((hers.land.as_deref(), his.land.as_deref()), (Some("Saltmarch"), None));
         let ids = |scene: &Scene| scene.places.iter().map(|place| place.id).collect::<Vec<_>>();
         assert!(ids(&hers).iter().all(|id| !ids(&his).contains(id)), "the two maps share no place");
         assert!(hers.links.iter().all(|link| ids(&hers).contains(&link.from) && ids(&hers).contains(&link.to)));
-        assert_eq!(hers.links.len(), 9, "ten places in a tree");
+        assert_eq!(hers.links.len(), 10, "eleven places in a tree; the way beyond the pass is not on the map");
         assert!(hers.company.is_empty() && his.company.is_empty());
     }
 

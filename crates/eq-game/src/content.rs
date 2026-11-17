@@ -233,6 +233,22 @@ pub const GUARD_LASTS: Duration = Duration::minutes(50);
 /// to this percentage.
 pub const GUARD_THREAT_PERCENT: u32 = 120;
 
+/// A sentinel's health. Sentinels bar the passes out of each land.
+pub const SENTINEL_HEALTH: i64 = 300;
+
+/// How hard a sentinel hits and how much it shrugs off, on the scale of
+/// a character's Vigor and Resilience.
+pub const SENTINEL_MIGHT: u32 = 35;
+
+/// A blow that would take this much health or less from a sentinel
+/// glances off and takes none. This is what makes the pass a matter of
+/// strength and not of numbers: someone new cannot hurt a sentinel at
+/// all, so no crowd of newcomers can get past one. Measured
+/// (`the_pass_is_a_matter_of_strength_or_of_company`): Vigor and
+/// Resilience near 75 pass alone; two near 45 together, or three near
+/// 30, at the cost of one of them; nobody new, in any number.
+pub const SENTINEL_HIDE: u32 = 16;
+
 /// A lurker's health.
 pub const LURKER_HEALTH: i64 = 60;
 
@@ -388,6 +404,28 @@ impl Resource {
             }
         }
     }
+}
+
+/// Where the passes out of every founder's land lead: the one place
+/// where people of different lands meet. The richest ground in the
+/// world, and nobody's.
+pub(crate) const fn meeting_ground() -> Place {
+    place(
+        "The Meeting Ground",
+        "A wide bowl of wind-scoured stone where the passes come together. Tide-glass stands out of the ground in ribs taller than a man. Nothing here belongs to anyone.",
+        Safety::Contested,
+        Some(Resource::Tideglass),
+        (0, 0),
+        None,
+    )
+}
+
+/// The name of the way from the Meeting Ground back into the land that
+/// was founded `nth` (counting the first as 0).
+pub(crate) fn pass_label(nth: usize) -> alloc::string::String {
+    const ORDINALS: [&str; 12] =
+        ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth"];
+    ORDINALS.get(nth).map_or_else(|| alloc::format!("pass{}", nth + 1), |word| (*word).into())
 }
 
 pub(crate) const fn place(

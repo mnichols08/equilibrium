@@ -120,7 +120,7 @@ fn audience_matches_the_narrator_across_several_lands() {
         game.apply(&Command::join(CharacterId::new(index as u64), name), Tick::new(0), &mut events);
         check(&game, &events);
     }
-    assert_eq!(game.zones().len(), 4);
+    assert_eq!(game.zones().len(), 5);
     for tick in 1..=4_000 {
         let mut events = Vec::new();
         game.tick(Tick::new(tick), &mut events);
@@ -132,7 +132,7 @@ fn audience_matches_the_narrator_across_several_lands() {
         let word = ["Saltmarch", "Thorne", "Gull Reach", "x", "Ash", "Zed"][script.below(6) as usize];
         let command = match script.below(20) {
             0..=6 => Command::gather(who),
-            7..=11 => Command::go(who, ["north", "south", "east", "west"][script.below(4) as usize]),
+            7..=11 => Command::go(who, ["north", "south", "east", "west", "beyond", "first"][script.below(6) as usize]),
             12 => Command::attack(who, someone),
             13 => Command::rite(who),
             14 => Command::name_land(who, word),
