@@ -17,6 +17,8 @@
 //! - [`Haul`]: the sums behind a harvest.
 //! - [`parser`]: text to intent.
 //! - [`narrate`]: events and state to text, for one viewer.
+//! - [`Solo`]: one player at the controls; what every single-player client
+//!   wraps.
 //!
 //! [`Game::audience`] says who should be told about an event.
 //!
@@ -34,6 +36,7 @@ mod haul;
 pub mod narrate;
 mod occupancy;
 pub mod parser;
+mod solo;
 mod types;
 mod zone;
 
@@ -42,5 +45,6 @@ pub use command::{Action, Command};
 pub use event::{Event, Outcome};
 pub use game::Game;
 pub use haul::{pressure_percent, Haul};
+pub use solo::{Reply, Solo};
 pub use types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind, Standing};
 pub use zone::Zone;

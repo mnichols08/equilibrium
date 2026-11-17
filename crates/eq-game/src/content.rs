@@ -146,12 +146,18 @@ impl Resource {
     }
 }
 
-const fn place(name: &'static str, description: &'static str, safety: Safety, resource: Option<Resource>) -> Place {
+const fn place(
+    name: &'static str,
+    description: &'static str,
+    safety: Safety,
+    resource: Option<Resource>,
+    position: (i32, i32),
+) -> Place {
     let deposit = match resource {
         Some(resource) => Some(Deposit { resource, node: Node::new(resource.node()) }),
         None => None,
     };
-    Place { name, description, safety, deposit }
+    Place { name, description, safety, deposit, position }
 }
 
 /// Builds the Rocky Shoreline and returns it with the starting place.
@@ -169,69 +175,84 @@ const fn place(name: &'static str, description: &'static str, safety: Safety, re
 ///
 ///   ~ passable only at low tide
 /// ```
+///
+/// Each place's `position` matches this drawing, one step per row and
+/// column, with the camp at `(2, 2)`.
 pub fn rocky_shoreline() -> (Graph<Place>, PlaceId) {
     let mut map = Graph::new();
-    let mut add = |name, description, safety, resource| map.add_place(place(name, description, safety, resource));
+    let mut add = |name, description, safety, resource, position| {
+        map.add_place(place(name, description, safety, resource, position))
+    };
 
     let camp = add(
         "Tidewatch Camp",
         "A ring of sea-worn stones around a fire pit, above the reach of the tide. Nothing here will harm you.",
         Safety::Haven,
         None,
+        (2, 2),
     );
     let ledge = add(
         "Ore Ledge",
         "A shelf of dark rock runs along the foot of the cliff, veined with heavy ore. A goat track climbs on to the north.",
         Safety::Buffer,
         Some(Resource::Ore),
+        (2, 1),
     );
     let shelf = add(
         "High Shelf",
         "A broad step in the cliff above the ledge, where the ore runs in thick dark seams.",
         Safety::Buffer,
         Some(Resource::Ore),
+        (2, 0),
     );
     let beach = add(
         "Shingle Beach",
         "Grey pebbles slope down to the water. Driftwood lies tangled along the wrack line, and a cave mouth gapes in the headland.",
         Safety::Buffer,
         Some(Resource::Driftwood),
+        (3, 2),
     );
     let shallows = add(
         "Kelp Shallows",
         "Knee-deep water over flat rock, thick with swaying kelp. Further east the reef shows black at low water.",
         Safety::Buffer,
         Some(Resource::Kelp),
+        (4, 2),
     );
     let reef = add(
         "Outer Reef",
         "Black rock at the edge of the deep water, heavy with kelp. The sea covers the way back at high tide.",
         Safety::Contested,
         Some(Resource::Kelp),
+        (5, 2),
     );
     let cave = add(
         "Tidal Cave",
         "A dripping hollow that the sea takes back with every tide. Tide-glass glints in the walls, and a crack leads down.",
         Safety::Contested,
         Some(Resource::Tideglass),
+        (3, 3),
     );
     let grotto = add(
         "Deep Grotto",
         "A chamber below the tide line, its walls thick with tide-glass. The only way out is up.",
         Safety::Contested,
         Some(Resource::Tideglass),
+        (3, 4),
     );
     let wrack = add(
         "Wrack Line",
         "A long drift of weed and sea-bleached timber thrown up by the winter storms.",
         Safety::Buffer,
         Some(Resource::Driftwood),
+        (2, 3),
     );
     let spit = add(
         "Stony Spit",
         "A finger of broken rock reaching into the sea. Ore shows where the waves have split the stone.",
         Safety::Buffer,
         Some(Resource::Ore),
+        (2, 4),
     );
 
     let tidal = Passage::Cyclic { cycle: TIDE, open_for: LOW_TIDE };

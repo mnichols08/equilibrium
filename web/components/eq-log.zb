@@ -1,0 +1,32 @@
+<!--
+  What has happened, oldest first. Keeps the newest line in view.
+  @prop {string[]} lines - Every line so far.
+-->
+<script>
+  import { effect } from '@zubra/runtime'
+
+  const KEEP = 60                                  // only the latest lines are drawn
+  const recent = lines.slice(-KEEP).map((text, index) => ({ key: lines.length - Math.min(lines.length, KEEP) + index, text }))
+
+  let list = null
+  effect(() => {
+    recent.length                                  // re-run whenever a line arrives
+    if (list) list.scrollTop = list.scrollHeight
+  })
+</script>
+<style>
+  :host { display: block; }
+  ol {
+    margin: 0; padding: 0.5rem 0.75rem; list-style: none; max-height: 14rem; overflow-y: auto;
+    border: 1px solid var(--eq-edge, #3d3a34); border-radius: 0.5rem; background: var(--eq-paper, #fbf8f0);
+  }
+  li { white-space: pre-wrap; margin: 0.15rem 0; }
+  li.typed { color: var(--eq-muted, #5b574e); margin-top: 0.5rem; }
+</style>
+<eq-log lines={[]}>
+  <ol ref={list} aria-label="What has happened" aria-live="polite">
+    <zb-each items={recent} as="entry" key={entry.key}>
+      <li class:typed={entry.text.startsWith("> ")}>{entry.text}</li>
+    </zb-each>
+  </ol>
+</eq-log>

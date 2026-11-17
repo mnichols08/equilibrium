@@ -1,0 +1,43 @@
+<!--
+  What you can do right now: walk out by an exit, gather, or let time pass.
+  @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
+  @fires command - A button was pressed; `detail` is the line to send to the game, such as "north" or "wait 10m".
+-->
+<script>
+  import { emit } from '@zubra/runtime'
+
+  const WAITS = [
+    { line: 'wait 1m', text: 'Wait 1 min' },
+    { line: 'wait 10m', text: 'Wait 10 min' },
+    { line: 'wait 1h', text: 'Wait 1 hour' },
+  ]
+</script>
+<style>
+  :host { display: block; }
+  div { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+  button {
+    font: inherit; padding: 0.55rem 0.8rem; min-height: 2.75rem;
+    border: 1px solid var(--eq-edge, #3d3a34); border-radius: 0.5rem;
+    background: var(--eq-button, #f6f2e7); color: var(--eq-ink, #24221e); cursor: pointer;
+  }
+  button.primary { background: var(--eq-you, #1f4e79); color: #fff; border-color: transparent; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  small { display: block; opacity: 0.8; }
+</style>
+<eq-actions exits={[]} can-gather={false}>
+  <div role="group" aria-label="Go">
+    <zb-each items={exits} as="exit" key={exit.label}>
+      <button type="button" disabled={!exit.open} onclick={() => emit('command', exit.label)}>
+        Go {exit.label}
+        <small>{exit.open ? exit.to_name : "under water"}</small>
+      </button>
+    </zb-each>
+  </div>
+  <div role="group" aria-label="Do">
+    <button type="button" class="primary" disabled={!canGather} onclick={() => emit('command', 'gather')}>Gather</button>
+    <button type="button" onclick={() => emit('command', 'inspect')}>Inspect</button>
+    <zb-each items={WAITS} as="wait" key={wait.line}>
+      <button type="button" onclick={() => emit('command', wait.line)}>{wait.text}</button>
+    </zb-each>
+  </div>
+</eq-actions>
