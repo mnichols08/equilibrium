@@ -1,0 +1,10 @@
+[package]
+name = "eq-ledger"
+description = "Point pools with a cap per entry and a cap overall."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

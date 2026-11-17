@@ -13,8 +13,10 @@ the browser.
 | `eq-clock` | Ticks, durations, cycles and pausable stopwatches |
 | `eq-meter` | A bounded value with named bands |
 | `eq-curve` | Deterministic, integer-only progression maths |
+| `eq-ledger` | Point pools with a cap per entry and a cap overall |
+| `eq-events` | Command log, tick-by-tick sessions and deterministic replay |
 
-Every crate is `no_std`, has no dependencies and is usable without the game.
+Every crate is `no_std` and usable without the game. `eq-events` needs `alloc`.
 
 ## Ground rules
 

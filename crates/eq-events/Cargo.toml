@@ -1,0 +1,16 @@
+[package]
+name = "eq-events"
+description = "Command log, tick-by-tick sessions and deterministic replay."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+eq-clock = { path = "../eq-clock" }
+
+[dev-dependencies]
+eq-rng = { path = "../eq-rng" }

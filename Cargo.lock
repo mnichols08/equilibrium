@@ -11,7 +11,19 @@ name = "eq-curve"
 version = "0.1.0"
 
 [[package]]
+name = "eq-events"
+version = "0.1.0"
+dependencies = [
+ "eq-clock",
+ "eq-rng",
+]
+
+[[package]]
 name = "eq-ids"
+version = "0.1.0"
+
+[[package]]
+name = "eq-ledger"
 version = "0.1.0"
 
 [[package]]
