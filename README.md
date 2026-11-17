@@ -37,6 +37,8 @@ npx serve dist        # or any static file server
 | `web/app.js` | Joins a game to a view. No DOM or wasm, so it is tested with `node --test`. |
 | `web/main.js` | Loads the wasm and the components. |
 
+CI builds the site and plays it in headless Chrome (`web/test/e2e.html`): it presses buttons and map tiles, types a command and waits for the tide, checking the page after each.
+
 The page holds no rules. It sends the game the same lines you would type in the terminal and draws the scene it gets back. `cargo run -p eq-web --example scene -- north gather` prints that scene.
 
 ## Crates
