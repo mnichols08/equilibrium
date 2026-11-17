@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Equilibrium</title>
+    <meta name="description" content="The shoreline gives what you take from it, and remembers how you took it." />
+    <style>
+      :root {
+        color-scheme: light;
+        --eq-ink: #24221e;
+        --eq-muted: #5b574e;
+        --eq-paper: #fbf8f0;
+        --eq-edge: #3d3a34;
+        --eq-you: #1f4e79;
+        font-family: system-ui, sans-serif;
+        line-height: 1.4;
+      }
+      body { margin: 0; background: #efe9da; color: var(--eq-ink); }
+      main { max-width: 44rem; margin: 0 auto; padding: 0.75rem; display: grid; gap: 0.75rem; }
+      h1 { margin: 0; font-size: 1.15rem; letter-spacing: 0.08em; text-transform: uppercase; }
+      .tagline { margin: 0; color: var(--eq-muted); }
+      #game { display: grid; gap: 0.75rem; }
+      #game[hidden] { display: none; }
+      eq-map { background: var(--eq-paper); border: 1px solid var(--eq-edge); border-radius: 0.5rem; padding: 0.25rem; }
+      #typed { display: flex; gap: 0.5rem; }
+      #typed input { flex: 1; font: inherit; padding: 0.55rem; border: 1px solid var(--eq-edge); border-radius: 0.5rem; min-width: 0; }
+      #typed button { font: inherit; padding: 0.55rem 0.9rem; border: 1px solid var(--eq-edge); border-radius: 0.5rem; background: #f6f2e7; }
+      #notice.error { color: #a3262a; }
+      .key { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem 0.9rem; font-size: 0.85rem; color: var(--eq-muted); }
+      .key span { display: inline-block; width: 0.8rem; height: 0.8rem; border: 1px solid var(--eq-edge); border-radius: 0.2rem; vertical-align: -0.1rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Equilibrium</h1>
+        <p class="tagline">The shoreline gives what you take from it, and remembers how you took it.</p>
+      </header>
+
+      <p id="notice" role="status">Loading the shoreline…</p>
+
+      <section id="game" hidden>
+        <eq-map></eq-map>
+        <ul class="key" aria-label="Map key">
+          <li><span style="background: #b9d8a8"></span> pristine</li>
+          <li><span style="background: #dfe0a0"></span> healthy</li>
+          <li><span style="background: #ecc48a"></span> worn</li>
+          <li><span style="background: #dd9c8c"></span> stripped</li>
+          <li><span style="background: #1f4e79; border-radius: 50%"></span> you</li>
+          <li>dotted line: passable at low tide</li>
+        </ul>
+        <eq-status></eq-status>
+        <eq-actions></eq-actions>
+        <eq-log></eq-log>
+        <form id="typed" autocomplete="off">
+          <input name="line" aria-label="Type a command" placeholder="Type a command, or help" enterkeyhint="send" autocapitalize="off" />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

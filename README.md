@@ -15,6 +15,30 @@ One character on the Rocky Shoreline: a camp and nine places to gather, two of t
 - `--seed N` picks the world's random seed (default 1).
 - `--verify` replays your command log when you quit and checks it rebuilds the same world.
 
+### In the browser
+
+A basic top-down view: the same game compiled to WebAssembly, drawn by four [Zubra](https://github.com/journey-to-code-org/zubra) components.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.130
+cargo build -p eq-web --release --target wasm32-unknown-unknown
+wasm-bindgen --target web --out-dir web/dist/pkg target/wasm32-unknown-unknown/release/eq_web.wasm
+cd web && npm ci && npm run build
+npx serve dist        # or any static file server
+```
+
+| Part | Job |
+| --- | --- |
+| `web/components/eq-map.zb` | The shoreline from above. Tiles are coloured by wear; press a neighbour to walk there. |
+| `web/components/eq-status.zb` | Where you are, the zone's vitality, your taint, pack and levels. |
+| `web/components/eq-actions.zb` | Buttons for exits, gathering and waiting. |
+| `web/components/eq-log.zb` | What has happened. |
+| `web/app.js` | Joins a game to a view. No DOM or wasm, so it is tested with `node --test`. |
+| `web/main.js` | Loads the wasm and the components. |
+
+The page holds no rules. It sends the game the same lines you would type in the terminal and draws the scene it gets back. `cargo run -p eq-web --example scene -- north gather` prints that scene.
+
 ## Crates
 
 | Crate | Job |
@@ -31,14 +55,15 @@ One character on the Rocky Shoreline: a camp and nine places to gather, two of t
 | `eq-skills` | Use-based proficiency with diminishing returns and a remembered peak |
 | `eq-game` | The first playable build: rules for many characters, map, tuning, parser and narrator |
 | `eq-cli` | Terminal client for `eq-game` |
+| `eq-web` | The game for the browser: a WebAssembly entry point and a drawable scene as JSON |
 
-Every crate except `eq-cli` is `no_std` and builds for wasm. The crates above `eq-game` are usable without the game.
+Every crate except `eq-cli` and `eq-web` is `no_std`, and all but `eq-cli` build for wasm. The crates above `eq-game` are usable without the game.
 
 ## Scale
 
 Measured on one core with `cargo test --release -p eq-game --test scale -- --ignored --nocapture`:
 
-- An idle world runs about 12 million ticks per second: over 100 world-days per second.
+- An idle world runs 10 to 12 million ticks per second: over 100 world-days per second.
 - Replaying a crowd's command log runs at about 6 million commands per second, the same for 100 characters as for 5,000.
 - `Game::audience(event)` names who should be told about an event from an index of who is where, so the cost of an event grows with the crowd around it and not with the whole world.
 

@@ -165,4 +165,7 @@ pub struct Place {
     pub safety: Safety,
     /// What can be gathered, if anything.
     pub deposit: Option<Deposit>,
+    /// Where it sits on a map seen from above: `x` grows east, `y` grows
+    /// south. Only for drawing; the rules never read it.
+    pub position: (i32, i32),
 }

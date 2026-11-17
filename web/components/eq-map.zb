@@ -1,0 +1,150 @@
+<!--
+  The shoreline seen from above: places as tiles, the ways between them as lines.
+  Tiles are coloured by how worn their deposit is. Press a neighbouring tile to walk there.
+  @prop {{ id: number, name: string, x: number, y: number, safety: string, here: boolean, deposit: null | { resource: string, stock_percent: number, quality: string, pressure: number }, people: { name: string, you: boolean, marked: boolean }[] }[]} places - Every place in the zone.
+  @prop {{ from: number, to: number, tidal: boolean, open: boolean }[]} links - Every way between two places.
+  @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
+  @fires travel - A neighbouring tile was pressed; `detail` is the exit's label.
+-->
+<script>
+  import { emit } from '@zubra/runtime'
+
+  const STEP = 100     // distance between neighbouring tiles
+  const TILE = 80      // a tile's width and height; the rest of a step is path
+  const HALF = TILE / 2
+  const GAUGE = TILE - 16 // the stock bar's full width
+
+  const columns = places.map((place) => place.x)
+  const rows = places.map((place) => place.y)
+  const left = places.length ? Math.min(...columns) : 0
+  const top = places.length ? Math.min(...rows) : 0
+  const right = places.length ? Math.max(...columns) : 0
+  const bottom = places.length ? Math.max(...rows) : 0
+  const viewBox = `${left * STEP - STEP / 2} ${top * STEP - STEP / 2} ${(right - left + 1) * STEP} ${(bottom - top + 1) * STEP}`
+
+  const spots = Object.fromEntries(places.map((place) => [place.id, place]))
+  const exitTo = Object.fromEntries(exits.map((exit) => [exit.to, exit]))
+
+  const paths = links
+    .filter((link) => spots[link.from] && spots[link.to])
+    .map((link) => ({
+      key: `${link.from}-${link.to}`,
+      x1: spots[link.from].x * STEP,
+      y1: spots[link.from].y * STEP,
+      x2: spots[link.to].x * STEP,
+      y2: spots[link.to].y * STEP,
+      tidal: link.tidal,
+      closed: !link.open,
+    }))
+
+  const tiles = places.map((place) => {
+    const exit = exitTo[place.id]
+    const others = place.people.filter((person) => !person.you)
+    return {
+      id: place.id,
+      nameLines: twoLines(place.name),
+      x: place.x * STEP - HALF,
+      y: place.y * STEP - HALF,
+      safety: place.safety,
+      here: place.here,
+      quality: place.deposit ? place.deposit.quality : 'none',
+      resource: place.deposit ? `${place.deposit.resource} ${place.deposit.stock_percent}%` : 'shelter',
+      stock: place.deposit ? (place.deposit.stock_percent / 100) * GAUGE : 0,
+      hasDeposit: Boolean(place.deposit),
+      others: others.length,
+      marked: others.some((person) => person.marked),
+      exit: exit && exit.open ? exit.label : '',
+      blocked: Boolean(exit) && !exit.open,
+      summary: describe(place, exit),
+    }
+  })
+
+  // A name on two short lines fits a tile where one long line would not.
+  function twoLines(name) {
+    const space = name.indexOf(' ')
+    return space < 0 ? [name, ''] : [name.slice(0, space), name.slice(space + 1)]
+  }
+
+  function describe(place, exit) {
+    const parts = [place.name, place.safety]
+    if (place.deposit) parts.push(`${place.deposit.resource} ${place.deposit.stock_percent}% left, ${place.deposit.quality}`)
+    if (place.here) parts.push('you are here')
+    else if (exit) parts.push(exit.open ? `press to go ${exit.label}` : `${exit.label} is under water`)
+    return parts.join(', ')
+  }
+
+  function travel(tile) {
+    if (tile.exit) emit('travel', tile.exit)
+  }
+</script>
+<style>
+  :host { display: block; }
+  svg { display: block; width: 100%; height: auto; font-family: inherit; }
+
+  .path { stroke: var(--eq-path, #8a7f6a); stroke-width: 6; stroke-linecap: round; }
+  .path.tidal { stroke: var(--eq-water, #3b82a6); stroke-dasharray: 2 12; }
+  .path.closed { opacity: 0.25; }
+
+  .tile rect.ground { stroke: var(--eq-edge, #3d3a34); stroke-width: 1.5; rx: 10px; }
+  .tile.none rect.ground { fill: var(--eq-shelter, #d9d2c0); }
+  .tile.pristine rect.ground { fill: var(--eq-pristine, #b9d8a8); }
+  .tile.healthy rect.ground { fill: var(--eq-healthy, #dfe0a0); }
+  .tile.worn rect.ground { fill: var(--eq-worn, #ecc48a); }
+  .tile.stripped rect.ground { fill: var(--eq-stripped, #dd9c8c); }
+  .tile.contested rect.ground { stroke-dasharray: 5 4; }
+
+  .tile.here rect.ground { stroke: var(--eq-you, #1f4e79); stroke-width: 4; }
+  .tile.reachable { cursor: pointer; }
+  .tile.reachable rect.ground { stroke: var(--eq-you, #1f4e79); stroke-width: 2.5; }
+  .tile.reachable:hover rect.ground, .tile.reachable:focus-visible rect.ground { stroke-width: 4; }
+  .tile.blocked { filter: saturate(0.35); }
+  .tile.blocked text { opacity: 0.6; }
+  .tile:focus { outline: none; }
+
+  .name { font-size: 11px; font-weight: 600; fill: var(--eq-ink, #24221e); text-anchor: middle; }
+  .resource { font-size: 9px; fill: var(--eq-ink, #24221e); text-anchor: middle; }
+  .gauge { fill: var(--eq-gauge-empty, #ffffff8c); rx: 3px; }
+  .stock { fill: var(--eq-gauge, #3d3a34); rx: 3px; }
+  .you { fill: var(--eq-you, #1f4e79); stroke: #fff; stroke-width: 1.5; }
+  .other { fill: var(--eq-other, #6b5b95); stroke: #fff; stroke-width: 1; }
+  .other.marked { fill: var(--eq-marked, #a3262a); }
+  .count { font-size: 9px; fill: var(--eq-ink, #24221e); }
+</style>
+<eq-map places={[]} links={[]} exits={[]}>
+  <svg viewBox={viewBox} role="group" aria-label="Map of the shoreline">
+    <zb-each items={paths} as="path" key={path.key}>
+      <line class="path" class:tidal={path.tidal} class:closed={path.closed} x1={path.x1} y1={path.y1} x2={path.x2} y2={path.y2}></line>
+    </zb-each>
+    <zb-each items={tiles} as="tile" key={tile.id}>
+      <g
+        class="tile {tile.quality} {tile.safety}"
+        class:here={tile.here}
+        class:reachable={tile.exit}
+        class:blocked={tile.blocked}
+        transform="translate({tile.x} {tile.y})"
+        role={tile.exit ? "button" : "img"}
+        tabindex={tile.exit ? 0 : -1}
+        aria-label={tile.summary}
+        onclick={() => travel(tile)}
+        onkeydown.enter={() => travel(tile)}
+        onkeydown.space.prevent={() => travel(tile)}
+      >
+        <rect class="ground" width="80" height="80"></rect>
+        <text class="name" x="40" y="17">{tile.nameLines[0]}</text>
+        <text class="name" x="40" y="29">{tile.nameLines[1]}</text>
+        <text class="resource" x="40" y="42">{tile.resource}</text>
+        <zb-if test={tile.hasDeposit}>
+          <rect class="gauge" x="8" y="47" width="64" height="5"></rect>
+          <rect class="stock" x="8" y="47" width={tile.stock} height="5"></rect>
+        </zb-if>
+        <zb-if test={tile.here}>
+          <circle class="you" cx="20" cy="66" r="7"></circle>
+        </zb-if>
+        <zb-if test={tile.others > 0}>
+          <circle class="other" class:marked={tile.marked} cx="46" cy="66" r="6"></circle>
+          <text class="count" x="56" y="69">{tile.others}</text>
+        </zb-if>
+      </g>
+    </zb-each>
+  </svg>
+</eq-map>
