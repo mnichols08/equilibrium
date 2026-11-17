@@ -9,6 +9,7 @@ use eq_clock::Duration;
 
 use crate::board::{ContractId, Lot};
 use crate::command::Action;
+use crate::pact::Dealing;
 use crate::types::Resource;
 
 /// How long `wait` lasts when no time is given.
@@ -102,12 +103,15 @@ pub fn parse(line: &str) -> Input {
             Some(name) => Input::Name(name.into()),
             None => Input::Unknown("Name whom? Try \"name bryn\".".into()),
         },
-        "call" | "house" | "invite" if given.is_empty() => {
+        "call" | "house" | "invite" | "ally" | "war" | "truce" if given.is_empty() => {
             Input::Unknown(alloc::format!("{verb} what? Give a name: \"{verb} Saltmarch\"."))
         }
         "call" => Input::Do(Action::NameLand(given.into())),
         "house" => Input::Do(Action::NameHouse(given.into())),
         "invite" => Input::Do(Action::Invite(given.into())),
+        "ally" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::Ally }),
+        "war" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::War }),
+        "truce" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::Truce }),
         "rite" | "mend" => Input::Do(Action::Rite),
         "tend" | "vigil" => match rest {
             Some(name) => Input::Tend(name.into()),
@@ -285,6 +289,9 @@ mod tests {
         assert_eq!(parse("CALL  The Salt March "), Input::Do(Action::NameLand("The Salt March".into())));
         assert_eq!(parse("house McAllister"), Input::Do(Action::NameHouse("McAllister".into())));
         assert_eq!(parse("invite Ada"), Input::Do(Action::Invite("Ada".into())));
+        assert_eq!(parse("war The Salt March"), Input::Do(Action::Deal { with: "The Salt March".into(), dealing: Dealing::War }));
+        assert_eq!(parse("ally bryn"), Input::Do(Action::Deal { with: "bryn".into(), dealing: Dealing::Ally }));
+        assert!(matches!(parse("truce"), Input::Unknown(_)));
         assert!(matches!(parse("call"), Input::Unknown(_)));
         assert!(matches!(parse("invite   "), Input::Unknown(_)));
     }

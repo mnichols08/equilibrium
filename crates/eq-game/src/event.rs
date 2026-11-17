@@ -10,6 +10,7 @@ use crate::character::CharacterId;
 use crate::board::{ContractId, Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::creature::Being;
+use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::spirit::SpiritTier;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
 
@@ -246,6 +247,25 @@ pub enum Outcome {
         /// Why not.
         why: NameRefusal,
     },
+    /// A founder's dealing with another land came to nothing.
+    CannotDeal {
+        /// Why not.
+        why: PactRefusal,
+    },
+    /// A founder made another land an offer that waits for its answer.
+    Offered {
+        /// The haven of the land it was made to.
+        land: PlaceId,
+        /// What was offered: an alliance or a truce.
+        dealing: Dealing,
+    },
+    /// Another land's founder has made this founder's land an offer.
+    WasOffered {
+        /// The haven of the land that made it.
+        land: PlaceId,
+        /// What was offered: an alliance or a truce.
+        dealing: Dealing,
+    },
     /// They spoke a forgotten spirit's name at the shrine.
     Named {
         /// Whose name it was.
@@ -404,6 +424,16 @@ pub enum Event {
         who: CharacterId,
         /// What happened.
         outcome: Outcome,
+    },
+    /// Two lands changed how they stand to each other. Everyone who
+    /// belongs to either hears of it, wherever they are.
+    Pact {
+        /// The haven of the land whose founder spoke last.
+        by: PlaceId,
+        /// The haven of the other land.
+        with: PlaceId,
+        /// What they are to each other now.
+        dealt: Dealt,
     },
     /// A command named a character who does not exist.
     UnknownCharacter {
