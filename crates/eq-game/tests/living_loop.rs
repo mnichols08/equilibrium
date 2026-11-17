@@ -12,9 +12,10 @@
 
 mod common;
 
-use common::{careful, gathered, greedy, Crowd, Plan, SEED};
+use common::{fresh_world, gathered, Crowd, SEED};
 use eq_clock::Duration;
 use eq_events::{replay, Session};
+use eq_game::bots::{Plan, Policy};
 use eq_game::{Attribute, CharacterId, Command, Event, Game, Haul, Health, SkillKind};
 use eq_nodes::{Node, Quality};
 
@@ -121,7 +122,7 @@ fn run_alone(plan: Plan) -> Crowd {
 
 #[test]
 fn a_careful_bot_earns_steadily_and_holds_the_zone_at_peak() {
-    let run = run_alone(Plan::roam(careful));
+    let run = run_alone(Plan::roam(Policy::Careful));
     let quarters = run.quarters();
 
     let (least, most) = (quarters.iter().min().unwrap(), quarters.iter().max().unwrap());
@@ -133,8 +134,8 @@ fn a_careful_bot_earns_steadily_and_holds_the_zone_at_peak() {
 
 #[test]
 fn a_greedy_bot_wears_the_zone_down_and_earns_less_for_it() {
-    let greedy_run = run_alone(Plan::roam(greedy));
-    let careful_run = run_alone(Plan::roam(careful));
+    let greedy_run = run_alone(Plan::roam(Policy::Greedy));
+    let careful_run = run_alone(Plan::roam(Policy::Careful));
 
     let lowest = greedy_run.lowest_vitality();
     assert!((31..=50).contains(&lowest), "greed alone should wear the zone down but not collapse it: {lowest}");
@@ -145,20 +146,19 @@ fn a_greedy_bot_wears_the_zone_down_and_earns_less_for_it() {
 
 #[test]
 fn the_zone_recovers_once_a_greedy_bot_stops() {
-    let mut run = run_alone(Plan::roam(greedy));
+    let mut run = run_alone(Plan::roam(Policy::Greedy));
     run.rest(Duration::hours(2));
     assert_eq!((run.game().vitality(), run.game().health()), (100, Health::Peak));
 }
 
 #[test]
 fn ten_thousand_ticks_replay_to_the_same_world() {
-    for plan in [Plan::roam(greedy), Plan::roam(careful)] {
+    for plan in [Plan::roam(Policy::Greedy), Plan::roam(Policy::Careful)] {
         let run = run_alone(plan);
-        let names = ["Bot 0"];
-        let (rebuilt, _) = replay(Game::new(SEED, &names), run.session.log(), run.session.now());
+        let (rebuilt, _) = replay(fresh_world(1), run.session.log(), run.session.now());
         assert_eq!(&rebuilt, run.game());
 
-        let (other_seed, _) = replay(Game::new(SEED + 1, &names), run.session.log(), run.session.now());
+        let (other_seed, _) = replay(Game::new(SEED + 1, &["Bot 0"]), run.session.log(), run.session.now());
         assert_ne!(&other_seed, run.game());
     }
 }

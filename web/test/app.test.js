@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { startGame } from '../app.js'
+import { DEFAULT_BOTS, MOST_BOTS, settings, startGame } from '../app.js'
 
 /** A game that records what it is sent and counts its turns. */
 function fakeGame() {
@@ -60,4 +60,14 @@ test('each frame gets its own copy of the lines', () => {
   const send = startGame(fakeGame(), view)
   send('wait')
   assert.equal(view.frames[0].lines.length, 1, 'an earlier frame must not grow when a later one is drawn')
+})
+
+test('settings come from the address, with sensible fallbacks', () => {
+  const read = (query) => settings(new URLSearchParams(query))
+
+  assert.deepEqual(read(''), { seed: 1, bots: DEFAULT_BOTS })
+  assert.deepEqual(read('seed=7&bots=0'), { seed: 7, bots: 0 })
+  assert.deepEqual(read('seed=abc&bots=-2'), { seed: 1, bots: DEFAULT_BOTS })
+  assert.deepEqual(read('bots=1.5'), { seed: 1, bots: DEFAULT_BOTS })
+  assert.deepEqual(read('bots=9999'), { seed: 1, bots: MOST_BOTS })
 })

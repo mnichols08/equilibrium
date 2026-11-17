@@ -28,6 +28,8 @@ pub struct Scene {
     pub health: &'static str,
     /// The viewer.
     pub you: You,
+    /// Everyone else standing where the viewer is.
+    pub company: Vec<PersonView>,
     /// Every place in the zone.
     pub places: Vec<PlaceView>,
     /// Every way between two places, once each.
@@ -180,6 +182,7 @@ impl Scene {
             vitality: game.vitality(),
             health: game.health().name(),
             you,
+            company: people(game, viewer, here).into_iter().filter(|person| !person.you).collect(),
             places: places(game, viewer, here),
             links: links(game, now),
             exits: exits(game, here, now),
@@ -295,6 +298,7 @@ mod tests {
         assert_eq!(scene.you.place_name, "Tidewatch Camp");
         assert!(!scene.you.can_gather);
         assert!(scene.you.pack.is_empty());
+        assert!(scene.company.is_empty());
 
         let here: Vec<&PlaceView> = scene.places.iter().filter(|place| place.here).collect();
         assert_eq!(here.len(), 1);

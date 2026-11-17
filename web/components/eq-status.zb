@@ -1,11 +1,13 @@
 <!--
   Where you are and how you and the shoreline are doing.
+  @prop {{ name: string, marked: boolean }[]} company - Everyone else standing where you are.
   @prop {{ place_name: string, description: string, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
 -->
 <script>
   const emptyYou = { place_name: '', description: '', taint: 0, marked: false, skills: [], attributes: [], pack: [] }
   const trained = [...you.skills, ...you.attributes].filter((entry) => entry.level > 0)
   const carrying = you.pack.map((item) => `${item.amount} ${item.name}`).join(', ')
+  const alsoHere = company.map((person) => (person.marked ? `${person.name} (marked)` : person.name)).join(', ')
 </script>
 <style>
   :host { display: block; }
@@ -17,12 +19,13 @@
   .marked { color: var(--eq-marked, #a3262a); font-weight: 600; }
   ul { margin: 0.35rem 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem 0.9rem; }
 </style>
-<eq-status clock="0:00:00" tide="low" vitality={100} health="peak health" you={emptyYou}>
+<eq-status clock="0:00:00" tide="low" vitality={100} health="peak health" you={emptyYou} company={[]}>
   <header>
     <h2>{you.place_name}</h2>
     <span class="meta">{clock} · {tide} tide</span>
   </header>
   <p>{you.description}</p>
+  <p zb-if={alsoHere}>Also here: {alsoHere}.</p>
   <p>
     <label>Shoreline <meter min="0" max="100" low="31" high="81" optimum="100" value={vitality}></meter> {vitality} ({health})</label>
   </p>

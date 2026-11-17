@@ -4,9 +4,11 @@ mod common;
 
 use std::time::Instant;
 
-use common::{careful, greedy, Crowd, Plan, DEPOSITS};
+use common::{fresh_world, Crowd};
 use eq_clock::{Duration, Tick};
 use eq_events::{replay, Session};
+use eq_game::bots::{Plan, Policy};
+use eq_game::content::DEPOSIT_ROUTES;
 use eq_game::Game;
 
 /// A crowd of `heads`, alternating greedy and careful, spread over every
@@ -14,18 +16,14 @@ use eq_game::Game;
 fn mixed_crowd(heads: usize) -> Crowd {
     let plans: Vec<Plan> = (0..heads)
         .map(|index| {
-            let policy = if index % 2 == 0 { greedy } else { careful };
+            let policy = if index % 2 == 0 { Policy::Greedy } else { Policy::Careful };
             match index % 3 {
                 0 => Plan::roam(policy),
-                _ => Plan::camp(policy, DEPOSITS[index % DEPOSITS.len()]),
+                _ => Plan::camp(policy, DEPOSIT_ROUTES[index % DEPOSIT_ROUTES.len()]),
             }
         })
         .collect();
     Crowd::new(&plans)
-}
-
-fn names(heads: usize) -> Vec<String> {
-    (0..heads).map(|index| format!("Bot {index}")).collect()
 }
 
 #[test]
@@ -40,9 +38,7 @@ fn five_hundred_characters_share_the_zone_and_replay_identically() {
     assert_eq!(placed, HEADS, "everyone should be in exactly one place");
     assert!(crowd.session.log().len() > HEADS, "the crowd should have been busy");
 
-    let names = names(HEADS);
-    let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    let (rebuilt, _) = replay(Game::new(common::SEED, &names), crowd.session.log(), crowd.session.now());
+    let (rebuilt, _) = replay(fresh_world(HEADS), crowd.session.log(), crowd.session.now());
     assert_eq!(&rebuilt, game);
 }
 
@@ -71,10 +67,8 @@ fn print_timings() {
         let played = started.elapsed();
         let commands = crowd.session.log().len();
 
-        let names = names(heads);
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
         let started = Instant::now();
-        let (rebuilt, events) = replay(Game::new(common::SEED, &names), crowd.session.log(), crowd.session.now());
+        let (rebuilt, events) = replay(fresh_world(heads), crowd.session.log(), crowd.session.now());
         let replayed = started.elapsed();
         assert_eq!(&rebuilt, crowd.game());
         println!(

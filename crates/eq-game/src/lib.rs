@@ -17,6 +17,7 @@
 //! - [`Haul`]: the sums behind a harvest.
 //! - [`parser`]: text to intent.
 //! - [`narrate`]: events and state to text, for one viewer.
+//! - [`bots`]: simple characters that play by themselves.
 //! - [`Solo`]: one player at the controls; what every single-player client
 //!   wraps.
 //!
@@ -27,6 +28,7 @@
 
 extern crate alloc;
 
+pub mod bots;
 mod character;
 mod command;
 pub mod content;

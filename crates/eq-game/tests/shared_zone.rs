@@ -13,16 +13,18 @@
 
 mod common;
 
-use common::{careful, greedy, Crowd, Plan, Policy, DEPOSITS, SEED};
+use common::{fresh_world, Crowd};
 use eq_clock::Duration;
 use eq_events::replay;
-use eq_game::{Game, Health, Standing};
+use eq_game::bots::{Plan, Policy};
+use eq_game::content::DEPOSIT_ROUTES;
+use eq_game::{Health, Standing};
 
 const RUN: Duration = Duration::seconds(10_000);
 
 /// One camper on each deposit.
 fn campers(policy: Policy) -> Vec<Plan> {
-    DEPOSITS.iter().map(|approach| Plan::camp(policy, approach)).collect()
+    DEPOSIT_ROUTES.iter().map(|approach| Plan::camp(policy, approach)).collect()
 }
 
 fn run(plans: &[Plan]) -> Crowd {
@@ -37,9 +39,9 @@ fn roamers(policy: Policy, heads: usize) -> Crowd {
 
 /// Four roamers, the first `defectors` of them greedy and the rest careful.
 fn mixed(defectors: usize) -> Crowd {
-    let mut plans = vec![Plan::roam(careful); 4];
+    let mut plans = vec![Plan::roam(Policy::Careful); 4];
     for plan in plans.iter_mut().take(defectors) {
-        *plan = Plan::roam(greedy);
+        *plan = Plan::roam(Policy::Greedy);
     }
     run(&plans)
 }
@@ -50,24 +52,24 @@ fn collapsed_samples(crowd: &Crowd) -> usize {
 
 #[test]
 fn one_greedy_player_cannot_collapse_the_zone() {
-    let camper = run(&[Plan::camp(greedy, DEPOSITS[0])]);
+    let camper = run(&[Plan::camp(Policy::Greedy, DEPOSIT_ROUTES[0])]);
     assert!(camper.lowest_vitality() >= 81, "a lone camper took the zone to {}", camper.lowest_vitality());
 
-    let roamer = roamers(greedy, 1);
+    let roamer = roamers(Policy::Greedy, 1);
     assert!(roamer.lowest_vitality() > 30, "a lone roamer took the zone to {}", roamer.lowest_vitality());
     assert!(roamer.lowest_vitality() < 81, "greed should still leave a mark");
 }
 
 #[test]
 fn two_greedy_roamers_collapse_the_zone() {
-    let crowd = roamers(greedy, 2);
+    let crowd = roamers(Policy::Greedy, 2);
     assert!(collapsed_samples(&crowd) * 2 > crowd.samples.len());
     assert_eq!(crowd.game().health(), Health::Collapsed);
 }
 
 #[test]
 fn a_camper_on_every_deposit_collapses_the_zone_and_holds_it_there() {
-    let crowd = run(&campers(greedy));
+    let crowd = run(&campers(Policy::Greedy));
     let second_half = &crowd.samples[crowd.samples.len() / 2..];
     let highest = second_half.iter().map(|sample| sample.vitality).max().unwrap();
     let collapsed = second_half.iter().filter(|sample| sample.vitality <= 30).count();
@@ -80,7 +82,7 @@ fn a_camper_on_every_deposit_collapses_the_zone_and_holds_it_there() {
 
 #[test]
 fn a_collapsed_zone_is_slow_to_recover_even_when_left_alone() {
-    let mut crowd = run(&campers(greedy));
+    let mut crowd = run(&campers(Policy::Greedy));
 
     crowd.rest(Duration::minutes(20));
     assert_eq!(crowd.game().health(), Health::Collapsed, "it should still be collapsed after 20 minutes");
@@ -91,7 +93,7 @@ fn a_collapsed_zone_is_slow_to_recover_even_when_left_alone() {
 
 #[test]
 fn a_careful_crowd_holds_peak_and_takes_far_more_than_a_greedy_one() {
-    let (careful_crowd, greedy_crowd) = (roamers(careful, 4), roamers(greedy, 4));
+    let (careful_crowd, greedy_crowd) = (roamers(Policy::Careful, 4), roamers(Policy::Greedy, 4));
 
     assert!(careful_crowd.lowest_vitality() >= 81, "vitality fell to {}", careful_crowd.lowest_vitality());
     assert!(collapsed_samples(&greedy_crowd) * 2 > greedy_crowd.samples.len());
@@ -104,7 +106,7 @@ fn the_zone_feeds_a_fixed_total_so_more_heads_means_less_each() {
     // One roamer cannot reach everything the zone offers; from two up, the
     // zone is the limit.
     const HEADS: [usize; 3] = [2, 4, 8];
-    let totals: Vec<u64> = HEADS.into_iter().map(|heads| roamers(careful, heads).carried_by_all()).collect();
+    let totals: Vec<u64> = HEADS.into_iter().map(|heads| roamers(Policy::Careful, heads).carried_by_all()).collect();
 
     let (least, most) = (*totals.iter().min().unwrap(), *totals.iter().max().unwrap());
     assert!(most * 9 <= least * 10, "totals should sit within a tenth of each other: {totals:?}");
@@ -115,7 +117,7 @@ fn the_zone_feeds_a_fixed_total_so_more_heads_means_less_each() {
 
 #[test]
 fn one_greedy_player_among_careful_ones_loses_by_it_and_still_ruins_the_rest() {
-    let fair = roamers(careful, 4);
+    let fair = roamers(Policy::Careful, 4);
     let fair_share = fair.carried_by_all() / 4;
 
     let crowd = mixed(1);
@@ -143,8 +145,7 @@ fn the_land_marks_the_greedy_and_leaves_the_careful_clean() {
 #[test]
 fn a_crowded_run_replays_to_the_same_world() {
     let crowd = mixed(2);
-    let names = ["Bot 0", "Bot 1", "Bot 2", "Bot 3"];
-    let (rebuilt, _) = replay(Game::new(SEED, &names), crowd.session.log(), crowd.session.now());
+    let (rebuilt, _) = replay(fresh_world(4), crowd.session.log(), crowd.session.now());
     assert_eq!(&rebuilt, crowd.game());
 }
 
@@ -163,12 +164,12 @@ fn print_crowd_numbers() {
             crowd.samples.len(),
         );
     };
-    describe("1 greedy camper  ", &run(&[Plan::camp(greedy, DEPOSITS[0])]), 1);
-    describe("9 greedy campers ", &run(&campers(greedy)), 9);
-    describe("9 careful campers", &run(&campers(careful)), 9);
+    describe("1 greedy camper  ", &run(&[Plan::camp(Policy::Greedy, DEPOSIT_ROUTES[0])]), 1);
+    describe("9 greedy campers ", &run(&campers(Policy::Greedy)), 9);
+    describe("9 careful campers", &run(&campers(Policy::Careful)), 9);
     for heads in [1, 2, 3, 4, 8, 16] {
-        describe(&format!("{heads:>2} greedy roamers "), &roamers(greedy, heads), heads as u64);
-        describe(&format!("{heads:>2} careful roamers"), &roamers(careful, heads), heads as u64);
+        describe(&format!("{heads:>2} greedy roamers "), &roamers(Policy::Greedy, heads), heads as u64);
+        describe(&format!("{heads:>2} careful roamers"), &roamers(Policy::Careful, heads), heads as u64);
     }
     for defectors in [1, 2] {
         let crowd = mixed(defectors);
@@ -176,7 +177,7 @@ fn print_crowd_numbers() {
         println!("{defectors} greedy among 4 roamers: each {each:?} lowest {}", crowd.lowest_vitality());
     }
     for minutes in [10, 20, 30, 40, 50, 60, 90] {
-        let mut crowd = run(&campers(greedy));
+        let mut crowd = run(&campers(Policy::Greedy));
         crowd.rest(Duration::minutes(minutes));
         println!("collapsed zone after {minutes} min of rest: vitality {}", crowd.game().vitality());
     }

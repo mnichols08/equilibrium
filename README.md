@@ -13,6 +13,7 @@ cargo run -p eq-cli
 One character on the Rocky Shoreline: a camp and nine places to gather, two of them cut off at high tide. The rules support many characters; the terminal plays one. Walk, gather, wait and watch what your choices do to the place. Type `help` in the game for commands.
 
 - `--seed N` picks the world's random seed (default 1).
+- `--bots N` puts N bots on the shoreline with you: mostly careful, with a greedy one among every four.
 - `--verify` replays your command log when you quit and checks it rebuilds the same world.
 
 ### In the browser
@@ -20,6 +21,8 @@ One character on the Rocky Shoreline: a camp and nine places to gather, two of t
 A basic top-down view: the same game compiled to WebAssembly, drawn by four [Zubra](https://github.com/journey-to-code-org/zubra) components.
 
 Play it at <https://mnichols08.github.io/equilibrium/>. Every merge to `main` that passes CI is published there.
+
+Three bots share the shoreline with you by default. Add `?bots=0` to the address to play alone, `?bots=8` for a crowd, or `?seed=7` for a different world.
 
 To build it yourself:
 
@@ -35,13 +38,13 @@ npx serve dist        # or any static file server
 | Part | Job |
 | --- | --- |
 | `web/components/eq-map.zb` | The shoreline from above. Tiles are coloured by wear; press a neighbour to walk there. |
-| `web/components/eq-status.zb` | Where you are, the zone's vitality, your taint, pack and levels. |
+| `web/components/eq-status.zb` | Where you are, who else is there, the zone's vitality, your taint, pack and levels. |
 | `web/components/eq-actions.zb` | Buttons for exits, gathering and waiting. |
 | `web/components/eq-log.zb` | What has happened. |
 | `web/app.js` | Joins a game to a view. No DOM or wasm, so it is tested with `node --test`. |
 | `web/main.js` | Loads the wasm and the components. |
 
-CI builds the site and plays it in headless Chrome (`web/test/e2e.html`): it presses buttons and map tiles, types a command and waits for the tide, checking the page after each.
+CI builds the site and plays it in headless Chrome (`web/test/e2e.html`): it presses buttons and map tiles, types a command, waits for the tide, then reloads with bots and watches them wander, checking the page after each.
 
 The page holds no rules. It sends the game the same lines you would type in the terminal and draws the scene it gets back. `cargo run -p eq-web --example scene -- north gather` prints that scene.
 
@@ -59,7 +62,7 @@ The page holds no rules. It sends the game the same lines you would type in the 
 | `eq-world-graph` | Places joined by labelled exits that can open and close on a cycle |
 | `eq-nodes` | Resource nodes that regrow, and wear out when over-harvested |
 | `eq-skills` | Use-based proficiency with diminishing returns and a remembered peak |
-| `eq-game` | The first playable build: rules for many characters, map, tuning, parser and narrator |
+| `eq-game` | The first playable build: rules for many characters, map, tuning, parser, narrator and bots |
 | `eq-cli` | Terminal client for `eq-game` |
 | `eq-web` | The game for the browser: a WebAssembly entry point and a drawable scene as JSON |
 
