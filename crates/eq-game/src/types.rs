@@ -157,6 +157,18 @@ pub enum Passing {
     /// The zone had collapsed. The spirit is pulled to the anchor and
     /// held there a while before it can go back.
     Corrupted,
+    /// The body died in its sleep, unattended. There is nothing to go
+    /// back to: the spirit must redeem itself or fade.
+    Forgotten,
+}
+
+/// What killed someone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Cause {
+    /// Another character.
+    Character(crate::character::CharacterId),
+    /// Sleeping until the body gave out.
+    LongSleep,
 }
 
 /// A resource node and what it gives.

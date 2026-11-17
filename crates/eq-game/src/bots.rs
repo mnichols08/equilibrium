@@ -361,7 +361,7 @@ mod tests {
         ]);
         let events = bots.run(&mut session, Tick::new(3_000)).unwrap();
         assert!(
-            happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { by: ASH, .. } })),
+            happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { by: crate::Cause::Character(ASH), .. } })),
             "Bryn was never killed"
         );
         assert!(happened(&events, |event| matches!(event, Event::Character { who: ASH, outcome: Outcome::Took { .. } })));

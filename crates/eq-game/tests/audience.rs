@@ -37,7 +37,7 @@ fn audience_matches_who_the_narrator_speaks_to() {
 
         let who = CharacterId::new(script.below(NAMES.len() as u64));
         let someone = CharacterId::new(script.below(NAMES.len() as u64));
-        let command = match script.below(23) {
+        let command = match script.below(25) {
             0..=7 => Command::gather(who),
             8..=12 => Command::go(who, EXITS[script.below(EXITS.len() as u64) as usize]),
             13..=14 => Command::attack(who, someone),
@@ -46,6 +46,8 @@ fn audience_matches_who_the_narrator_speaks_to() {
             17..=18 => Command::wake(who),
             19..=20 => Command::return_to_body(who),
             21 => Command::relinquish(who),
+            22 => Command::seek(who),
+            23 => Command::name(who, someone),
             _ => Command::rob(who, someone),
         };
         let mut events = Vec::new();
@@ -55,6 +57,43 @@ fn audience_matches_who_the_narrator_speaks_to() {
         checked += events.len();
     }
     assert!(checked > 5_000, "only {checked} events were checked");
+}
+
+#[test]
+fn audience_matches_the_narrator_through_a_long_sleep_and_a_redemption() {
+    let mut game = Game::new(3, &["Ash", "Bryn", "Cole"]);
+    let (ash, bryn, cole) = (CharacterId::new(0), CharacterId::new(1), CharacterId::new(2));
+    let mut checked = 0;
+    let mut step = |game: &mut Game, tick: u64, command: Option<Command>| {
+        let mut events = Vec::new();
+        match command {
+            Some(command) => game.apply(&command, Tick::new(tick), &mut events),
+            None => game.tick(Tick::new(tick), &mut events),
+        }
+        check(game, &events);
+        checked += events.len();
+    };
+
+    // Ash and Cole lie down on the ledge; Cole gets up, Ash never does.
+    for who in [ash, cole] {
+        step(&mut game, 0, Some(Command::go(who, "north")));
+        step(&mut game, 30, Some(Command::rest(who)));
+    }
+    let two_weeks = 14 * 86_400 + 120;
+    for tick in 1..=two_weeks {
+        step(&mut game, tick, None);
+        if tick == 3_600 {
+            step(&mut game, tick, Some(Command::wake(cole)));
+        }
+    }
+    assert!(game.character(ash).unwrap().is_dormant());
+
+    step(&mut game, two_weeks, Some(Command::wake(ash)));
+    step(&mut game, two_weeks, Some(Command::seek(ash)));
+    step(&mut game, two_weeks, Some(Command::name(cole, ash)));
+    step(&mut game, two_weeks, Some(Command::name(bryn, ash)));
+    assert!(!game.character(ash).unwrap().is_spirit());
+    assert!(checked > 20, "only {checked} events were checked");
 }
 
 #[test]

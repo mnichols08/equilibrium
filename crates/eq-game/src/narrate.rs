@@ -11,10 +11,10 @@ use eq_clock::{Duration, Tick};
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
-use crate::combat::{Refusal, ReturnRefusal, RobRefusal};
-use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, TIDE};
+use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal};
+use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
-use crate::types::{Attribute, Health, Passing, Resource, SkillKind, Standing};
+use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
 
 /// The command list.
 pub const HELP: &str = "\
@@ -29,6 +29,8 @@ Commands:
   rob <name>           go through the pack of someone asleep here
   return               as a spirit, go back into your body
   relinquish           as a spirit, give up your body and be reborn
+  seek                 as a forgotten spirit, search here for a memory
+  name <name>          at camp, speak a forgotten spirit's name to redeem it
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
   stats                show your skills and attributes
   pack (i)             show what you carry
@@ -43,7 +45,12 @@ few days and the body starts to waste.
 
 If you are killed your body stays where it fell and you become a spirit.
 Get back to it within ten minutes and return, or be reborn at camp with
-a little of what you knew.";
+a little of what you knew.
+
+Sleep two weeks and the body dies where it lies. You wake a forgotten
+spirit with ten waking hours to find three memories of yourself in the
+places of the shoreline, or to be named at camp by the living. Run out
+of time and you fade: a new life begins with almost nothing.";
 
 /// Shown when a view is asked for a character who is not in the world.
 const NOBODY: &str = "There is nobody by that name here.";
@@ -96,7 +103,47 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Hurt { by, damage, health } => {
             format!("{} strikes you for {damage}. You have {health} health left.", name_of(game, *by))
         }
-        Outcome::Died { by, place, passing, .. } => died(game, *by, *place, *passing),
+        Outcome::Died { by: Cause::Character(by), place, passing, .. } => died(game, *by, *place, *passing),
+        Outcome::Died { by: Cause::LongSleep, place, .. } => format!(
+            "You slept too long. Your body has died where it lay at {}, and what you carried lies there. \
+             You are a forgotten spirit now, with no body to go back to.",
+            place_name(game, *place),
+        ),
+        Outcome::CannotReturn { why: ReturnRefusal::NoBody } => {
+            "You have no body to go back to or give up. Seek your memories, or hope to be named at camp.".into()
+        }
+        Outcome::Stirred => format!(
+            "You stir, a spirit without a body. You have {} awake to redeem yourself: seek three memories of yourself where the shoreline can be worked, or be named at camp by the living.",
+            span(REDEMPTION_CLOCK.saturating_sub(played(game, viewer))),
+        ),
+        Outcome::WentDormant => "You let go and lie dormant. Your time stops running until you wake.".into(),
+        Outcome::Remembered { found, needed } => {
+            format!("Something of who you were comes back to you here. That is {found} of {needed} memories.")
+        }
+        Outcome::NothingToRemember => "There is nothing of you to find here. Try another place where the shoreline can be worked.".into(),
+        Outcome::NotForgotten => "Only a forgotten spirit has anything to look for.".into(),
+        Outcome::CannotName { why: NameRefusal::NotAtShrine, .. } => {
+            format!("Names are only heard at {}.", place_name(game, game.anchor()))
+        }
+        Outcome::CannotName { target, why: NameRefusal::NotForgotten } => {
+            format!("{} is not forgotten.", name_of(game, *target))
+        }
+        Outcome::Named { target } => {
+            format!("You speak {}'s name over the stones, and the tide gives them back.", name_of(game, *target))
+        }
+        Outcome::Redeemed { by: Some(by), life } => format!(
+            "{} has spoken your name at {}. You walk out of the tide, whole and rested, into life {life}.",
+            name_of(game, *by),
+            place_name(game, game.anchor()),
+        ),
+        Outcome::Redeemed { by: None, life } => format!(
+            "You remember who you were. You walk out of the tide at {}, whole and rested, into life {life}.",
+            place_name(game, game.anchor()),
+        ),
+        Outcome::Faded { life } => format!(
+            "Your time has run out. Who you were is gone, and your name is cut in the stones at {}. You walk out of the tide into life {life} with almost nothing.",
+            place_name(game, game.anchor()),
+        ),
         Outcome::CannotReturn { why: ReturnRefusal::NotAtBody } => {
             let body = game.character(viewer).and_then(|you| you.death()).map(|death| death.body);
             format!("Your body is not here. It lies at {}.", body.map_or("no place you know", |place| place_name(game, place)))
@@ -134,8 +181,11 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
     let name = actor.name();
     // A death is seen by everyone where the body falls, though the spirit
     // it leaves is not.
-    if let Outcome::Died { place, .. } = outcome {
-        return (*place == here).then(|| format!("{name} dies. What they carried lies beside the body."));
+    if let Outcome::Died { by, place, .. } = outcome {
+        return (*place == here).then(|| match by {
+            Cause::Character(_) => format!("{name} dies. What they carried lies beside the body."),
+            Cause::LongSleep => format!("{name} has slept too long and will not wake. What they carried lies where they lay."),
+        });
     }
     if !game.can_see(viewer, who) {
         return None;
@@ -158,7 +208,12 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
             Some(format!("{name} strikes {}.", name_of(game, *target)))
         }
         Outcome::Returned if actor.place() == here => Some(format!("{name}'s body stirs, and {name} stands.")),
-        Outcome::Reborn { .. } if actor.place() == here => Some(format!("{name} walks out of the tide, reborn.")),
+        Outcome::Reborn { .. } | Outcome::Redeemed { .. } | Outcome::Faded { .. } if actor.place() == here => {
+            Some(format!("{name} walks out of the tide, reborn."))
+        }
+        Outcome::Named { target } if actor.place() == here => {
+            Some(format!("{name} speaks {}'s name over the stones.", name_of(game, *target)))
+        }
         Outcome::LayDown { .. } if actor.place() == here => Some(format!("{name} settles down to sleep.")),
         Outcome::Woke { slept, .. } if actor.place() == here && slept.as_ticks() > 0 => {
             Some(format!("{name} wakes."))
@@ -183,6 +238,18 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     lines.push(here.description.into());
     if character.is_spirit() {
         lines.push("You are a spirit. The living cannot see you, and the tide is nothing to you.".into());
+    }
+    if let Some(forgotten) = character.forgotten() {
+        lines.push(format!(
+            "You are forgotten: {} of {} memories found, {} left awake.",
+            forgotten.memories(),
+            crate::content::MEMORIES_TO_REDEEM,
+            span(REDEMPTION_CLOCK.saturating_sub(forgotten.played)),
+        ));
+    }
+    if character.place() == game.anchor() && !game.shrine().is_empty() {
+        let names: Vec<&str> = game.shrine().iter().map(|epitaph| epitaph.name.as_str()).collect();
+        lines.push(format!("Names cut in the stones: {}.", names.join(", ")));
     }
     if let Some(deposit) = &here.deposit {
         lines.push(format!(
@@ -290,6 +357,11 @@ fn pile(amounts: &[u64; Resource::ALL.len()]) -> String {
     parts.join(", ")
 }
 
+/// How long `viewer` has been awake as a forgotten spirit.
+fn played(game: &Game, viewer: CharacterId) -> Duration {
+    game.character(viewer).and_then(|you| you.forgotten()).map_or(Duration::ZERO, |forgotten| forgotten.played)
+}
+
 fn name_of(game: &Game, who: CharacterId) -> &str {
     game.character(who).map_or("someone", |character| character.name())
 }
@@ -321,6 +393,7 @@ fn died(game: &Game, by: CharacterId, place: PlaceId, passing: Passing) -> Strin
         Passing::Severed => format!(
             "You died alone, and your spirit is pulled to {anchor}. Get back to your body at {body} and return to it within {limit}, or be reborn."
         ),
+        Passing::Forgotten => String::new(),
         Passing::Corrupted => format!(
             "The land here is failing, and it holds your spirit at {anchor} before you can start back to your body at {body}. You have {limit} before it is lost."
         ),

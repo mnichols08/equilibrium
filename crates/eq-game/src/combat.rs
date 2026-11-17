@@ -35,6 +35,17 @@ pub enum ReturnRefusal {
     NotAtBody,
     /// The spirit is held back until this tick.
     TooSoon(eq_clock::Tick),
+    /// There is no body: it died in its sleep and is gone.
+    NoBody,
+}
+
+/// Why a name could not be spoken at the shrine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NameRefusal {
+    /// Names are only heard at the zone's anchor.
+    NotAtShrine,
+    /// The one named is not a forgotten spirit.
+    NotForgotten,
 }
 
 /// Why a robbery was not allowed.

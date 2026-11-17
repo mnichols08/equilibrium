@@ -9,7 +9,7 @@
 //! perceive from where they stand is a later rule.
 
 use eq_clock::Tick;
-use eq_game::content::{LOW_TIDE, TIDE};
+use eq_game::content::{LOW_TIDE, MEMORIES_TO_REDEEM, REDEMPTION_CLOCK, TIDE};
 use eq_game::{
     narrate, pressure_percent, Attribute, CharacterId, Death, Deposit, Game, Place, Resource, SkillKind, Standing,
 };
@@ -59,6 +59,8 @@ pub struct You {
     pub life: u32,
     /// Their body, if they have died and are walking as a spirit.
     pub body: Option<BodyView>,
+    /// Their redemption, if they slept too long and are a forgotten spirit.
+    pub forgotten: Option<ForgottenView>,
     /// How rested they are, 0 to 100. The rested learn faster.
     pub rested: u32,
     /// Taint, 0 to 100.
@@ -144,6 +146,21 @@ pub struct BodyView {
     pub lost_in: u64,
 }
 
+/// A forgotten spirit's way back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ForgottenView {
+    /// Whether the spirit lies dormant and must wake before anything else.
+    pub dormant: bool,
+    /// Memories recovered so far.
+    pub memories: u32,
+    /// Memories needed to be redeemed.
+    pub needed: u32,
+    /// Waking seconds left before the spirit fades.
+    pub time_left: u64,
+    /// Whether there is a memory to seek where the spirit stands.
+    pub can_seek: bool,
+}
+
 /// Someone standing in a place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PersonView {
@@ -203,6 +220,13 @@ impl Scene {
             health: character.health(),
             life: character.life(),
             body: character.death().map(|death| body_view(game, death, here, now)),
+            forgotten: character.forgotten().map(|forgotten| ForgottenView {
+                dormant: forgotten.dormant,
+                memories: forgotten.memories(),
+                needed: MEMORIES_TO_REDEEM,
+                time_left: REDEMPTION_CLOCK.saturating_sub(forgotten.played).as_ticks(),
+                can_seek: !forgotten.dormant && place.deposit.is_some() && !forgotten.found_in.contains(&here),
+            }),
             rested: character.rested(),
             taint: character.taint(),
             marked: character.standing() == Standing::Marked,
@@ -376,7 +400,7 @@ mod tests {
         assert_eq!(scene.you.rested, 100);
         assert_eq!(here[0].people, [you]);
         assert_eq!((scene.you.health, scene.you.life, scene.you.can_take), (100, 1, false));
-        assert_eq!(scene.you.body, None);
+        assert_eq!((scene.you.body.clone(), scene.you.forgotten.clone()), (None, None));
         assert!(scene.places.iter().all(|place| place.bodies.is_empty()));
         assert!(scene.places.iter().all(|place| !place.spoils));
     }
@@ -421,6 +445,20 @@ mod tests {
         let back = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap();
         assert!(back.you.body.unwrap().can_return);
         assert_eq!(back.company.len(), 1, "spirits see the living");
+    }
+
+    #[test]
+    fn a_forgotten_spirit_sees_how_far_it_has_to_go() {
+        let mut solo = Solo::new(1);
+        solo.handle("north");
+        solo.handle("sleep 15d");
+        let woken = scene(&solo).you.forgotten.unwrap();
+        assert_eq!((woken.dormant, woken.memories, woken.needed, woken.can_seek), (false, 0, 3, true));
+        assert_eq!(woken.time_left, 36_000);
+
+        solo.handle("seek");
+        let after = scene(&solo).you.forgotten.unwrap();
+        assert_eq!((after.memories, after.can_seek, after.time_left), (1, false, 36_000 - 600));
     }
 
     #[test]

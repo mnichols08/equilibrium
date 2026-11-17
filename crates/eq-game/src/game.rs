@@ -7,21 +7,38 @@ use eq_events::World;
 use eq_rng::Rng;
 use eq_world_graph::{Graph, PlaceId};
 
+use alloc::string::String;
+
 use crate::character::{Character, CharacterId, Death};
-use crate::combat::{may_attack, may_rob, Blow, Refusal, ReturnRefusal, RobRefusal};
+use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RobRefusal};
 use crate::command::{Action, Command};
 use crate::content::{
-    self, ATTACK_TIME, BASE_EFFORT, CORPSE_TIME, CORRUPTED_WAIT, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT,
-    EFFORT_SPREAD, GATHER_TIME, HAVEN_MENDING,
-    HEALTH_MENDS_EVERY, MENDING, MIN_WORKABLE_STOCK, RESTED_LASTS, SETTLE_TIME, TAINT_FADES_EVERY, TAINT_FOR_ROBBING,
-    TAKE_TIME, TETHERED_WAIT, TRAVEL_TIME,
+    self, ATTACK_TIME, BASE_EFFORT, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
+    DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, EFFORT_SPREAD, FADED_CARRYOVER_PERCENT, GATHER_TIME,
+    HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
+    REBIRTH_CARRYOVER_PERCENT, REDEMPTION_CLOCK, RESTED_LASTS, SEEK_TIME, SETTLE_TIME, TAINT_FADES_EVERY,
+    TAINT_FOR_ROBBING, TAKE_TIME, TETHERED_WAIT, TRAVEL_TIME,
 };
 use crate::rest::FULLY_RESTED;
 use crate::event::{Event, Outcome};
 use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
-use crate::types::{Attribute, Health, Passing, Place, Safety, Standing};
+use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, Standing};
 use crate::zone::Zone;
+
+/// A name cut in the shrine's stones: someone who faded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Epitaph {
+    /// Who they were.
+    pub name: String,
+    /// Which of their lives ended this way.
+    pub life: u32,
+    /// When they faded.
+    pub at: Tick,
+}
+
+/// How often the world looks for sleepers whose time has run out.
+const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
 
 /// The whole world: one zone and the characters in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +50,10 @@ pub struct Game {
     /// Every spirit with a body still lying somewhere, so the tick need
     /// not search for them.
     dead: Vec<CharacterId>,
+    /// Every forgotten spirit, dormant or not.
+    forgotten: Vec<CharacterId>,
+    /// Those who faded, oldest first.
+    shrine: Vec<Epitaph>,
     /// Where severed spirits are pulled to and new lives begin.
     anchor: PlaceId,
 }
@@ -47,7 +68,16 @@ impl Game {
         for index in 0..characters.len() {
             occupancy.enter(start, id_at(index));
         }
-        Self { rng: Rng::from_seed(seed), zone: Zone::new(map), characters, occupancy, dead: Vec::new(), anchor: start }
+        Self {
+            rng: Rng::from_seed(seed),
+            zone: Zone::new(map),
+            characters,
+            occupancy,
+            dead: Vec::new(),
+            forgotten: Vec::new(),
+            shrine: Vec::new(),
+            anchor: start,
+        }
     }
 
     /// A character, if the id belongs to this world.
@@ -79,6 +109,12 @@ impl Game {
     /// new lives begin.
     pub const fn anchor(&self) -> PlaceId {
         self.anchor
+    }
+
+    /// The names of those who faded, oldest first. They are cut in the
+    /// stones at the anchor.
+    pub fn shrine(&self) -> &[Epitaph] {
+        &self.shrine
     }
 
     /// Everyone whose body lies in `place`, in the order they died.
@@ -194,6 +230,9 @@ impl Game {
             | Outcome::LayDown { .. }
             | Outcome::Stole { .. }
             | Outcome::Returned
+            | Outcome::Named { .. }
+            | Outcome::Redeemed { .. }
+            | Outcome::Faded { .. }
             | Outcome::Reborn { .. } => audience.extend(here.into_iter().flat_map(|place| self.witnesses(place, who))),
             // Getting up before sleep came is nobody else's business.
             Outcome::Woke { slept, .. } if slept.as_ticks() > 0 => {
@@ -214,13 +253,18 @@ impl Game {
     }
 
     fn act(&mut self, index: usize, action: &Action, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        if self.characters[index].forgotten().is_some() {
+            self.act_as_forgotten(index, action, now, outcomes);
+            return;
+        }
         if self.characters[index].is_spirit() {
             self.act_as_spirit(index, action, now, outcomes);
             return;
         }
-        if matches!(action, Action::Return | Action::Relinquish) {
-            outcomes.push(Outcome::NotDead);
-            return;
+        match action {
+            Action::Return | Action::Relinquish => return outcomes.push(Outcome::NotDead),
+            Action::Seek => return outcomes.push(Outcome::NotForgotten),
+            _ => {}
         }
         // Waking is the one thing a sleeper, or someone settling, can do.
         if matches!(action, Action::Wake) {
@@ -243,7 +287,8 @@ impl Game {
             Action::Take => self.take(index, now, outcomes),
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
-            Action::Wake | Action::Return | Action::Relinquish => {}
+            Action::Name(target) => self.name(index, *target, now, outcomes, events),
+            Action::Wake | Action::Return | Action::Relinquish | Action::Seek => {}
         }
     }
 
@@ -263,6 +308,80 @@ impl Game {
         }
     }
 
+    /// A forgotten spirit lies dormant until it is woken. Awake, it can
+    /// walk, search for memories of itself, or go dormant again. It has
+    /// no body to return to or give up.
+    fn act_as_forgotten(&mut self, index: usize, action: &Action, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let character = &mut self.characters[index];
+        if character.is_dormant() {
+            outcomes.push(match action {
+                Action::Wake => {
+                    character.forgotten_mut().expect("a dormant spirit is forgotten").dormant = false;
+                    character.busy_until = now;
+                    Outcome::Stirred
+                }
+                _ => Outcome::Asleep,
+            });
+            return;
+        }
+        let busy_until = character.busy_until();
+        if now < busy_until {
+            outcomes.push(Outcome::Busy { until: busy_until });
+            return;
+        }
+        match action {
+            Action::Go(label) => self.go(index, label, now, outcomes),
+            Action::Seek => self.seek(index, now, outcomes),
+            Action::Rest => {
+                character.forgotten_mut().expect("checked above").dormant = true;
+                outcomes.push(Outcome::WentDormant);
+            }
+            Action::Wake => outcomes.push(Outcome::NotAsleep),
+            Action::Return | Action::Relinquish => outcomes.push(Outcome::CannotReturn { why: ReturnRefusal::NoBody }),
+            _ => outcomes.push(Outcome::Bodiless),
+        }
+    }
+
+    /// Searches a place for a memory. Each place with a deposit holds
+    /// one for each forgotten spirit; enough of them redeem it.
+    fn seek(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let character = &mut self.characters[index];
+        let here = character.place();
+        let holds_one = self.zone.map().place(here).is_some_and(|place| place.deposit.is_some());
+        let Some(forgotten) = character.forgotten_mut() else { return outcomes.push(Outcome::NotForgotten) };
+        if !holds_one || forgotten.found_in.contains(&here) {
+            return outcomes.push(Outcome::NothingToRemember);
+        }
+        forgotten.found_in.push(here);
+        let (found, redeemed) = (forgotten.memories(), forgotten.is_redeemed());
+        character.busy_until = now + SEEK_TIME;
+        outcomes.push(Outcome::Remembered { found, needed: MEMORIES_TO_REDEEM });
+        if redeemed {
+            let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT);
+            outcomes.push(Outcome::Redeemed { by: None, life });
+        }
+    }
+
+    /// Speaks a forgotten spirit's name at the shrine, which redeems it
+    /// wherever it lies.
+    fn name(&mut self, index: usize, target: CharacterId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let refusal = if self.characters[index].place() != self.anchor {
+            Some(NameRefusal::NotAtShrine)
+        } else if !self.forgotten.contains(&target) {
+            Some(NameRefusal::NotForgotten)
+        } else {
+            None
+        };
+        if let Some(why) = refusal {
+            return outcomes.push(Outcome::CannotName { target, why });
+        }
+        let Some(named) = self.index_of(target) else { return };
+        self.characters[index].busy_until = now + NAME_TIME;
+        outcomes.push(Outcome::Named { target });
+        let life = self.begin_life(named, now, REBIRTH_CARRYOVER_PERCENT);
+        events.push(Event::Character { who: target, outcome: Outcome::Redeemed { by: Some(id_at(index)), life } });
+    }
+
     /// Puts a spirit back in its body, if it is there and allowed to yet.
     fn return_to_body(&mut self, index: usize, now: Tick) -> Outcome {
         let character = &mut self.characters[index];
@@ -280,13 +399,20 @@ impl Game {
 
     /// Ends a spirit's tie to its body and starts a new life at the anchor.
     fn rebirth(&mut self, index: usize, now: Tick) -> Outcome {
+        Outcome::Reborn { life: self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT) }
+    }
+
+    /// Starts a spirit's next life at the anchor, keeping `carryover`
+    /// percent of what it knew. Returns which life this is.
+    fn begin_life(&mut self, index: usize, now: Tick, carryover: u32) -> u32 {
         let who = id_at(index);
         let character = &mut self.characters[index];
         self.occupancy.leave(character.place(), who);
         self.occupancy.enter(self.anchor, who);
-        character.be_reborn(self.anchor, now);
+        character.be_reborn(self.anchor, now, carryover);
         self.dead.retain(|&spirit| spirit != who);
-        Outcome::Reborn { life: character.life() }
+        self.forgotten.retain(|&spirit| spirit != who);
+        character.life()
     }
 
     /// Settles down. Sleep begins after a short while if nothing disturbs it.
@@ -342,7 +468,8 @@ impl Game {
         events.push(Event::Character { who: target, outcome: Outcome::Hurt { by: attacker, damage, health } });
         self.rouse(victim, now, events);
         if health == 0 {
-            self.fell(victim, attacker, now, events);
+            let corruption = if caught_lying { CORRUPTION_PER_SLEEPER_DEATH } else { CORRUPTION_PER_DEATH };
+            self.fell(victim, attacker, corruption, now, events);
             return;
         }
         // Someone caught lying down is on their feet now, but too late to
@@ -355,7 +482,7 @@ impl Game {
         events.push(Event::Character { who: target, outcome: Outcome::Struck { target: attacker, damage } });
         outcomes.push(Outcome::Hurt { by: target, damage, health });
         if health == 0 {
-            self.fell(index, target, now, events);
+            self.fell(index, target, CORRUPTION_PER_DEATH, now, events);
         }
     }
 
@@ -375,7 +502,8 @@ impl Game {
 
     /// Kills a character. The body stays where it fell with everything
     /// they carried beside it, and the spirit is left to find its way back.
-    fn fell(&mut self, index: usize, by: CharacterId, now: Tick, events: &mut Vec<Event>) {
+    /// The zone pays `corruption` for the death.
+    fn fell(&mut self, index: usize, by: CharacterId, corruption: i64, now: Tick, events: &mut Vec<Event>) {
         let who = id_at(index);
         let body = self.characters[index].place();
         let passing = self.passing(who, by, body);
@@ -383,7 +511,7 @@ impl Game {
         let worn = Duration::ticks(u64::from(self.characters[index].degradation()) * DEGRADATION_WAIT.as_ticks());
         let held = match passing {
             Passing::Tethered => TETHERED_WAIT,
-            Passing::Severed => Duration::ZERO,
+            Passing::Severed | Passing::Forgotten => Duration::ZERO,
             Passing::Corrupted => CORRUPTED_WAIT,
         };
         let ready_at = now + held + worn;
@@ -402,8 +530,9 @@ impl Game {
             self.occupancy.leave(body, who);
             self.occupancy.enter(self.anchor, who);
         }
-        self.zone.mourn();
+        self.zone.mourn(corruption);
         self.dead.push(who);
+        let by = Cause::Character(by);
         events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
     }
@@ -470,6 +599,58 @@ impl Game {
         }
         for character in &mut self.characters {
             character.recover_spirit();
+        }
+    }
+
+    /// Anyone who has slept the long sleep through dies where they lie.
+    /// Nothing is left to return to: what they carried spills where
+    /// they lay, and the spirit lies dormant until it is woken.
+    fn end_long_sleeps(&mut self, now: Tick, events: &mut Vec<Event>) {
+        if !now.get().is_multiple_of(LONG_SLEEP_CHECK.as_ticks()) {
+            return;
+        }
+        for index in 0..self.characters.len() {
+            let character = &mut self.characters[index];
+            let overslept = character.asleep_from().is_some_and(|from| from <= now && now.since(from) >= LONG_SLEEP);
+            if !overslept {
+                continue;
+            }
+            let (who, place) = (id_at(index), character.place());
+            let (dropped, cleansed) = character.sleep_to_death(now);
+            if let Some(ground) = self.zone.map_mut().place_mut(place) {
+                for (lying, more) in ground.spoils.iter_mut().zip(dropped) {
+                    *lying += more;
+                }
+            }
+            self.zone.mourn(CORRUPTION_PER_SLEEPER_DEATH);
+            self.forgotten.push(who);
+            let outcome = Outcome::Died { by: Cause::LongSleep, place, passing: Passing::Forgotten, lost_at: now };
+            events.push(Event::Character { who, outcome });
+            events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
+        }
+    }
+
+    /// Every waking forgotten spirit's time runs. When it runs out the
+    /// character fades: their name goes on the shrine, and a new life
+    /// begins with almost nothing of the old.
+    fn run_redemption_clocks(&mut self, now: Tick, events: &mut Vec<Event>) {
+        let mut faded = Vec::new();
+        for &who in &self.forgotten {
+            let Some(index) = self.index_of(who) else { continue };
+            let Some(forgotten) = self.characters[index].forgotten_mut() else { continue };
+            if forgotten.dormant {
+                continue;
+            }
+            forgotten.played = forgotten.played + Duration::ticks(1);
+            if forgotten.played >= REDEMPTION_CLOCK {
+                faded.push(index);
+            }
+        }
+        for index in faded {
+            let character = &self.characters[index];
+            self.shrine.push(Epitaph { name: character.name().into(), life: character.life(), at: now });
+            let life = self.begin_life(index, now, FADED_CARRYOVER_PERCENT);
+            events.push(Event::Character { who: id_at(index), outcome: Outcome::Faded { life } });
         }
     }
 
@@ -574,6 +755,8 @@ impl World for Game {
         self.tire(now);
         self.mend(now);
         self.recover_spirits(now);
+        self.end_long_sleeps(now, events);
+        self.run_redemption_clocks(now, events);
         self.lose_bodies(now, events);
     }
 
@@ -595,7 +778,7 @@ impl World for Game {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Resource;
+    use crate::types::{Resource, SkillKind};
     use eq_world_graph::PlaceId;
 
     const ASH: CharacterId = CharacterId::new(0);
@@ -1193,5 +1376,153 @@ mod tests {
         let closings = events.iter().filter(|event| matches!(event, Event::PassageChanged { open: false, .. })).count();
         // The cave mouth and the reef crossing, each seen from both ends.
         assert_eq!(closings, 4);
+    }
+
+    /// Ash, with ore in the pack, asleep on the Ore Ledge until the body
+    /// gives out. Returns the world, the tick it has reached and every
+    /// event of the last minute.
+    fn ash_forgotten(names: &[&str]) -> (Game, u64, Vec<Event>) {
+        let mut game = Game::new(1, names);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        game.apply(&Command::gather(ASH), Tick::new(30), &mut events);
+        game.apply(&Command::rest(ASH), Tick::new(40), &mut events);
+        let end = 40 + SETTLE_TIME.as_ticks() + LONG_SLEEP.as_ticks() + 60;
+        ticks(&mut game, 41, end - 120);
+        let last = ticks(&mut game, end - 119, end);
+        (game, end, last)
+    }
+
+    #[test]
+    fn two_weeks_asleep_kills_the_body_and_leaves_a_dormant_spirit() {
+        let (game, _, events) = ash_forgotten(&["Ash", "Bryn"]);
+        let ash = game.character(ASH).unwrap();
+        assert!(ash.is_spirit() && ash.is_dormant() && !ash.is_lying_down());
+        assert_eq!(ash.death(), None);
+        assert_eq!(ash.carried_total(), 0);
+        let ledge = game.place_of(ASH).unwrap();
+        assert!(ledge.spoils[Resource::Ore.index()] > 0, "what they carried lies where they lay");
+        assert_eq!(game.bodies_at(ash.place()).count(), 0, "there is no body to go back to");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Character { who: ASH, outcome: Outcome::Died { by: Cause::LongSleep, passing: Passing::Forgotten, .. } }
+        )));
+        assert_eq!(game.zone().corruption(), CORRUPTION_PER_SLEEPER_DEATH);
+    }
+
+    #[test]
+    fn a_dormant_spirit_can_only_wake_and_its_clock_runs_only_while_it_is_awake() {
+        let (mut game, now, _) = ash_forgotten(&["Ash"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "south"), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Asleep));
+
+        // A year dormant costs nothing.
+        let later = now + Duration::days(30).as_ticks();
+        ticks(&mut game, now + 1, later);
+        assert_eq!(game.character(ASH).unwrap().forgotten().unwrap().played, Duration::ZERO);
+
+        game.apply(&Command::wake(ASH), Tick::new(later), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Stirred));
+        ticks(&mut game, later + 1, later + 600);
+        assert_eq!(game.character(ASH).unwrap().forgotten().unwrap().played, Duration::minutes(10));
+
+        game.apply(&Command::rest(ASH), Tick::new(later + 600), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::WentDormant));
+        ticks(&mut game, later + 601, later + 6_000);
+        assert_eq!(game.character(ASH).unwrap().forgotten().unwrap().played, Duration::minutes(10));
+
+        for command in [Command::return_to_body(ASH), Command::relinquish(ASH)] {
+            game.apply(&Command::wake(ASH), Tick::new(later + 6_000), &mut events);
+            game.apply(&command, Tick::new(later + 6_000), &mut events);
+            assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::NoBody }));
+        }
+    }
+
+    #[test]
+    fn three_memories_from_three_places_redeem_a_forgotten_spirit() {
+        let (mut game, mut now, _) = ash_forgotten(&["Ash"]);
+        let mut events = Vec::new();
+        game.apply(&Command::wake(ASH), Tick::new(now), &mut events);
+
+        game.apply(&Command::seek(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Remembered { found: 1, needed: MEMORIES_TO_REDEEM }));
+        now += SEEK_TIME.as_ticks();
+        game.apply(&Command::seek(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NothingToRemember), "one memory to a place");
+
+        game.apply(&Command::go(ASH, "north"), Tick::new(now), &mut events);
+        now += TRAVEL_TIME.as_ticks();
+        game.apply(&Command::seek(ASH), Tick::new(now), &mut events);
+        now += SEEK_TIME.as_ticks();
+
+        // The camp has nothing to work, so nothing to find.
+        for _ in 0..2 {
+            game.apply(&Command::go(ASH, "south"), Tick::new(now), &mut events);
+            now += TRAVEL_TIME.as_ticks();
+        }
+        game.apply(&Command::seek(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NothingToRemember));
+
+        game.apply(&Command::go(ASH, "east"), Tick::new(now), &mut events);
+        now += TRAVEL_TIME.as_ticks();
+        game.apply(&Command::seek(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Redeemed { by: None, life: 2 }));
+
+        let ash = game.character(ASH).unwrap();
+        assert!(!ash.is_spirit());
+        assert_eq!((ash.place(), ash.life(), ash.health()), (game.anchor(), 2, 100));
+        assert!(game.shrine().is_empty());
+        game.apply(&Command::seek(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NotForgotten));
+    }
+
+    #[test]
+    fn the_living_can_redeem_the_forgotten_by_name_at_the_shrine() {
+        let (mut game, now, _) = ash_forgotten(&["Ash", "Bryn", "Cole"]);
+        const COLE: CharacterId = CharacterId::new(2);
+        let mut events = Vec::new();
+
+        game.apply(&Command::name(BRYN, COLE), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotName { target: COLE, why: NameRefusal::NotForgotten }));
+        game.apply(&Command::go(COLE, "south"), Tick::new(now), &mut events);
+        game.apply(&Command::name(COLE, ASH), Tick::new(now + 30), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotName { target: ASH, why: NameRefusal::NotAtShrine }));
+
+        events.clear();
+        game.apply(&Command::name(BRYN, ASH), Tick::new(now + 30), &mut events);
+        assert_eq!(events[0], Event::Character { who: BRYN, outcome: Outcome::Named { target: ASH } });
+        assert_eq!(events[1], Event::Character { who: ASH, outcome: Outcome::Redeemed { by: Some(BRYN), life: 2 } });
+        let ash = game.character(ASH).unwrap();
+        assert!(!ash.is_spirit() && !ash.is_dormant());
+        assert_eq!(ash.place(), game.anchor());
+        assert_eq!(game.occupants(game.anchor()), [ASH, BRYN]);
+    }
+
+    #[test]
+    fn a_forgotten_spirit_that_runs_out_of_time_fades_and_is_remembered_in_stone() {
+        let mut game = Game::new(1, &["Ash"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        let mut now = 30;
+        while game.character(ASH).unwrap().skill(SkillKind::Mining).level() < 5 {
+            game.tick(Tick::new(now), &mut events);
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += 1;
+        }
+        now += GATHER_TIME.as_ticks();
+        game.apply(&Command::rest(ASH), Tick::new(now), &mut events);
+        let dead = now + SETTLE_TIME.as_ticks() + LONG_SLEEP.as_ticks() + 60;
+        ticks(&mut game, now + 1, dead);
+        game.apply(&Command::wake(ASH), Tick::new(dead), &mut events);
+
+        let faded = ticks(&mut game, dead + 1, dead + REDEMPTION_CLOCK.as_ticks());
+        assert!(faded.contains(&Event::Character { who: ASH, outcome: Outcome::Faded { life: 2 } }));
+        let ash = game.character(ASH).unwrap();
+        assert!(!ash.is_spirit());
+        assert_eq!((ash.place(), ash.life()), (game.anchor(), 2));
+        assert_eq!(ash.skill(SkillKind::Mining).level(), 0, "five percent of a wasted handful is nothing");
+        assert_eq!(game.shrine().len(), 1);
+        assert_eq!((game.shrine()[0].name.as_str(), game.shrine()[0].life), ("Ash", 1));
     }
 }

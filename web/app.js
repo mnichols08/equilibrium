@@ -85,6 +85,7 @@ export function pageView(root) {
         targets: scene.company.filter((person) => person.can_attack),
         sleepers: scene.company.filter((person) => person.can_rob),
         body: scene.you.body,
+        forgotten: scene.you.forgotten,
       })
       log.lines = lines
     },

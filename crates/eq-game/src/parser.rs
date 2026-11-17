@@ -35,6 +35,8 @@ pub enum Input {
     Sleep(Duration),
     /// Go through a sleeper's pack, by name.
     Rob(String),
+    /// Speak a forgotten spirit's name at the shrine.
+    Name(String),
     /// Describe the current place.
     Look,
     /// Examine the deposit here and the zone's health.
@@ -84,6 +86,11 @@ pub fn parse(line: &str) -> Input {
         "wake" => Input::Do(Action::Wake),
         "return" => Input::Do(Action::Return),
         "relinquish" | "rebirth" => Input::Do(Action::Relinquish),
+        "seek" | "remember" => Input::Do(Action::Seek),
+        "name" => match rest {
+            Some(name) => Input::Name(name.into()),
+            None => Input::Unknown("Name whom? Try \"name bryn\".".into()),
+        },
         "rob" | "steal" => match rest {
             Some(name) => Input::Rob(name.into()),
             None => Input::Unknown("Rob whom? Try \"rob bryn\".".into()),
@@ -205,6 +212,13 @@ mod tests {
         assert_eq!(parse("?"), Input::Help);
         assert_eq!(parse("quit"), Input::Quit);
         assert_eq!(parse("   "), Input::Empty);
+    }
+
+    #[test]
+    fn the_forgotten_seek_and_the_living_name_them() {
+        assert_eq!(parse("seek"), Input::Do(Action::Seek));
+        assert_eq!(parse("name Ash"), Input::Name("ash".into()));
+        assert!(matches!(parse("name"), Input::Unknown(_)));
     }
 
     #[test]

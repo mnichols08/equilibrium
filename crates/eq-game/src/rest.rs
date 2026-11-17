@@ -9,8 +9,7 @@
 //! | up to 8 hours | the rested bonus refills |
 //! | up to 3 days | nothing gained, nothing lost |
 //! | beyond | body skills and attributes slip, a level per 6 hours, to a floor |
-//!
-//! The long sleep (death after about 14 days) comes with death itself.
+//! | 14 days | the body dies where it lies (the rules in `game` see to that) |
 
 use eq_clock::Duration;
 

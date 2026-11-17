@@ -7,8 +7,8 @@ use eq_nodes::Quality;
 use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
-use crate::combat::{Refusal, ReturnRefusal, RobRefusal};
-use crate::types::{Attribute, Health, Passing, Resource, SkillKind, Standing};
+use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal};
+use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
 
 /// What came of one character's action.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,8 +95,8 @@ pub enum Outcome {
     /// They died. Everything they carried is on the ground beside the
     /// body, and they are a spirit now.
     Died {
-        /// Who killed them.
-        by: CharacterId,
+        /// What killed them.
+        by: Cause,
         /// Where the body lies.
         place: PlaceId,
         /// How the spirit stands to the body.
@@ -113,6 +113,46 @@ pub enum Outcome {
     Returned,
     /// Their body was lost or given up, and they began a new life.
     Reborn {
+        /// Which life this is, counting the first as 1.
+        life: u32,
+    },
+    /// A forgotten spirit stirred and is awake. Its clock is running.
+    Stirred,
+    /// A forgotten spirit went dormant. Its clock has stopped.
+    WentDormant,
+    /// A forgotten spirit recovered a memory of itself.
+    Remembered {
+        /// How many it has now.
+        found: u32,
+        /// How many it needs.
+        needed: u32,
+    },
+    /// There is no memory to find here, or this spirit already found it.
+    NothingToRemember,
+    /// Only a forgotten spirit can do that.
+    NotForgotten,
+    /// They could not speak a name at the shrine.
+    CannotName {
+        /// Whose name they meant to speak.
+        target: CharacterId,
+        /// Why not.
+        why: NameRefusal,
+    },
+    /// They spoke a forgotten spirit's name at the shrine.
+    Named {
+        /// Whose name it was.
+        target: CharacterId,
+    },
+    /// A forgotten spirit was redeemed and began a new life.
+    Redeemed {
+        /// Who spoke their name, or `None` if they found their own way.
+        by: Option<CharacterId>,
+        /// Which life this is, counting the first as 1.
+        life: u32,
+    },
+    /// A forgotten spirit ran out of time. The character it was is gone;
+    /// a new life begins with almost nothing.
+    Faded {
         /// Which life this is, counting the first as 1.
         life: u32,
     },
