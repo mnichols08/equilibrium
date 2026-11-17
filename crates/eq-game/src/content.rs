@@ -377,7 +377,7 @@ impl Resource {
     }
 }
 
-const fn place(
+pub(crate) const fn place(
     name: &'static str,
     description: &'static str,
     safety: Safety,

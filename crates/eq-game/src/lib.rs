@@ -46,6 +46,7 @@ pub mod rest;
 pub mod seat;
 mod solo;
 pub mod spirit;
+pub mod territory;
 mod types;
 #[cfg(feature = "serde")]
 mod wire;
