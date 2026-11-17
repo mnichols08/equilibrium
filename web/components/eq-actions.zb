@@ -5,6 +5,7 @@
   @prop {{ name: string }[]} targets - Everyone here you may attack right now.
   @prop {{ name: string }[]} sleepers - Everyone asleep here whose pack you may go through.
   @prop {null | { place_name: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit.
+  @prop {null | { dormant: boolean, can_seek: boolean, memories: number, needed: number }} forgotten - Your way back, if you slept too long and are a forgotten spirit.
   @fires command - A button was pressed; `detail` is the line to send to the game, such as "north" or "wait 10m".
 -->
 <script>
@@ -15,7 +16,8 @@
     { line: 'wait 10m', text: 'Wait 10 min' },
     { line: 'wait 1h', text: 'Wait 1 hour' },
   ]
-  const spirit = Boolean(body)
+  const spirit = Boolean(body) || Boolean(forgotten)
+  const dormant = Boolean(forgotten) && forgotten.dormant
   const canReturn = spirit && body.can_return
 </script>
 <style>
@@ -31,7 +33,14 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} body={null}>
+<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} body={null} forgotten={null}>
+  <div zb-if={forgotten} role="group" aria-label="Your redemption">
+    <button zb-if={dormant} type="button" class="primary" onclick={() => emit('command', 'wake')}>Wake</button>
+    <button zb-if={!dormant} type="button" class="primary" disabled={!forgotten.can_seek} onclick={() => emit('command', 'seek')}>
+      Seek a memory
+      <small>{forgotten.memories} of {forgotten.needed} found</small>
+    </button>
+  </div>
   <div zb-if={spirit} role="group" aria-label="Your body">
     <button type="button" class="primary" disabled={!canReturn} onclick={() => emit('command', 'return')}>
       Return to your body
@@ -67,7 +76,7 @@
     <button type="button" class="primary" disabled={!canGather || spirit} onclick={() => emit('command', 'gather')}>Gather</button>
     <button zb-if={canTake} type="button" class="primary" disabled={spirit} onclick={() => emit('command', 'take')}>Take what's here</button>
     <button type="button" onclick={() => emit('command', 'inspect')}>Inspect</button>
-    <button type="button" disabled={spirit} onclick={() => emit('command', 'sleep 8h')}>Sleep 8 hours</button>
+    <button type="button" disabled={Boolean(body) || dormant} onclick={() => emit('command', 'sleep 8h')}>{forgotten ? "Lie dormant" : "Sleep 8 hours"}</button>
     <zb-each items={WAITS} as="wait" key={wait.line}>
       <button type="button" onclick={() => emit('command', wait.line)}>{wait.text}</button>
     </zb-each>

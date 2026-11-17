@@ -86,6 +86,27 @@ pub const ATROPHY_EVERY: Duration = Duration::hours(6);
 /// wastes to a floor, never to nothing.
 pub const ATROPHY_FLOOR_PERCENT: u32 = 50;
 
+/// How long anyone can sleep before the body dies where it lies.
+pub const LONG_SLEEP: Duration = Duration::days(14);
+
+/// How long a forgotten spirit has to redeem itself before it fades.
+/// Only time spent awake as a spirit counts, so nobody comes back to
+/// find the matter already settled.
+pub const REDEMPTION_CLOCK: Duration = Duration::hours(10);
+
+/// How many memories a forgotten spirit must recover to be redeemed.
+pub const MEMORIES_TO_REDEEM: u32 = 3;
+
+/// How long it takes a forgotten spirit to search one place for a memory.
+pub const SEEK_TIME: Duration = Duration::minutes(10);
+
+/// How long it takes to speak a forgotten name at the shrine.
+pub const NAME_TIME: Duration = Duration::minutes(1);
+
+/// The share of each skill and attribute a faded character's next life
+/// keeps, as a percentage. Less than an ordinary rebirth.
+pub const FADED_CARRYOVER_PERCENT: u32 = 5;
+
 /// Taint for going through the pack of a sleeper the land has not
 /// marked. Enough to be marked for it at once.
 pub const TAINT_FOR_ROBBING: i64 = 50;
@@ -155,6 +176,11 @@ pub const REBIRTH_CARRYOVER_PERCENT: u32 = 15;
 /// Vitality a zone loses for each death in it. Small on purpose: one
 /// death is a scratch, and it takes a massacre to sicken a zone.
 pub const CORRUPTION_PER_DEATH: i64 = 2;
+
+/// Vitality a zone loses when a sleeper dies in it, by a blow or by
+/// sleeping too long. Less than a waking death, so sleepers cannot be
+/// farmed to sicken a zone.
+pub const CORRUPTION_PER_SLEEPER_DEATH: i64 = 1;
 
 /// How long one point of corruption takes to fade.
 pub const CORRUPTION_FADES_EVERY: Duration = Duration::minutes(2);

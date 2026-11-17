@@ -92,6 +92,10 @@ impl Solo {
                 Some(target) => self.act(Action::Rob(target)),
                 None => alloc::vec![format!("There is nobody called \"{name}\" here.")],
             },
+            Input::Name(name) => match self.anyone_called(&name) {
+                Some(target) => self.act(Action::Name(target)),
+                None => alloc::vec![format!("You know of nobody called \"{name}\".")],
+            },
             Input::Look => alloc::vec![self.look()],
             Input::Inspect => alloc::vec![narrate::inspect(self.game(), Self::YOU)],
             Input::Stats => alloc::vec![narrate::stats(self.game(), Self::YOU)],
@@ -118,6 +122,14 @@ impl Solo {
         self.game().occupants(here).iter().copied().find(|&id| {
             id != Self::YOU && self.game().character(id).is_some_and(|other| other.name().eq_ignore_ascii_case(name))
         })
+    }
+
+    /// Anyone in the world but the player whose name is `name`, seen or not.
+    fn anyone_called(&self, name: &str) -> Option<CharacterId> {
+        self.game()
+            .characters()
+            .find(|(id, other)| *id != Self::YOU && other.name().eq_ignore_ascii_case(name))
+            .map(|(id, _)| id)
     }
 
     /// Has the player's character act, then lets the action's time pass.
@@ -153,7 +165,9 @@ impl Solo {
         }
         let events = self.pass_time_until(self.now() + time);
         lines.extend(self.tell(&events));
-        if lying_down(self) {
+        // Whoever sleeps the long sleep through wakes as a spirit.
+        let dormant = self.game().character(Self::YOU).is_some_and(crate::Character::is_dormant);
+        if lying_down(self) || dormant {
             lines.extend(self.act(Action::Wake));
         }
         lines
@@ -295,6 +309,32 @@ mod tests {
         let said = solo.handle("sleep 6h").lines;
         assert!(said.iter().any(|line| line.contains("Your pack is lighter")), "{said:?}");
         assert_eq!(solo.game().character(Solo::YOU).unwrap().carried_total(), 0);
+    }
+
+    #[test]
+    fn sleeping_three_weeks_wakes_you_a_forgotten_spirit_who_can_find_the_way_back() {
+        let mut solo = Solo::new(1);
+        let lines = solo.handle("sleep 21d").lines.join("\n");
+        assert!(lines.contains("You slept too long."), "{lines}");
+        assert!(lines.contains("You stir, a spirit without a body. You have 10 hours awake"), "{lines}");
+        assert!(solo.look().contains("You are forgotten: 0 of 3 memories found"));
+
+        assert!(solo.handle("seek").lines[0].contains("nothing of you to find here"));
+        for way in ["north", "north", "east"] {
+            solo.handle(way);
+            if way == "east" {
+                // Back through camp to the beach.
+                solo.handle("south");
+                solo.handle("south");
+                solo.handle("east");
+            }
+            let found = solo.handle("seek").lines.join("\n");
+            assert!(found.contains("memories"), "{found}");
+        }
+        let you = solo.game().character(Solo::YOU).unwrap();
+        assert!(!you.is_spirit());
+        assert_eq!(you.life(), 2);
+        assert!(solo.replays_identically());
     }
 
     #[test]

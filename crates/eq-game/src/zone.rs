@@ -6,7 +6,7 @@ use eq_clock::Tick;
 use eq_meter::Meter;
 use eq_world_graph::{Graph, Passage};
 
-use crate::content::{CORRUPTION_FADES_EVERY, CORRUPTION_PER_DEATH, VITALITY_BANDS};
+use crate::content::{CORRUPTION_FADES_EVERY, VITALITY_BANDS};
 use crate::event::Event;
 use crate::haul::pressure_percent;
 use crate::types::{Health, Place};
@@ -45,9 +45,9 @@ impl Zone {
         self.corruption.value()
     }
 
-    /// Records a death in the zone.
-    pub(crate) fn mourn(&mut self) {
-        self.corruption.adjust(CORRUPTION_PER_DEATH);
+    /// Records a death in the zone, which costs it `corruption` vitality.
+    pub(crate) fn mourn(&mut self, corruption: i64) {
+        self.corruption.adjust(corruption);
     }
 
     /// The vitality band.

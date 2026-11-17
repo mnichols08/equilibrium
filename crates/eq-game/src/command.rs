@@ -25,6 +25,10 @@ pub enum Action {
     Return,
     /// As a spirit, give up your body and be reborn.
     Relinquish,
+    /// As a forgotten spirit, search this place for a memory of yourself.
+    Seek,
+    /// At the shrine, speak the name of a forgotten spirit to redeem it.
+    Name(CharacterId),
 }
 
 /// An action and the character asked to take it.
@@ -75,6 +79,16 @@ impl Command {
     /// `who`, a spirit, gives up their body and is reborn.
     pub const fn relinquish(who: CharacterId) -> Self {
         Self { who, action: Action::Relinquish }
+    }
+
+    /// `who`, a forgotten spirit, searches where they stand for a memory.
+    pub const fn seek(who: CharacterId) -> Self {
+        Self { who, action: Action::Seek }
+    }
+
+    /// `who` speaks `target`'s name at the shrine.
+    pub const fn name(who: CharacterId, target: CharacterId) -> Self {
+        Self { who, action: Action::Name(target) }
     }
 
     /// `who` gathers from the deposit where they stand.

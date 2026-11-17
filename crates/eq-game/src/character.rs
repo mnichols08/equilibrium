@@ -10,8 +10,7 @@ use eq_skills::Proficiency;
 use eq_world_graph::PlaceId;
 
 use crate::content::{
-    ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, HEALTH_ON_RETURN, MAX_HEALTH, MOST_DEGRADATION, REBIRTH_CARRYOVER_PERCENT,
-    SKILL_RULES,
+    ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, HEALTH_ON_RETURN, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
@@ -37,6 +36,31 @@ pub struct Death {
     pub lost_at: Tick,
 }
 
+/// A spirit whose body died in its sleep. It has no body to return to
+/// and a limited time awake in which to redeem itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Forgotten {
+    /// Time spent awake as a forgotten spirit. Dormant time is not counted.
+    pub played: Duration,
+    /// Whether the spirit is dormant, as it is until its player returns.
+    pub dormant: bool,
+    /// The places where it has recovered a memory.
+    pub found_in: Vec<PlaceId>,
+}
+
+impl Forgotten {
+    /// How many memories have been recovered.
+    pub fn memories(&self) -> u32 {
+        // A zone has only a handful of places.
+        self.found_in.len() as u32
+    }
+
+    /// Whether enough memories have been recovered to be redeemed.
+    pub fn is_redeemed(&self) -> bool {
+        self.memories() >= MEMORIES_TO_REDEEM
+    }
+}
+
 /// One character in the world.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Character {
@@ -49,6 +73,7 @@ pub struct Character {
     taint: Meter,
     health: Meter,
     death: Option<Death>,
+    forgotten: Option<Forgotten>,
     /// Which life this is, counting the first as 1.
     life: u32,
     /// How worn the spirit is by recent deaths. It outlasts rebirth.
@@ -73,6 +98,7 @@ impl Character {
             taint: Meter::empty(0, 100),
             health: Meter::full(0, MAX_HEALTH),
             death: None,
+            forgotten: None,
             life: 1,
             degradation: Meter::empty(0, MOST_DEGRADATION),
             rested: Meter::full(0, FULLY_RESTED as i64),
@@ -150,10 +176,24 @@ impl Character {
         self.death.as_ref()
     }
 
+    /// The character's state as a forgotten spirit, if they are one.
+    pub const fn forgotten(&self) -> Option<&Forgotten> {
+        self.forgotten.as_ref()
+    }
+
+    pub(crate) const fn forgotten_mut(&mut self) -> Option<&mut Forgotten> {
+        self.forgotten.as_mut()
+    }
+
+    /// Whether the character is a forgotten spirit lying dormant.
+    pub fn is_dormant(&self) -> bool {
+        self.forgotten.as_ref().is_some_and(|forgotten| forgotten.dormant)
+    }
+
     /// Whether the character has died and not yet returned or been reborn.
     /// A spirit walks the same places, unseen by the living.
     pub const fn is_spirit(&self) -> bool {
-        self.death.is_some()
+        self.death.is_some() || self.forgotten.is_some()
     }
 
     /// Which life this is, counting the first as 1.
@@ -194,6 +234,19 @@ impl Character {
         (core::mem::take(&mut self.pack), cleansed)
     }
 
+    /// Dies of sleeping too long. The body wastes as far as it can and is
+    /// gone; the spirit lies dormant where the body lay. Returns what
+    /// was dropped and, if dying lifted the land's mark, that change.
+    pub(crate) fn sleep_to_death(&mut self, now: Tick) -> ([u64; Resource::ALL.len()], Option<Outcome>) {
+        if let Some(from) = self.asleep_from.take() {
+            self.waste(now.since(from));
+        }
+        self.forgotten = Some(Forgotten { played: Duration::ZERO, dormant: true, found_in: Vec::new() });
+        self.degradation.adjust(1);
+        let cleansed = self.shift_taint(-i64::from(self.taint()));
+        (core::mem::take(&mut self.pack), cleansed)
+    }
+
     /// Goes back into the body, weak but alive. Returns where the body lay.
     pub(crate) fn return_to_body(&mut self) -> Option<PlaceId> {
         let death = self.death.take()?;
@@ -202,17 +255,18 @@ impl Character {
         Some(death.body)
     }
 
-    /// Begins a new life at `place`: whole and rested, with a share of
-    /// what the last life learned and no memory of its peaks.
-    pub(crate) fn be_reborn(&mut self, place: PlaceId, now: Tick) {
+    /// Begins a new life at `place`: whole and rested, with `carryover`
+    /// percent of what the last life learned and no memory of its peaks.
+    pub(crate) fn be_reborn(&mut self, place: PlaceId, now: Tick, carryover: u32) {
         self.death = None;
+        self.forgotten = None;
         self.place = place;
         self.busy_until = now;
         self.life += 1;
         self.health.set(MAX_HEALTH);
         self.rested.set(i64::from(FULLY_RESTED));
         for proficiency in self.skills.iter_mut().chain(&mut self.attributes) {
-            *proficiency = proficiency.reborn(REBIRTH_CARRYOVER_PERCENT);
+            *proficiency = proficiency.reborn(carryover);
         }
     }
 

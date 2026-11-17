@@ -1,10 +1,10 @@
 <!--
   Where you are and how you and the shoreline are doing.
   @prop {{ name: string, marked: boolean, asleep: boolean }[]} company - Everyone else standing where you are.
-  @prop {{ place_name: string, description: string, health: number, life: number, body: null | { place_name: string, can_return: boolean, held_for: number, lost_in: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
+  @prop {{ place_name: string, description: string, health: number, life: number, body: null | { place_name: string, can_return: boolean, held_for: number, lost_in: number }, forgotten: null | { dormant: boolean, memories: number, needed: number, time_left: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
 -->
 <script>
-  const emptyYou = { place_name: '', description: '', health: 100, life: 1, body: null, rested: 100, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
+  const emptyYou = { place_name: '', description: '', health: 100, life: 1, body: null, forgotten: null, rested: 100, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
   const trained = [...you.skills, ...you.attributes].filter((entry) => entry.level > 0)
   const carrying = you.pack.map((item) => `${item.amount} ${item.name}`).join(', ')
   const note = (person) => (person.asleep ? ' (asleep)' : person.marked ? ' (marked)' : '')
@@ -15,7 +15,9 @@
         you.body.held_for > 0 ? `Something holds you back for ${minutes(you.body.held_for)}.` : '',
         `It is lost in ${minutes(you.body.lost_in)}.`,
       ].filter(Boolean).join(' ')
-    : ''
+    : you.forgotten
+      ? `You are a forgotten spirit with no body. ${you.forgotten.memories} of ${you.forgotten.needed} memories found. ${you.forgotten.dormant ? 'You lie dormant.' : `You fade in ${minutes(you.forgotten.time_left)} awake.`}`
+      : ''
   const alsoHere = company.map((person) => `${person.name}${note(person)}`).join(', ')
 </script>
 <style>

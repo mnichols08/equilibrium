@@ -53,6 +53,12 @@ impl Duration {
     pub const fn as_ticks(self) -> u64 {
         self.0
     }
+
+    /// What is left of this span after `spent`, or nothing if more than
+    /// all of it has been spent.
+    pub const fn saturating_sub(self, spent: Self) -> Self {
+        Self(self.0.saturating_sub(spent.0))
+    }
 }
 
 impl Add for Duration {
@@ -210,6 +216,12 @@ impl Stopwatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_is_left_of_a_span_never_goes_below_nothing() {
+        assert_eq!(Duration::hours(10).saturating_sub(Duration::hours(4)), Duration::hours(6));
+        assert_eq!(Duration::hours(1).saturating_sub(Duration::hours(4)), Duration::ZERO);
+    }
 
     #[test]
     fn duration_units_convert_to_ticks() {
