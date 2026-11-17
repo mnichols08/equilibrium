@@ -15,7 +15,7 @@ mod common;
 use common::{careful, gathered, greedy, Crowd, Plan, SEED};
 use eq_clock::Duration;
 use eq_events::{replay, Session};
-use eq_game::{yield_amount, Attribute, CharacterId, Command, Event, Game, Health, SkillKind};
+use eq_game::{Attribute, CharacterId, Command, Event, Game, Haul, Health, SkillKind};
 use eq_nodes::{Node, Quality};
 
 const YOU: CharacterId = CharacterId::new(0);
@@ -109,9 +109,8 @@ fn mining_raises_vigor_and_vigor_raises_yield() {
     assert!(you.attribute(Attribute::Resilience).level() >= 1);
     assert_eq!(you.attribute(Attribute::Finesse).level(), 0);
 
-    let weak = yield_amount(12, Quality::Pristine, Health::Balanced, 0);
-    let strong = yield_amount(12, Quality::Pristine, Health::Balanced, 30);
-    assert!(strong > weak);
+    let haul = |attribute_level| Haul { taken: 12, quality: Quality::Pristine, health: Health::Balanced, attribute_level, taint: 0 };
+    assert!(haul(30).amount() > haul(0).amount());
 }
 
 fn run_alone(plan: Plan) -> Crowd {

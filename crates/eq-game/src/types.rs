@@ -136,6 +136,15 @@ pub enum Health {
     Peak,
 }
 
+/// How the land regards a character, from their taint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Standing {
+    /// Little or no taint. Cannot be attacked outside contested places.
+    Clean,
+    /// Enough taint that anyone may challenge them in the wilderness.
+    Marked,
+}
+
 /// A resource node and what it gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deposit {

@@ -9,7 +9,7 @@ use eq_nodes::{Node, NodeConfig};
 use eq_skills::Rules;
 use eq_world_graph::{Graph, Passage, PlaceId};
 
-use crate::types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind};
+use crate::types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind, Standing};
 
 /// How long it takes to walk between places.
 pub const TRAVEL_TIME: Duration = Duration::seconds(30);
@@ -38,6 +38,22 @@ pub const TIERS_PER_WHOLE: u64 = 10;
 
 /// Percentage points of yield per level of the governing attribute.
 pub const YIELD_PERCENT_PER_LEVEL: u64 = 1;
+
+/// Taint gained per haul from a deposit under full pressure. A haul from
+/// a deposit under half pressure gains half this, and so on. Hauls from a
+/// deposit under no pressure gain none: careful players stay clean.
+pub const TAINT_AT_FULL_PRESSURE: u32 = 10;
+
+/// How long one point of taint takes to fade.
+pub const TAINT_FADES_EVERY: Duration = Duration::seconds(30);
+
+/// The share of their yield a fully tainted character loses, as a
+/// percentage. The loss grows evenly with taint.
+pub const YIELD_LOST_AT_FULL_TAINT: u32 = 75;
+
+/// Taint bands. A marked character is fair game in the wilderness once
+/// combat exists; until then the mark is only recorded and shown.
+pub const STANDING_BANDS: Bands<Standing, 1> = Bands::new(Standing::Clean, [(50, Standing::Marked)]);
 
 /// How skills grow: about a hundred units gathered for the first level.
 pub const SKILL_RULES: Rules = Rules { cap: 100, xp_per_level: 100 };

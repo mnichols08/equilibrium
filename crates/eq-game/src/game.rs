@@ -14,9 +14,10 @@ use eq_world_graph::{Graph, Passage, PlaceId};
 
 use crate::content::{
     self, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, BASE_EFFORT, EFFORT_SPREAD, GATHER_TIME, MIN_WORKABLE_STOCK,
-    SKILL_RULES, SKILL_XP_PER_UNIT, TIERS_PER_WHOLE, TRAVEL_TIME, VITALITY_BANDS, YIELD_PERCENT_PER_LEVEL,
+    SKILL_RULES, SKILL_XP_PER_UNIT, STANDING_BANDS, TAINT_AT_FULL_PRESSURE, TAINT_FADES_EVERY, TIERS_PER_WHOLE,
+    TRAVEL_TIME, VITALITY_BANDS, YIELD_LOST_AT_FULL_TAINT, YIELD_PERCENT_PER_LEVEL,
 };
-use crate::types::{Attribute, Health, Place, Resource, SkillKind};
+use crate::types::{Attribute, Health, Place, Resource, SkillKind, Standing};
 
 eq_ids::define_id!(
     /// Identifies a character within one [`Game`].
@@ -108,6 +109,13 @@ pub enum Outcome {
         /// The new level.
         level: u32,
     },
+    /// Their taint carried them from one standing to another.
+    StandingChanged {
+        /// Their standing before.
+        from: Standing,
+        /// Their standing now.
+        to: Standing,
+    },
 }
 
 /// Something that happened in the world.
@@ -163,6 +171,7 @@ pub struct Character {
     skills: [Proficiency; SkillKind::ALL.len()],
     attributes: [Proficiency; Attribute::ALL.len()],
     pack: [u64; Resource::ALL.len()],
+    taint: Meter,
 }
 
 impl Character {
@@ -174,6 +183,7 @@ impl Character {
             skills: [Proficiency::new(); SkillKind::ALL.len()],
             attributes: [Proficiency::new(); Attribute::ALL.len()],
             pack: [0; Resource::ALL.len()],
+            taint: Meter::empty(0, 100),
         }
     }
 
@@ -212,6 +222,23 @@ impl Character {
         self.pack.iter().sum()
     }
 
+    /// How tainted the character is by over-harvesting, from 0 to 100.
+    pub const fn taint(&self) -> u32 {
+        // The meter is bounded to 0..=100.
+        self.taint.value() as u32
+    }
+
+    /// How the land regards the character.
+    pub fn standing(&self) -> Standing {
+        STANDING_BANDS.band_of(self.taint.value())
+    }
+
+    /// Moves taint by `delta` and reports a change of standing, if any.
+    fn shift_taint(&mut self, delta: i64) -> Option<Outcome> {
+        let change = self.taint.adjust(delta);
+        STANDING_BANDS.crossing(change).map(|(from, to)| Outcome::StandingChanged { from, to })
+    }
+
     /// Trains the skill and attributes that gathering `resource` uses.
     fn train(&mut self, resource: Resource, units: u32, outcomes: &mut Vec<Outcome>) {
         let units = u64::from(units);
@@ -231,17 +258,43 @@ impl Character {
     }
 }
 
-/// How much of a harvest reaches the pack.
-///
-/// `taken × quality × zone health × (1 + attribute level / 100)`, rounded
-/// down once at the end.
-pub fn yield_amount(taken: u32, quality: Quality, health: Health, attribute_level: u32) -> u64 {
-    let skill_percent = 100 + u64::from(attribute_level) * YIELD_PERCENT_PER_LEVEL;
-    let parts = u64::from(taken)
-        * u64::from(quality.yield_percent())
-        * u64::from(health.yield_percent())
-        * skill_percent;
-    parts / 1_000_000
+/// Everything that decides how much of a harvest reaches the pack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Haul {
+    /// Units removed from the deposit.
+    pub taken: u32,
+    /// The deposit's quality when the work began.
+    pub quality: Quality,
+    /// The zone's health.
+    pub health: Health,
+    /// The gatherer's level in the attribute that governs this resource.
+    pub attribute_level: u32,
+    /// The gatherer's taint, from 0 to 100.
+    pub taint: u32,
+}
+
+impl Haul {
+    /// How much reaches the pack:
+    ///
+    /// `taken × quality × zone health × (1 + attribute level / 100) × (1 − taint loss)`
+    ///
+    /// rounded down once at the end.
+    pub fn amount(&self) -> u64 {
+        const WHOLE: u64 = 100;
+        let attribute_percent = WHOLE + u64::from(self.attribute_level) * YIELD_PERCENT_PER_LEVEL;
+        let taint_percent = WHOLE - u64::from(self.taint.min(100) * YIELD_LOST_AT_FULL_TAINT) / WHOLE;
+        let parts = u64::from(self.taken)
+            * u64::from(self.quality.yield_percent())
+            * u64::from(self.health.yield_percent())
+            * attribute_percent
+            * taint_percent;
+        parts / WHOLE.pow(4)
+    }
+}
+
+/// Taint earned by one haul from a deposit under `pressure` percent.
+pub fn taint_for(pressure: u32) -> i64 {
+    i64::from(pressure.min(100) * TAINT_AT_FULL_PRESSURE / 100)
 }
 
 /// How hard a deposit is being pushed, from 0 to 100: the greater of its
@@ -346,12 +399,18 @@ impl Game {
 
         // EFFORT_SPREAD is tiny, so the cast cannot truncate.
         let effort = BASE_EFFORT + self.rng.below(EFFORT_SPREAD) as u32;
+        let pressure_before = pressure_percent(&deposit.node);
         let harvest = deposit.node.harvest(effort);
         let quality_after = deposit.node.quality();
 
-        let governing = resource.attributes()[0];
-        let level = character.attribute(governing).level();
-        let amount = yield_amount(harvest.taken, harvest.quality, health, level);
+        let haul = Haul {
+            taken: harvest.taken,
+            quality: harvest.quality,
+            health,
+            attribute_level: character.attribute(resource.attributes()[0]).level(),
+            taint: character.taint(),
+        };
+        let amount = haul.amount();
         character.pack[resource.index()] += amount;
         character.busy_until = now + GATHER_TIME;
 
@@ -360,6 +419,20 @@ impl Game {
             events.push(Event::DepositChanged { place, resource, from: harvest.quality, to: quality_after });
         }
         character.train(resource, harvest.taken, outcomes);
+        // Working a deposit that was already under pressure taints the one
+        // who does it. The haul that first pushes it over does not.
+        outcomes.extend(character.shift_taint(taint_for(pressure_before)));
+    }
+
+    fn fade_taint(&mut self, now: Tick, events: &mut Vec<Event>) {
+        if !now.get().is_multiple_of(TAINT_FADES_EVERY.as_ticks()) {
+            return;
+        }
+        for (index, character) in self.characters.iter_mut().enumerate() {
+            if let Some(outcome) = character.shift_taint(-1) {
+                events.push(Event::Character { who: CharacterId::new(index as u64), outcome });
+            }
+        }
     }
 
     fn grow_deposits(&mut self, events: &mut Vec<Event>) {
@@ -415,6 +488,7 @@ impl World for Game {
         self.grow_deposits(events);
         self.update_vitality(events);
         self.report_passages(now, events);
+        self.fade_taint(now, events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
@@ -446,23 +520,59 @@ mod tests {
         })
     }
 
-    #[test]
-    fn yield_follows_quality_health_and_attribute() {
-        assert_eq!(yield_amount(10, Quality::Pristine, Health::Balanced, 0), 10);
-        assert_eq!(yield_amount(10, Quality::Pristine, Health::Peak, 0), 12);
-        assert_eq!(yield_amount(10, Quality::Depleted, Health::Balanced, 0), 2);
-        assert_eq!(yield_amount(10, Quality::Depleted, Health::Collapsed, 0), 1);
-        assert_eq!(yield_amount(10, Quality::Pristine, Health::Balanced, 50), 15);
+    const fn haul(quality: Quality, health: Health, attribute_level: u32, taint: u32) -> Haul {
+        Haul { taken: 10, quality, health, attribute_level, taint }
     }
 
     #[test]
-    fn yield_never_falls_as_the_attribute_rises() {
-        let mut previous = 0;
-        for level in 0..=100 {
-            let amount = yield_amount(12, Quality::Healthy, Health::Balanced, level);
-            assert!(amount >= previous);
-            previous = amount;
+    fn yield_follows_quality_health_attribute_and_taint() {
+        assert_eq!(haul(Quality::Pristine, Health::Balanced, 0, 0).amount(), 10);
+        assert_eq!(haul(Quality::Pristine, Health::Peak, 0, 0).amount(), 12);
+        assert_eq!(haul(Quality::Depleted, Health::Balanced, 0, 0).amount(), 2);
+        assert_eq!(haul(Quality::Depleted, Health::Collapsed, 0, 0).amount(), 1);
+        assert_eq!(haul(Quality::Pristine, Health::Balanced, 50, 0).amount(), 15);
+        assert_eq!(haul(Quality::Pristine, Health::Balanced, 0, 40).amount(), 7);
+        assert_eq!(haul(Quality::Pristine, Health::Balanced, 0, 100).amount(), 2);
+    }
+
+    #[test]
+    fn yield_rises_with_the_attribute_and_falls_with_taint() {
+        let by_level = (0..=100).map(|level| haul(Quality::Healthy, Health::Balanced, level, 0).amount());
+        assert!(by_level.collect::<Vec<_>>().windows(2).all(|pair| pair[0] <= pair[1]));
+        let by_taint = (0..=100).map(|taint| haul(Quality::Healthy, Health::Balanced, 0, taint).amount());
+        assert!(by_taint.collect::<Vec<_>>().windows(2).all(|pair| pair[0] >= pair[1]));
+    }
+
+    #[test]
+    fn taint_scales_with_pressure_and_careful_hauls_earn_none() {
+        assert_eq!(taint_for(0), 0);
+        assert_eq!(taint_for(50), 5);
+        assert_eq!(taint_for(100), 10);
+        assert_eq!(taint_for(999), 10);
+    }
+
+    #[test]
+    fn stripping_a_deposit_marks_you_and_the_mark_fades() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        let mut now = 30;
+        while game.place_of(ASH).unwrap().deposit.unwrap().node.stock() >= MIN_WORKABLE_STOCK {
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += GATHER_TIME.as_ticks();
         }
+        let marked = Outcome::StandingChanged { from: Standing::Clean, to: Standing::Marked };
+        assert!(events.contains(&Event::Character { who: ASH, outcome: marked }));
+        assert_eq!(game.character(ASH).unwrap().standing(), Standing::Marked);
+        assert_eq!(game.character(BRYN).unwrap().taint(), 0);
+
+        events.clear();
+        for tick in now..now + 100 * TAINT_FADES_EVERY.as_ticks() {
+            game.tick(Tick::new(tick), &mut events);
+        }
+        let cleansed = Outcome::StandingChanged { from: Standing::Marked, to: Standing::Clean };
+        assert!(events.contains(&Event::Character { who: ASH, outcome: cleansed }));
+        assert_eq!(game.character(ASH).unwrap().taint(), 0);
     }
 
     #[test]
