@@ -165,6 +165,8 @@ pub struct Place {
     pub safety: Safety,
     /// What can be gathered, if anything.
     pub deposit: Option<Deposit>,
+    /// What lies dropped on the ground here, by resource, for anyone to take.
+    pub spoils: [u64; Resource::ALL.len()],
     /// Where it sits on a map seen from above: `x` grows east, `y` grows
     /// south. Only for drawing; the rules never read it.
     pub position: (i32, i32),

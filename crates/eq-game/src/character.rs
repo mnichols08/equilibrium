@@ -10,7 +10,8 @@ use eq_skills::Proficiency;
 use eq_world_graph::PlaceId;
 
 use crate::content::{
-    ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, SKILL_RULES, SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
+    ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, HEALTH_ON_RISING, MAX_HEALTH, SKILL_RULES, SKILL_XP_PER_UNIT, STANDING_BANDS,
+    TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
 use crate::types::{Attribute, Resource, SkillKind, Standing};
@@ -30,6 +31,8 @@ pub struct Character {
     attributes: [Proficiency; Attribute::ALL.len()],
     pack: [u64; Resource::ALL.len()],
     taint: Meter,
+    health: Meter,
+    down_until: Option<Tick>,
 }
 
 impl Character {
@@ -42,7 +45,51 @@ impl Character {
             attributes: [Proficiency::new(); Attribute::ALL.len()],
             pack: [0; Resource::ALL.len()],
             taint: Meter::empty(0, 100),
+            health: Meter::full(0, MAX_HEALTH),
+            down_until: None,
         }
+    }
+
+    /// Health, from 0 to 100.
+    pub const fn health(&self) -> u32 {
+        // The meter is bounded to 0..=100.
+        self.health.value() as u32
+    }
+
+    /// When the character will get back up, if they are down.
+    pub const fn down_until(&self) -> Option<Tick> {
+        self.down_until
+    }
+
+    /// Whether the character has lost a fight and not yet got up.
+    pub const fn is_down(&self) -> bool {
+        self.down_until.is_some()
+    }
+
+    /// Takes `damage` from health and returns what is left.
+    pub(crate) fn hurt(&mut self, damage: u32) -> u32 {
+        self.health.adjust(-i64::from(damage));
+        self.health()
+    }
+
+    /// Restores up to `points` of health.
+    pub(crate) fn mend(&mut self, points: i64) {
+        self.health.adjust(points);
+    }
+
+    /// Goes down until `until`, dropping everything carried and paying
+    /// off all taint. Returns what was dropped and, if the fall lifted
+    /// the land's mark, that change of standing.
+    pub(crate) fn fall(&mut self, until: Tick) -> ([u64; Resource::ALL.len()], Option<Outcome>) {
+        self.down_until = Some(until);
+        let cleansed = self.shift_taint(-i64::from(self.taint()));
+        (core::mem::take(&mut self.pack), cleansed)
+    }
+
+    /// Gets back up, weak but standing.
+    pub(crate) fn rise(&mut self) {
+        self.down_until = None;
+        self.health.set(HEALTH_ON_RISING);
     }
 
     /// What the character is called.
@@ -95,6 +142,13 @@ impl Character {
     pub(crate) fn shift_taint(&mut self, delta: i64) -> Option<Outcome> {
         let change = self.taint.adjust(delta);
         STANDING_BANDS.crossing(change).map(|(from, to)| Outcome::StandingChanged { from, to })
+    }
+
+    /// Puts a whole pile in the pack, by resource in pack order.
+    pub(crate) fn stow_all(&mut self, pile: [u64; Resource::ALL.len()]) {
+        for (held, found) in self.pack.iter_mut().zip(pile) {
+            *held += found;
+        }
     }
 
     /// Puts `amount` of `resource` in the pack.

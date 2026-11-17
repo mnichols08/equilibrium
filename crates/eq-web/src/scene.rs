@@ -10,7 +10,7 @@
 
 use eq_clock::Tick;
 use eq_game::content::{LOW_TIDE, TIDE};
-use eq_game::{narrate, pressure_percent, Attribute, CharacterId, Deposit, Game, Resource, SkillKind, Standing};
+use eq_game::{narrate, pressure_percent, Attribute, CharacterId, Deposit, Game, Place, Resource, SkillKind, Standing};
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 use serde::Serialize;
@@ -49,6 +49,12 @@ pub struct You {
     pub description: &'static str,
     /// Whether there is enough here to gather.
     pub can_gather: bool,
+    /// Whether something lies on the ground here to pick up.
+    pub can_take: bool,
+    /// Health, 0 to 100.
+    pub health: u32,
+    /// Whether they have lost a fight and not yet got up.
+    pub down: bool,
     /// Taint, 0 to 100.
     pub taint: u32,
     /// Whether the land has marked them.
@@ -98,6 +104,8 @@ pub struct PlaceView {
     pub deposit: Option<DepositView>,
     /// Who is here.
     pub people: Vec<PersonView>,
+    /// Whether something lies dropped on the ground here.
+    pub spoils: bool,
 }
 
 /// The state of a deposit.
@@ -122,6 +130,10 @@ pub struct PersonView {
     pub you: bool,
     /// Whether the land has marked them.
     pub marked: bool,
+    /// Whether they are down.
+    pub down: bool,
+    /// Whether the viewer may attack them right now.
+    pub can_attack: bool,
 }
 
 /// A way between two places, drawn once whichever way it is walked.
@@ -162,6 +174,9 @@ impl Scene {
             place_name: place.name,
             description: place.description,
             can_gather: place.deposit.is_some_and(|deposit| is_workable(&deposit)),
+            can_take: has_spoils(place),
+            health: character.health(),
+            down: character.is_down(),
             taint: character.taint(),
             marked: character.standing() == Standing::Marked,
             skills: SkillKind::ALL
@@ -195,6 +210,10 @@ impl Scene {
     }
 }
 
+fn has_spoils(place: &Place) -> bool {
+    place.spoils.iter().any(|&amount| amount > 0)
+}
+
 fn is_workable(deposit: &Deposit) -> bool {
     deposit.node.stock() >= eq_game::content::MIN_WORKABLE_STOCK
 }
@@ -217,6 +236,7 @@ fn places(game: &Game, viewer: CharacterId, here: PlaceId) -> Vec<PlaceView> {
             here: id == here,
             deposit: place.deposit.as_ref().map(deposit_view),
             people: people(game, viewer, id),
+            spoils: has_spoils(place),
         })
         .collect()
 }
@@ -248,6 +268,8 @@ fn people(game: &Game, viewer: CharacterId, place: PlaceId) -> Vec<PersonView> {
             name: character.name().to_owned(),
             you: id == viewer,
             marked: character.standing() == Standing::Marked,
+            down: character.is_down(),
+            can_attack: game.can_attack(viewer, id).is_ok(),
         })
         .collect()
 }
@@ -302,7 +324,10 @@ mod tests {
 
         let here: Vec<&PlaceView> = scene.places.iter().filter(|place| place.here).collect();
         assert_eq!(here.len(), 1);
-        assert_eq!(here[0].people, [PersonView { name: "You".into(), you: true, marked: false }]);
+        let you = PersonView { name: "You".into(), you: true, marked: false, down: false, can_attack: false };
+        assert_eq!(here[0].people, [you]);
+        assert_eq!((scene.you.health, scene.you.down, scene.you.can_take), (100, false, false));
+        assert!(scene.places.iter().all(|place| !place.spoils));
     }
 
     #[test]

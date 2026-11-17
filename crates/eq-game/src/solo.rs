@@ -82,6 +82,10 @@ impl Solo {
     pub fn handle(&mut self, line: &str) -> Reply {
         let lines = match parse(line) {
             Input::Do(action) => self.act(action),
+            Input::Attack(name) => match self.someone_here_called(&name) {
+                Some(target) => self.act(Action::Attack(target)),
+                None => alloc::vec![format!("There is nobody called \"{name}\" here.")],
+            },
             Input::Wait(time) => self.wait(time),
             Input::Look => alloc::vec![self.look()],
             Input::Inspect => alloc::vec![narrate::inspect(self.game(), Self::YOU)],
@@ -100,6 +104,15 @@ impl Solo {
     pub fn replays_identically(&self) -> bool {
         let (rebuilt, _) = replay(fresh_world(self.seed, self.company), self.session.log(), self.now());
         &rebuilt == self.game()
+    }
+
+    /// The character standing with the player whose name is `name`,
+    /// whatever its capitals.
+    fn someone_here_called(&self, name: &str) -> Option<CharacterId> {
+        let here = self.game().character(Self::YOU)?.place();
+        self.game().occupants(here).iter().copied().find(|&id| {
+            id != Self::YOU && self.game().character(id).is_some_and(|other| other.name().eq_ignore_ascii_case(name))
+        })
     }
 
     /// Has the player's character act, then lets the action's time pass.
@@ -192,6 +205,49 @@ mod tests {
         let lines = ["a", "b", "b", "b", "a", "a"].map(String::from).into_iter();
         assert_eq!(fold_repeats(lines), ["a", "b (x3)", "a (x2)"]);
         assert!(fold_repeats(core::iter::empty()).is_empty());
+    }
+
+    /// Plays until Bryn, the greedy one, is marked, then walks the player
+    /// to wherever Bryn is standing. Gives up after a while.
+    fn find_bryn_marked(solo: &mut Solo) -> bool {
+        const BRYN: CharacterId = CharacterId::new(2);
+        for _ in 0..600 {
+            let bryn = solo.game().character(BRYN).unwrap();
+            let you = solo.game().character(Solo::YOU).unwrap();
+            if bryn.standing() == crate::Standing::Marked && bryn.place() == you.place() {
+                return solo.game().can_attack(Solo::YOU, BRYN).is_ok();
+            }
+            // Follow the same circuit the bots walk; sooner or later you meet.
+            let step = solo.commands() % crate::content::CIRCUIT.len();
+            solo.handle(crate::content::CIRCUIT[step].exit);
+            solo.handle("wait 20");
+        }
+        false
+    }
+
+    #[test]
+    fn you_can_challenge_a_marked_companion_by_name_and_take_what_they_drop() {
+        let mut solo = Solo::with_company(1, 3);
+        assert_eq!(solo.handle("attack bryn").lines, ["Nobody can be harmed here."]);
+        assert_eq!(solo.handle("attack nobody").lines, ["There is nobody called \"nobody\" here."]);
+
+        assert!(find_bryn_marked(&mut solo), "never caught Bryn marked in the open");
+        let mut said = Vec::new();
+        for _ in 0..12 {
+            said.extend(solo.handle("ATTACK Bryn").lines);
+            if said.iter().any(|line| line.starts_with("Bryn goes down.")) {
+                break;
+            }
+        }
+        assert!(said.iter().any(|line| line.starts_with("You strike Bryn for ")), "{said:?}");
+        assert!(said.iter().any(|line| line.starts_with("Bryn strikes you for ")), "{said:?}");
+        assert!(said.iter().any(|line| line.starts_with("Bryn goes down.")), "{said:?}");
+        assert!(solo.look().contains("Bryn (down)"));
+        assert!(solo.look().contains("Lying on the ground: "));
+
+        let took = solo.handle("take").lines;
+        assert!(took[0].starts_with("You take "), "{took:?}");
+        assert!(solo.replays_identically());
     }
 
     #[test]

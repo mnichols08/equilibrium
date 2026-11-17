@@ -65,6 +65,8 @@ mod tests {
         let scene: serde_json::Value = serde_json::from_str(&shore.scene()).unwrap();
         assert_eq!(scene["company"].as_array().unwrap().len(), 3);
         assert_eq!(scene["company"][0]["name"], "Ash");
+        assert_eq!(scene["company"][0]["can_attack"], false, "nobody can be attacked at camp");
+        assert_eq!(scene["you"]["health"], 100);
 
         shore.input("wait 10m");
         let scene: serde_json::Value = serde_json::from_str(&shore.scene()).unwrap();

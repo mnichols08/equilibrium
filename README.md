@@ -10,7 +10,9 @@ the browser.
 cargo run -p eq-cli
 ```
 
-One character on the Rocky Shoreline: a camp and nine places to gather, two of them cut off at high tide. The rules support many characters; the terminal plays one. Walk, gather, wait and watch what your choices do to the place. Type `help` in the game for commands.
+One character on the Rocky Shoreline: a camp and nine places to gather, two of them cut off at high tide. The rules support many characters; the terminal plays one. Walk, gather, wait and watch what your choices do to the place.
+
+Over-harvesting marks whoever does it. A marked character can be attacked in the wilderness (`attack <name>`); the loser goes down for five minutes and drops everything they carry (`take`). Nobody can be harmed at camp, and anybody can in the cave, the grotto and on the reef. Type `help` in the game for commands.
 
 - `--seed N` picks the world's random seed (default 1).
 - `--bots N` puts N bots on the shoreline with you: mostly careful, with a greedy one among every four.
@@ -39,12 +41,12 @@ npx serve dist        # or any static file server
 | --- | --- |
 | `web/components/eq-map.zb` | The shoreline from above. Tiles are coloured by wear; press a neighbour to walk there. |
 | `web/components/eq-status.zb` | Where you are, who else is there, the zone's vitality, your taint, pack and levels. |
-| `web/components/eq-actions.zb` | Buttons for exits, gathering and waiting. |
+| `web/components/eq-actions.zb` | Buttons for exits, gathering, picking things up, attacking and waiting. |
 | `web/components/eq-log.zb` | What has happened. |
 | `web/app.js` | Joins a game to a view. No DOM or wasm, so it is tested with `node --test`. |
 | `web/main.js` | Loads the wasm and the components. |
 
-CI builds the site and plays it in headless Chrome (`web/test/e2e.html`): it presses buttons and map tiles, types a command, waits for the tide, then reloads with bots and watches them wander, checking the page after each.
+CI builds the site and plays it in headless Chrome (`web/test/e2e.html`): it presses buttons and map tiles, types a command, waits for the tide, then reloads with bots, watches them wander, hunts down the marked one, fights it and picks up what it drops, checking the page after each.
 
 The page holds no rules. It sends the game the same lines you would type in the terminal and draws the scene it gets back. `cargo run -p eq-web --example scene -- north gather` prints that scene.
 

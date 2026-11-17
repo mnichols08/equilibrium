@@ -7,6 +7,8 @@
 //!   same total whatever its size, so more heads means less each.
 //! - A careful crowd holds peak health and takes several times what a
 //!   greedy crowd does.
+//! - Wardens, who challenge the marked and take what they drop, give the
+//!   careful most of their share back and spare the zone the worst.
 //! - Over-harvesting taints whoever does it, cutting their own yields. One
 //!   greedy player among careful ones now earns far less than they would
 //!   by staying careful, but still drags the others down with them.
@@ -44,6 +46,12 @@ fn mixed(defectors: usize) -> Crowd {
         *plan = Plan::roam(Policy::Greedy);
     }
     run(&plans)
+}
+
+/// Four roamers: one greedy, three careful ones who are also wardens.
+fn warded() -> Crowd {
+    let warden = Plan::roam(Policy::Careful).as_warden();
+    run(&[Plan::roam(Policy::Greedy), warden, warden, warden])
 }
 
 fn collapsed_samples(crowd: &Crowd) -> usize {
@@ -133,6 +141,36 @@ fn one_greedy_player_among_careful_ones_loses_by_it_and_still_ruins_the_rest() {
 }
 
 #[test]
+fn wardens_protect_the_commons() {
+    let fair_share = roamers(Policy::Careful, 4).carried_by_all() / 4;
+    let unguarded = mixed(1);
+    let guarded = warded();
+
+    let defector = guarded.carried(0);
+    let wardens: Vec<u64> = (1..4).map(|index| guarded.carried(index)).collect();
+    let unguarded_best = (1..4).map(|index| unguarded.carried(index)).max().unwrap();
+    let worst_warden = *wardens.iter().min().unwrap();
+
+    // The careful keep most of what restraint should earn them.
+    assert!(worst_warden > unguarded_best * 2, "wardens {wardens:?} vs unguarded {unguarded_best}");
+    assert!(worst_warden * 2 > fair_share, "wardens {wardens:?} vs a fair share of {fair_share}");
+    // The defector is left with next to nothing.
+    assert!(defector * 10 < fair_share, "the defector kept {defector}");
+    // And the zone is spared the worst of it.
+    assert!(guarded.lowest_vitality() > unguarded.lowest_vitality() + 20);
+    assert!(guarded.lowest_vitality() > 30);
+}
+
+#[test]
+fn wardens_leave_the_careful_alone() {
+    let warden = Plan::roam(Policy::Careful).as_warden();
+    let crowd = run(&[warden; 4]);
+    let hurt = crowd.game().characters().filter(|(_, character)| character.health() < 100).count();
+    assert_eq!(hurt, 0);
+    assert!(crowd.lowest_vitality() >= 81);
+}
+
+#[test]
 fn the_land_marks_the_greedy_and_leaves_the_careful_clean() {
     let crowd = mixed(1);
     let standings: Vec<(u32, Standing)> =
@@ -176,6 +214,9 @@ fn print_crowd_numbers() {
         let each: Vec<u64> = (0..4).map(|index| crowd.carried(index)).collect();
         println!("{defectors} greedy among 4 roamers: each {each:?} lowest {}", crowd.lowest_vitality());
     }
+    let crowd = warded();
+    let each: Vec<u64> = (0..4).map(|index| crowd.carried(index)).collect();
+    println!("1 greedy among 3 careful wardens: each {each:?} lowest {} end {}", crowd.lowest_vitality(), crowd.game().vitality());
     for minutes in [10, 20, 30, 40, 50, 60, 90] {
         let mut crowd = run(&campers(Policy::Greedy));
         crowd.rest(Duration::minutes(minutes));

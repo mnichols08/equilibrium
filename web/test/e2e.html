@@ -118,6 +118,31 @@
         await until(() => logText().includes('leaves for'), 'the log to show someone leaving')
         const elsewhere = [...page.querySelectorAll('eq-map .tile:not(.here) .other')]
         expect(elsewhere.length > 0, 'bots to appear on other tiles after ten minutes')
+        expect(!button('Attack'), 'no Attack button while nobody here can be attacked')
+
+        // Hunt the greedy bot: walk the shoreline until someone here can be attacked.
+        const CIRCUIT = ['north', 'north', 'south', 'south', 'east', 'cave', 'down', 'up', 'out', 'east', 'east', 'west', 'west', 'west', 'south', 'south', 'north', 'north']
+        for (let step = 0; step < 400 && !button('Attack'); step++) {
+            type(CIRCUIT[step % CIRCUIT.length])
+            type('wait 20')
+            await sleep(0)
+        }
+        expect(button('Attack')?.textContent.trim() === 'Attack Bryn', 'an Attack Bryn button once the marked bot is caught in the open')
+        expect(page.querySelector('eq-status').textContent.includes('Bryn (marked)'), 'the status to show Bryn as marked')
+
+        // Fight until Bryn is down, then pick up what was dropped.
+        for (let blow = 0; blow < 20 && button('Attack'); blow++) {
+            press(button('Attack'))
+            await sleep(0)
+        }
+        await until(() => logText().includes('Bryn goes down.'), 'Bryn to go down')
+        expect(/You strike Bryn for \d+\./.test(logText()), 'your blows to be logged')
+        expect(page.querySelector('eq-status').textContent.includes('Bryn (down)'), 'the status to show Bryn as down')
+        expect(page.querySelector('eq-map .tile.here .spoils'), 'dropped goods to show on your tile')
+
+        press(await until(() => button('Take'), 'a Take button'))
+        await until(() => /You take .+ from the ground\./.test(logText()), 'the take to be logged')
+        expect(!button('Take'), 'the Take button to go once the ground is clear')
 
         result.textContent = `E2E PASS (${steps.length} checks)`
       } catch (error) {

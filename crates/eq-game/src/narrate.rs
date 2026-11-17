@@ -11,6 +11,7 @@ use eq_clock::Tick;
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
+use crate::combat::Refusal;
 use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, TIDE};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
 use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
@@ -22,10 +23,15 @@ Commands:
   go <exit>            walk somewhere; compass points, up and down work alone
   gather (g)           take from the deposit here
   inspect (x)          study the deposit and the health of the shoreline
+  attack <name>        trade blows with someone here (see below)
+  take                 pick up what lies dropped on the ground
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
   stats                show your skills and attributes
   pack (i)             show what you carry
-  quit (q)             stop playing";
+  quit (q)             stop playing
+
+Nobody can be harmed in a haven. In the wilderness only those the land
+has marked can be attacked. In contested places, anyone can.";
 
 /// Shown when a view is asked for a character who is not in the world.
 const NOBODY: &str = "There is nobody by that name here.";
@@ -36,7 +42,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
     let here = game.character(viewer)?.place();
     match event {
         Event::Character { who, outcome } if *who == viewer => Some(own(outcome, game)),
-        Event::Character { who, outcome } => witnessed(*who, outcome, game, here),
+        Event::Character { who, outcome } => witnessed(*who, outcome, game, viewer, here),
         Event::UnknownCharacter { .. } => None,
         Event::DepositChanged { place, resource, from, to } if *place == here => {
             Some(deposit_changed(*resource, *from, *to))
@@ -71,6 +77,18 @@ fn own(outcome: &Outcome, game: &Game) -> String {
         Outcome::AttributeRose { attribute, level } => {
             format!("You feel your {} grow to {level}.", attribute.name())
         }
+        Outcome::Down { .. } => "You are down and cannot do that yet. Wait until you are back on your feet.".into(),
+        Outcome::CannotAttack { target, why } => cannot_attack(name_of(game, *target), *why),
+        Outcome::Struck { target, damage } => format!("You strike {} for {damage}.", name_of(game, *target)),
+        Outcome::Hurt { by, damage, health } => {
+            format!("{} strikes you for {damage}. You have {health} health left.", name_of(game, *by))
+        }
+        Outcome::Downed { by } => {
+            format!("{} has put you down. Everything you carried spills onto the ground.", name_of(game, *by))
+        }
+        Outcome::Rose => "You get back on your feet, weak but standing.".into(),
+        Outcome::Took { spoils } => format!("You take {} from the ground.", pile(spoils)),
+        Outcome::NothingToTake => "There is nothing lying here to take.".into(),
         Outcome::StandingChanged { to: Standing::Marked, .. } => {
             "The land has marked you for what you have taken. Until it fades, your hauls are thin and anyone may challenge you in the wilds.".into()
         }
@@ -80,7 +98,7 @@ fn own(outcome: &Outcome, game: &Game) -> String {
 
 /// What the viewer notices of someone else's action, if they are close
 /// enough to see it.
-fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, here: PlaceId) -> Option<String> {
+fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: CharacterId, here: PlaceId) -> Option<String> {
     let actor = game.character(who)?;
     let name = actor.name();
     match outcome {
@@ -95,6 +113,17 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, here: PlaceId) ->
         }
         Outcome::StandingChanged { to: Standing::Marked, .. } if actor.place() == here => {
             Some(format!("The land marks {name}."))
+        }
+        // A blow that lands on the viewer reaches them as their own `Hurt`.
+        Outcome::Struck { target, .. } if actor.place() == here && *target != viewer => {
+            Some(format!("{name} strikes {}.", name_of(game, *target)))
+        }
+        Outcome::Downed { .. } if actor.place() == here => {
+            Some(format!("{name} goes down. What they carried spills onto the ground."))
+        }
+        Outcome::Rose if actor.place() == here => Some(format!("{name} gets back up.")),
+        Outcome::Took { .. } if actor.place() == here => {
+            Some(format!("{name} takes what was lying on the ground."))
         }
         _ => None,
     }
@@ -121,13 +150,17 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         .iter()
         .filter(|&&id| id != viewer)
         .filter_map(|&id| game.character(id))
-        .map(|other| match other.standing() {
-            Standing::Clean => other.name().into(),
-            Standing::Marked => format!("{} (marked)", other.name()),
+        .map(|other| match (other.is_down(), other.standing()) {
+            (true, _) => format!("{} (down)", other.name()),
+            (false, Standing::Marked) => format!("{} (marked)", other.name()),
+            (false, Standing::Clean) => other.name().into(),
         })
         .collect();
     if !others.is_empty() {
         lines.push(format!("Also here: {}.", others.join(", ")));
+    }
+    if here.spoils.iter().any(|&amount| amount > 0) {
+        lines.push(format!("Lying on the ground: {}.", pile(&here.spoils)));
     }
     let exits: Vec<String> = game
         .map()
@@ -175,6 +208,7 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
     for attribute in Attribute::ALL {
         lines.push(format!("  {:<11}{:>3}", attribute.name(), character.attribute(attribute).level()));
     }
+    lines.push(format!("Health       {:>3}", character.health()));
     let standing = match character.standing() {
         Standing::Clean => "clean",
         Standing::Marked => "marked",
@@ -186,16 +220,38 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
 /// Lists what the viewer carries.
 pub fn pack(game: &Game, viewer: CharacterId) -> String {
     let Some(character) = game.character(viewer) else { return NOBODY.into() };
-    let carried: Vec<String> = Resource::ALL
-        .into_iter()
-        .map(|resource| (resource, character.carried(resource)))
-        .filter(|&(_, amount)| amount > 0)
-        .map(|(resource, amount)| format!("{amount} {}", resource.name()))
-        .collect();
-    if carried.is_empty() {
+    let carried = Resource::ALL.map(|resource| character.carried(resource));
+    if carried.iter().all(|&amount| amount == 0) {
         "You carry nothing.".into()
     } else {
-        format!("You carry: {}.", carried.join(", "))
+        format!("You carry: {}.", pile(&carried))
+    }
+}
+
+/// Amounts by resource, in pack order, as "12 heavy ore, 4 kelp".
+fn pile(amounts: &[u64; Resource::ALL.len()]) -> String {
+    let parts: Vec<String> = Resource::ALL
+        .into_iter()
+        .zip(amounts)
+        .filter(|&(_, &amount)| amount > 0)
+        .map(|(resource, amount)| format!("{amount} {}", resource.name()))
+        .collect();
+    parts.join(", ")
+}
+
+fn name_of(game: &Game, who: CharacterId) -> &str {
+    game.character(who).map_or("someone", |character| character.name())
+}
+
+fn cannot_attack(name: &str, why: Refusal) -> String {
+    match why {
+        Refusal::Yourself => "You think better of it.".into(),
+        Refusal::NotHere => format!("{name} is not here."),
+        Refusal::AlreadyDown => format!("{name} is already down."),
+        Refusal::Haven => "Nobody can be harmed here.".into(),
+        Refusal::Unmarked => {
+            format!("{name} carries no mark. Out here you may only challenge those the land has marked.")
+        }
     }
 }
 

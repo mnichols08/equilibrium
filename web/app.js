@@ -78,7 +78,13 @@ export function pageView(root) {
         you: scene.you,
         company: scene.company,
       })
-      Object.assign(actions, { exits: scene.exits, canGather: scene.you.can_gather })
+      Object.assign(actions, {
+        exits: scene.exits,
+        canGather: scene.you.can_gather,
+        canTake: scene.you.can_take,
+        targets: scene.company.filter((person) => person.can_attack),
+        down: scene.you.down,
+      })
       log.lines = lines
     },
     onCommand(send) {
