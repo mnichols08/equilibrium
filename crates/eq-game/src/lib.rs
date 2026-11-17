@@ -54,7 +54,7 @@ mod types;
 mod wire;
 mod zone;
 
-pub use board::{Board, Contract, ContractId, Lot, TradeRefusal};
+pub use board::{Board, Bounty, Contract, ContractId, Lot, TradeRefusal};
 pub use character::{Character, CharacterId, Death, Forgotten};
 pub use command::{Action, Command};
 pub use creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};

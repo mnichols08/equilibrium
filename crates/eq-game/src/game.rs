@@ -8,7 +8,7 @@ use eq_rng::Rng;
 use eq_world_graph::{Graph, Passage, PlaceId};
 
 
-use crate::board::{Board, ContractId, Lot, TradeRefusal};
+use crate::board::{Board, Bounty, ContractId, Lot, TradeRefusal};
 use crate::character::{Character, CharacterId, Death, Rebirth};
 use crate::combat::{may_attack, may_rob, Blow, FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::command::{Action, Command};
@@ -783,6 +783,7 @@ impl Game {
             Action::NameHouse(name) => self.name_founding(index, name, true, outcomes),
             Action::Invite(name) => self.invite(index, name, outcomes),
             Action::Raise => self.raise(index, now, outcomes),
+            Action::Bounty { on, reward } => self.bounty(index, *on, *reward, now, outcomes, events),
             Action::Deal { with, dealing } => self.deal(index, with, *dealing, outcomes, events),
             Action::Bury(target) => self.bury(index, *target, now, outcomes, events),
             Action::Rite => self.rite(index, now, outcomes, events),
@@ -1004,6 +1005,42 @@ impl Game {
         poster.busy_until = now + BOARD_TIME;
         let id = self.zone_of_index_mut(index).board.post(who, give, want);
         outcomes.push(Outcome::Posted { id, give, want });
+    }
+
+    /// Puts a price on someone's head at the board here. It changes
+    /// nothing about who may be attacked where: it makes them worth
+    /// the trouble.
+    fn bounty(&mut self, index: usize, on: CharacterId, reward: Lot, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let allowed = self.at_the_board(index).and_then(|()| match self.index_of(on) {
+            None => Err(TradeRefusal::NoSuchContract),
+            Some(_) if on == who => Err(TradeRefusal::OnYourself),
+            Some(_) if reward.amount == 0 => Err(TradeRefusal::Empty),
+            Some(_) => Ok(()),
+        });
+        if let Err(why) = allowed {
+            return outcomes.push(Outcome::CannotTrade { why });
+        }
+        let poster = &mut self.characters[index];
+        if !poster.spend(reward.resource, reward.amount) {
+            return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::CannotPay });
+        }
+        poster.busy_until = now + BOARD_TIME;
+        self.zone_of_index_mut(index).board.post_bounty(Bounty { on, by: who, reward });
+        outcomes.push(Outcome::BountyPosted { on, reward });
+        events.push(Event::Character { who: on, outcome: Outcome::Hunted { reward } });
+    }
+
+    /// Pays whoever killed `victim` every bounty on their head, at
+    /// whichever boards hold them.
+    fn pay_bounties(&mut self, victim: CharacterId, by: Cause, events: &mut Vec<Event>) {
+        let Cause::Character(killer) = by else { return };
+        for zone in &mut self.zones {
+            let at = zone.anchor();
+            for reward in zone.board.pay_bounties(victim, killer) {
+                events.push(Event::Character { who: killer, outcome: Outcome::BountyEarned { on: victim, reward, at } });
+            }
+        }
     }
 
     /// Pays a contract's price and takes what it held. The price waits
@@ -1259,6 +1296,7 @@ impl Game {
             }
         }
         self.dead.push(who);
+        self.pay_bounties(who, by, events);
         events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
     }
@@ -2030,6 +2068,76 @@ mod tests {
         }
         assert_eq!(game.place_of(who).unwrap().name, "Shingle Beach");
         now
+    }
+
+    #[test]
+    fn a_price_on_someones_head_is_paid_to_whoever_kills_them() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let ore = game.character(BRYN).unwrap().carried(Resource::Ore);
+        let reward = Lot { resource: Resource::Ore, amount: 20 };
+        assert!(ore >= 30, "Bryn should have something to post with: {ore}");
+        let mut events = Vec::new();
+
+        // Not out here: bounties go up at the board. So Bryn walks home,
+        // and puts a price on the head of the one who is about to do the killing.
+        game.apply(&Command::bounty(BRYN, ASH, reward), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::NotAtBoard }));
+        game.apply(&Command::go(BRYN, "south"), Tick::new(now), &mut events);
+        let at_camp = now + TRAVEL_TIME.as_ticks();
+        game.apply(&Command::bounty(BRYN, BRYN, reward), Tick::new(at_camp), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::OnYourself }));
+        game.apply(&Command::bounty(BRYN, ASH, Lot { resource: Resource::Tideglass, amount: 1 }), Tick::new(at_camp), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::CannotPay }));
+        events.clear();
+        game.apply(&Command::bounty(BRYN, ASH, reward), Tick::new(at_camp), &mut events);
+        assert_eq!(events, [
+            Event::Character { who: BRYN, outcome: Outcome::BountyPosted { on: ASH, reward } },
+            Event::Character { who: ASH, outcome: Outcome::Hunted { reward } },
+        ]);
+        assert_eq!(game.character(BRYN).unwrap().carried(Resource::Ore), ore - 20, "the board holds it");
+        assert_eq!(game.board().bounties().len(), 1);
+        let board = crate::narrate::board(&game, BRYN);
+        assert!(board.contains("20 heavy ore for the death of Ash"), "{board}");
+
+        // A price changes nothing about where a blow may land: camp is still a haven.
+        game.apply(&Command::go(ASH, "south"), Tick::new(at_camp), &mut events);
+        assert_eq!(game.can_attack(BRYN, ASH), Err(Refusal::Haven));
+
+        // Back on the ledge Ash, the warden, kills marked Bryn. Nothing was on Bryn's head.
+        let mut then = at_camp + TRAVEL_TIME.as_ticks();
+        for who in [ASH, BRYN] {
+            game.apply(&Command::go(who, "north"), Tick::new(then), &mut events);
+        }
+        then += TRAVEL_TIME.as_ticks();
+        let (fight, then) = fight_to_the_end(&mut game, then);
+        assert!(game.character(BRYN).unwrap().is_spirit());
+        assert!(!fight.iter().any(|event| matches!(event, Event::Character { outcome: Outcome::BountyEarned { .. }, .. })));
+        assert_eq!(game.board().bounties().len(), 1, "the price on Ash stands");
+
+        // Had Bryn won, the board would have paid Bryn.
+        let mut board = game.board().clone();
+        assert_eq!(board.pay_bounties(ASH, BRYN), [reward]);
+        assert_eq!(board.owed_to(BRYN)[Resource::Ore.index()], 20);
+        assert!(board.bounties().is_empty());
+        let _ = then;
+    }
+
+    #[test]
+    fn killing_someone_with_a_price_on_their_head_pays_at_the_board_it_was_posted_on() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let reward = Lot { resource: Resource::Kelp, amount: 15 };
+        // Someone, some time ago, put a price on Bryn.
+        game.zones[0].board.post_bounty(Bounty { on: BRYN, by: ASH, reward });
+        let (fight, now) = fight_to_the_end(&mut game, now);
+        let earned = Event::Character { who: ASH, outcome: Outcome::BountyEarned { on: BRYN, reward, at: CAMP } };
+        assert!(fight.contains(&earned));
+        assert_eq!(game.audience(&earned), [ASH]);
+
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "south"), Tick::new(now), &mut events);
+        game.apply(&Command::collect(ASH), Tick::new(now + TRAVEL_TIME.as_ticks()), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::Collected { .. })));
+        assert_eq!(game.character(ASH).unwrap().carried(Resource::Kelp), 15);
     }
 
     #[test]

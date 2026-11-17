@@ -62,6 +62,14 @@ pub fn interpret(game: &Game, who: CharacterId, now: Tick, line: &str) -> Reques
             None => nobody_here(&name),
         },
         Input::Board => say(narrate::board(game, who)),
+        // A bounty can be on anyone in the world, here or not.
+        Input::Bounty(name, reward) => match anyone_called(game, who, &name) {
+            Some(on) => Request::Act(Action::Bounty { on, reward }),
+            None if game.character(who).is_some_and(|me| me.name().eq_ignore_ascii_case(&name)) => {
+                Request::Act(Action::Bounty { on: who, reward })
+            }
+            None => say(format!("There is nobody called \"{name}\" in the world.")),
+        },
         Input::Name(name) => match anyone_called(game, who, &name) {
             Some(target) => Request::Act(Action::Name(target)),
             None => say(format!("You know of nobody called \"{name}\".")),
