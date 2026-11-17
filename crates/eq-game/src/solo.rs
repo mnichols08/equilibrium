@@ -100,13 +100,13 @@ impl Solo {
     /// Has the player's character act, then lets the action's time pass.
     fn act(&mut self, action: Action) -> Vec<String> {
         let command = Command { who: Self::YOU, action };
-        let mut events = in_order(self.session.submit(self.now(), command));
+        let events = in_order(self.session.submit(self.now(), command));
         let moved = events.iter().any(|stamped| {
             matches!(stamped.value, Event::Character { who: Self::YOU, outcome: Outcome::Moved { .. } })
         });
-        events.extend(self.pass_time_until(self.free_at()));
-
         let mut lines = self.tell(&events);
+        lines.extend(self.pass_time_until(self.free_at()));
+        let mut lines = fold_repeats(lines.into_iter());
         if moved {
             lines.push(self.look());
         }
@@ -114,9 +114,9 @@ impl Solo {
     }
 
     fn wait(&mut self, time: Duration) -> Vec<String> {
-        let events = self.pass_time_until(self.now() + time);
+        let passed = self.pass_time_until(self.now() + time);
         let mut lines = alloc::vec![String::from("Time passes.")];
-        lines.extend(self.tell(&events));
+        lines.extend(fold_repeats(passed.into_iter()));
         lines
     }
 
@@ -128,8 +128,8 @@ impl Solo {
         if !lying_down(self) {
             return lines;
         }
-        let events = self.pass_time_until(self.now() + time);
-        lines.extend(self.tell(&events));
+        let passed = self.pass_time_until(self.now() + time);
+        lines.extend(fold_repeats(passed.into_iter()));
         // Whoever sleeps the long sleep through wakes as a spirit.
         let dormant = self.game().character(Self::YOU).is_some_and(crate::Character::is_dormant);
         if lying_down(self) || dormant {
@@ -144,15 +144,26 @@ impl Solo {
         busy_until.max(self.now())
     }
 
-    /// Runs the world to `target`, with the company acting as it goes.
-    fn pass_time_until(&mut self, target: Tick) -> Events<Game> {
-        in_order(self.bots.run(&mut self.session, target))
+    /// Runs the world to `target`, with the company acting as it goes,
+    /// and returns what the player would notice along the way.
+    ///
+    /// Time passes a tick at a time and each tick is told as it
+    /// happens. Told all at once at the end, someone who worked out of
+    /// sight and then walked up would seem to have been seen working.
+    fn pass_time_until(&mut self, target: Tick) -> Vec<String> {
+        let mut lines = Vec::new();
+        while self.now() < target {
+            let next = self.now() + Duration::ticks(1);
+            let events = in_order(self.bots.run(&mut self.session, next));
+            lines.extend(self.tell(&events));
+        }
+        lines
     }
 
-    /// What the player would notice among `events`.
+    /// What the player would notice among `events`, judged against the
+    /// world as it stands.
     fn tell(&self, events: &Events<Game>) -> Vec<String> {
-        let lines = events.iter().filter_map(|stamped| narrate::event(&stamped.value, self.game(), Self::YOU));
-        fold_repeats(lines)
+        events.iter().filter_map(|stamped| narrate::event(&stamped.value, self.game(), Self::YOU)).collect()
     }
 }
 
@@ -300,6 +311,15 @@ mod tests {
         assert!(!you.is_spirit());
         assert_eq!(you.life(), 2);
         assert!(solo.replays_identically());
+    }
+
+    #[test]
+    fn what_happens_out_of_sight_stays_untold_even_if_they_walk_up_afterwards() {
+        // Ash works the ledge and comes back to camp while the player waits there.
+        let mut solo = Solo::with_company(1, 1);
+        let lines = solo.handle("wait 30m").lines;
+        assert!(lines.iter().any(|line| line.starts_with("Ash arrives from ")), "{lines:?}");
+        assert!(!lines.iter().any(|line| line.contains("gathers")), "the player never left camp: {lines:?}");
     }
 
     #[test]

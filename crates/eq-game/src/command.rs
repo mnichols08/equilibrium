@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 
+use crate::board::{ContractId, Lot};
 use crate::character::CharacterId;
 use crate::creature::CreatureId;
 
@@ -36,6 +37,23 @@ pub enum Action {
     Seek,
     /// At the shrine, speak the name of a forgotten spirit to redeem it.
     Name(CharacterId),
+    /// Tend someone asleep in the same place, so they can sleep longer
+    /// before the long sleep takes them.
+    Tend(CharacterId),
+    /// At the board, pin up an offer: `give`, for `want`.
+    Post {
+        /// What is offered. It leaves the pack at once.
+        give: Lot,
+        /// What is asked for it.
+        want: Lot,
+    },
+    /// At the board, pay a contract's price and take what it offers.
+    Accept(ContractId),
+    /// At the board, take down a contract of your own and have back
+    /// what it held.
+    Withdraw(ContractId),
+    /// At the board, take what your accepted contracts earned.
+    Collect,
 }
 
 /// An action and the character asked to take it.
@@ -108,6 +126,31 @@ impl Command {
     /// `who` speaks `target`'s name at the shrine.
     pub const fn name(who: CharacterId, target: CharacterId) -> Self {
         Self { who, action: Action::Name(target) }
+    }
+
+    /// `who` tends `target` as they sleep.
+    pub const fn tend(who: CharacterId, target: CharacterId) -> Self {
+        Self { who, action: Action::Tend(target) }
+    }
+
+    /// `who` pins up an offer of `give` for `want`.
+    pub const fn post(who: CharacterId, give: Lot, want: Lot) -> Self {
+        Self { who, action: Action::Post { give, want } }
+    }
+
+    /// `who` accepts contract `id`.
+    pub const fn accept(who: CharacterId, id: ContractId) -> Self {
+        Self { who, action: Action::Accept(id) }
+    }
+
+    /// `who` takes down their own contract `id`.
+    pub const fn withdraw(who: CharacterId, id: ContractId) -> Self {
+        Self { who, action: Action::Withdraw(id) }
+    }
+
+    /// `who` collects what the board holds for them.
+    pub const fn collect(who: CharacterId) -> Self {
+        Self { who, action: Action::Collect }
     }
 
     /// `who` gathers from the deposit where they stand.

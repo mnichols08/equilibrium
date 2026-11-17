@@ -7,7 +7,9 @@ use alloc::string::String;
 
 use eq_clock::Duration;
 
+use crate::board::{ContractId, Lot};
 use crate::command::Action;
+use crate::types::Resource;
 
 /// How long `wait` lasts when no time is given.
 pub const DEFAULT_WAIT: Duration = Duration::minutes(1);
@@ -37,6 +39,10 @@ pub enum Input {
     Rob(String),
     /// Speak a forgotten spirit's name at the shrine.
     Name(String),
+    /// Tend a sleeper, by name.
+    Tend(String),
+    /// Read the Contract Board.
+    Board,
     /// Describe the current place.
     Look,
     /// Examine the deposit here and the zone's health.
@@ -91,6 +97,21 @@ pub fn parse(line: &str) -> Input {
             Some(name) => Input::Name(name.into()),
             None => Input::Unknown("Name whom? Try \"name bryn\".".into()),
         },
+        "tend" | "vigil" => match rest {
+            Some(name) => Input::Tend(name.into()),
+            None => Input::Unknown("Tend whom? Try \"tend bryn\".".into()),
+        },
+        "board" | "contracts" => Input::Board,
+        "post" | "offer" => match offer(rest, words) {
+            Some((give, want)) => Input::Do(Action::Post { give, want }),
+            None => Input::Unknown("Post what? Try \"post 10 ore for 30 kelp\".".into()),
+        },
+        "accept" | "withdraw" => match rest.and_then(|number| number.parse().ok()).map(ContractId::new) {
+            Some(id) if verb == "accept" => Input::Do(Action::Accept(id)),
+            Some(id) => Input::Do(Action::Withdraw(id)),
+            None => Input::Unknown(alloc::format!("Which contract? Try \"{verb} 3\". \"board\" lists them.")),
+        },
+        "collect" => Input::Do(Action::Collect),
         "rob" | "steal" => match rest {
             Some(name) => Input::Rob(name.into()),
             None => Input::Unknown("Rob whom? Try \"rob bryn\".".into()),
@@ -103,6 +124,28 @@ pub fn parse(line: &str) -> Input {
         "n" | "s" | "e" | "w" | "u" | "d" => go(verb),
         _ => Input::Unknown(alloc::format!("I don't know how to \"{verb}\". Type \"help\" for commands.")),
     }
+}
+
+/// Reads "10 ore for 30 kelp": the amount is `first`, the rest follows.
+fn offer<'a>(first: Option<&str>, mut rest: impl Iterator<Item = &'a str>) -> Option<(Lot, Lot)> {
+    let give = lot(first?, rest.next()?)?;
+    if rest.next()? != "for" {
+        return None;
+    }
+    let want = lot(rest.next()?, rest.next()?)?;
+    Some((give, want))
+}
+
+/// An amount and what it is an amount of.
+fn lot(amount: &str, resource: &str) -> Option<Lot> {
+    let resource = match resource {
+        "ore" => Resource::Ore,
+        "driftwood" | "wood" => Resource::Driftwood,
+        "kelp" => Resource::Kelp,
+        "tide-glass" | "tideglass" | "glass" => Resource::Tideglass,
+        _ => return None,
+    };
+    Some(Lot { resource, amount: amount.parse().ok()? })
 }
 
 fn go(label: &str) -> Input {
@@ -219,6 +262,25 @@ mod tests {
         assert_eq!(parse("seek"), Input::Do(Action::Seek));
         assert_eq!(parse("name Ash"), Input::Name("ash".into()));
         assert!(matches!(parse("name"), Input::Unknown(_)));
+    }
+
+    #[test]
+    fn the_board_has_its_own_words() {
+        let ore = Lot { resource: Resource::Ore, amount: 10 };
+        let kelp = Lot { resource: Resource::Kelp, amount: 30 };
+        assert_eq!(parse("post 10 ore for 30 kelp"), Input::Do(Action::Post { give: ore, want: kelp }));
+        let glass = Lot { resource: Resource::Tideglass, amount: 2 };
+        let wood = Lot { resource: Resource::Driftwood, amount: 50 };
+        assert_eq!(parse("offer 2 glass for 50 wood"), Input::Do(Action::Post { give: glass, want: wood }));
+        for nonsense in ["post", "post 10 ore", "post 10 ore to 30 kelp", "post ten ore for 30 kelp", "post 10 gold for 1 ore"] {
+            assert!(matches!(parse(nonsense), Input::Unknown(_)), "{nonsense}");
+        }
+        assert_eq!(parse("board"), Input::Board);
+        assert_eq!(parse("accept 3"), Input::Do(Action::Accept(ContractId::new(3))));
+        assert_eq!(parse("withdraw 0"), Input::Do(Action::Withdraw(ContractId::new(0))));
+        assert!(matches!(parse("accept three"), Input::Unknown(_)));
+        assert_eq!(parse("collect"), Input::Do(Action::Collect));
+        assert_eq!(parse("tend Bryn"), Input::Tend("bryn".into()));
     }
 
     #[test]

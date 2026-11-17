@@ -4,7 +4,7 @@
 
 use eq_clock::Tick;
 use eq_events::World;
-use eq_game::{narrate, CharacterId, Command, CreatureId, Event, Game};
+use eq_game::{narrate, CharacterId, Command, ContractId, CreatureId, Event, Game, Lot, Resource};
 use eq_rng::Rng;
 
 const NAMES: [&str; 12] = ["Ash", "Bryn", "Cole", "Dara", "Eli", "Fen", "Gil", "Hale", "Ivo", "Jun", "Kit", "Lark"];
@@ -37,7 +37,7 @@ fn audience_matches_who_the_narrator_speaks_to() {
 
         let who = CharacterId::new(script.below(NAMES.len() as u64));
         let someone = CharacterId::new(script.below(NAMES.len() as u64));
-        let command = match script.below(27) {
+        let command = match script.below(33) {
             0..=7 => Command::gather(who),
             8..=12 => Command::go(who, EXITS[script.below(EXITS.len() as u64) as usize]),
             13..=14 => Command::attack(who, someone),
@@ -50,6 +50,14 @@ fn audience_matches_who_the_narrator_speaks_to() {
             23 => Command::name(who, someone),
             // Creature ids only grow, so the low ones cover every lurker and guard so far.
             24..=25 => Command::fight(who, CreatureId::new(script.below(4))),
+            26 => Command::tend(who, someone),
+            27..=28 => {
+                let lot = |script: &mut Rng| Lot { resource: Resource::ALL[script.below(4) as usize], amount: 1 + script.below(20) };
+                Command::post(who, lot(&mut script), lot(&mut script))
+            }
+            29..=30 => Command::accept(who, ContractId::new(script.below(40))),
+            31 => Command::withdraw(who, ContractId::new(script.below(40))),
+            32 => Command::collect(who),
             _ => Command::rob(who, someone),
         };
         let mut events = Vec::new();

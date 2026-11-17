@@ -11,7 +11,8 @@ use eq_clock::{Duration, Tick};
 use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
-use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal};
+use crate::board::{Lot, TradeRefusal};
+use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal, TendRefusal};
 use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
@@ -34,6 +35,12 @@ Commands:
   gather               as a spirit, draw ectoplasm where the living would work
   seek                 as a forgotten spirit, search here for a memory
   name <name>          at camp, speak a forgotten spirit's name to redeem it
+  tend <name>          look after someone asleep here, so they last longer
+  board                at camp, read the Contract Board
+  post 10 ore for 30 kelp   at camp, pin up an offer (what you offer is held)
+  accept <number>      at camp, pay a contract's price and take what it holds
+  withdraw <number>    at camp, take your own contract down
+  collect              at camp, take what your contracts have earned
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
   stats                show your skills and attributes
   pack (i)             show what you carry
@@ -209,6 +216,25 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             "Your old body is gone. You walk out of the tide at {}, whole and rested, into life {life}. Little of what you knew has come with you.",
             place_name(game, game.anchor()),
         ),
+        Outcome::CannotTend { target, why } => cannot_tend(name_of(game, *target), *why),
+        Outcome::Tended { target, vigil } => format!(
+            "You see to {} as they sleep. They can lie {} longer than they could alone.",
+            name_of(game, *target),
+            span(*vigil),
+        ),
+        Outcome::CannotTrade { why } => cannot_trade(game, *why),
+        Outcome::Posted { id, give, want } => {
+            format!("You pin contract {} to the board: {} for {}. The board holds what you offered.", id.get(), lot(*give), lot(*want))
+        }
+        Outcome::Accepted { paid, got, .. } => format!("You pay {} and take {} from the board.", lot(*paid), lot(*got)),
+        Outcome::Filled { id, by, earned } => format!(
+            "{} has taken up your contract {}. {} is waiting for you at the board.",
+            name_of(game, *by),
+            id.get(),
+            capitalise(&lot(*earned)),
+        ),
+        Outcome::Withdrew { id, back } => format!("You take contract {} down and have your {} back.", id.get(), lot(*back)),
+        Outcome::Collected { spoils } => format!("You collect {} from the board.", pile(spoils)),
         Outcome::Took { spoils } => format!("You take {} from the ground.", pile(spoils)),
         Outcome::NothingToTake => "There is nothing lying here to take.".into(),
         Outcome::Asleep => "You are asleep. Wake first.".into(),
@@ -273,6 +299,11 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         Outcome::Mauled { by, .. } if actor.place() == here => {
             Some(format!("{} strikes {name}.", capitalise(&being_name(game, *by, viewer))))
         }
+        Outcome::Tended { target, .. } if actor.place() == here => {
+            Some(format!("{name} sees to {} as they sleep.", name_of(game, *target)))
+        }
+        Outcome::Posted { .. } if actor.place() == here => Some(format!("{name} pins a contract to the board.")),
+        Outcome::Accepted { .. } if actor.place() == here => Some(format!("{name} takes a contract from the board.")),
         Outcome::Returned if actor.place() == here => Some(format!("{name}'s body stirs, and {name} stands.")),
         Outcome::Reborn { .. } | Outcome::Redeemed { .. } | Outcome::Faded { .. } if actor.place() == here => {
             Some(format!("{name} walks out of the tide, reborn."))
@@ -548,6 +579,56 @@ fn cannot_rob(name: &str, why: RobRefusal) -> String {
         RobRefusal::Awake => format!("{name} is awake."),
         RobRefusal::Haven => "Sleepers are safe here.".into(),
         RobRefusal::NothingToSteal => format!("{name} carries nothing."),
+    }
+}
+
+/// The Contract Board as someone standing at it reads it.
+pub fn board(game: &Game, viewer: CharacterId) -> String {
+    let Some(character) = game.character(viewer) else { return NOBODY.into() };
+    if character.place() != game.anchor() {
+        return cannot_trade(game, TradeRefusal::NotAtBoard);
+    }
+    let mut lines: Vec<String> = game
+        .board()
+        .contracts()
+        .iter()
+        .map(|contract| {
+            let whose = if contract.by == viewer { "yours".into() } else { format!("from {}", name_of(game, contract.by)) };
+            format!("  {}: {} for {} ({whose})", contract.id.get(), lot(contract.give), lot(contract.want))
+        })
+        .collect();
+    lines.insert(0, if lines.is_empty() { "The Contract Board is bare.".into() } else { "The Contract Board:".into() });
+    let owed = game.board().owed_to(viewer);
+    if owed.iter().any(|&amount| amount > 0) {
+        lines.push(format!("Waiting for you to collect: {}.", pile(&owed)));
+    }
+    lines.join("\n")
+}
+
+/// An amount of something, as "30 kelp".
+fn lot(lot: Lot) -> String {
+    format!("{} {}", lot.amount, lot.resource.name())
+}
+
+fn cannot_tend(name: &str, why: TendRefusal) -> String {
+    match why {
+        TendRefusal::Yourself => "You cannot keep vigil over yourself.".into(),
+        TendRefusal::NotHere => format!("{name} is not here."),
+        TendRefusal::Awake => format!("{name} is awake and needs no tending."),
+        TendRefusal::Enough => format!("{name} has been tended as much as tending can help."),
+    }
+}
+
+fn cannot_trade(game: &Game, why: TradeRefusal) -> String {
+    match why {
+        TradeRefusal::NotAtBoard => format!("The Contract Board is at {}.", place_name(game, game.anchor())),
+        TradeRefusal::NoSuchContract => "There is no contract with that number on the board.".into(),
+        TradeRefusal::CannotPay => "You do not carry enough for that.".into(),
+        TradeRefusal::YourOwn => "That contract is your own. Withdraw it if you want it back.".into(),
+        TradeRefusal::NotYours => "That contract is not yours to take down.".into(),
+        TradeRefusal::TooMany => "You have as many contracts up as one person may.".into(),
+        TradeRefusal::Empty => "A contract has to offer something and ask something.".into(),
+        TradeRefusal::NothingOwed => "The board holds nothing for you.".into(),
     }
 }
 

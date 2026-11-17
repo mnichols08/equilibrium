@@ -29,6 +29,7 @@
 
 extern crate alloc;
 
+pub mod board;
 pub mod bots;
 mod character;
 pub mod combat;
@@ -50,6 +51,7 @@ mod types;
 mod wire;
 mod zone;
 
+pub use board::{Board, Contract, ContractId, Lot, TradeRefusal};
 pub use character::{Character, CharacterId, Death, Forgotten};
 pub use command::{Action, Command};
 pub use creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};

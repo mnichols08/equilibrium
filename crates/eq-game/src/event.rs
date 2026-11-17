@@ -7,7 +7,8 @@ use eq_nodes::Quality;
 use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
-use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal};
+use crate::board::{ContractId, Lot, TradeRefusal};
+use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal, TendRefusal};
 use crate::creature::Being;
 use crate::spirit::SpiritTier;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
@@ -200,6 +201,64 @@ pub enum Outcome {
     Faded {
         /// Which life this is, counting the first as 1.
         life: u32,
+    },
+    /// They could not tend a sleeper.
+    CannotTend {
+        /// Who they meant to tend.
+        target: CharacterId,
+        /// Why not.
+        why: TendRefusal,
+    },
+    /// They tended a sleeper.
+    Tended {
+        /// Whom.
+        target: CharacterId,
+        /// How much extra sleep the sleeper now has in hand.
+        vigil: Duration,
+    },
+    /// Something they tried at the Contract Board was not allowed.
+    CannotTrade {
+        /// Why not.
+        why: TradeRefusal,
+    },
+    /// They pinned a contract to the board.
+    Posted {
+        /// Its number.
+        id: ContractId,
+        /// What it offers.
+        give: Lot,
+        /// What it asks.
+        want: Lot,
+    },
+    /// They accepted a contract: paid its price and took what it held.
+    Accepted {
+        /// Its number.
+        id: ContractId,
+        /// What they paid.
+        paid: Lot,
+        /// What they got.
+        got: Lot,
+    },
+    /// A contract of theirs was accepted. The price waits at the board.
+    Filled {
+        /// Its number.
+        id: ContractId,
+        /// Who accepted it.
+        by: CharacterId,
+        /// What is waiting for them.
+        earned: Lot,
+    },
+    /// They took down a contract of their own and had back what it held.
+    Withdrew {
+        /// Its number.
+        id: ContractId,
+        /// What came back.
+        back: Lot,
+    },
+    /// They collected what the board held for them.
+    Collected {
+        /// How much of each resource, in pack order.
+        spoils: [u64; Resource::ALL.len()],
     },
     /// They picked up what lay on the ground.
     Took {
