@@ -112,6 +112,7 @@ pub fn parse(line: &str) -> Input {
         "ally" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::Ally }),
         "war" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::War }),
         "truce" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::Truce }),
+        "raise" | "build" => Input::Do(Action::Raise),
         "rite" | "mend" => Input::Do(Action::Rite),
         "tend" | "vigil" => match rest {
             Some(name) => Input::Tend(name.into()),

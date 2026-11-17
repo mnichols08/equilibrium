@@ -129,6 +129,8 @@ pub struct PlaceView {
     pub y: i32,
     /// `"haven"`, `"wilderness"` or `"contested"`.
     pub safety: &'static str,
+    /// Whether this land's house stands here.
+    pub hall: bool,
     /// Whether the viewer is here.
     pub here: bool,
     /// What can be gathered here, if anything.
@@ -396,6 +398,7 @@ fn places(game: &Game, viewer: CharacterId, here: PlaceId, now: Tick) -> Vec<Pla
             here: id == here,
             deposit: place.deposit.as_ref().map(deposit_view),
             people: people(game, viewer, id, now),
+            hall: game.zone_at(id).hall() == Some(id),
             bodies: game.bodies_at(id).map(|(_, body)| body.name().to_owned()).collect(),
             spoils: game.relics_at(id).next().is_some(),
             creatures: game.creatures_at(id).map(|creature| foe_view(game, creature)).collect(),
