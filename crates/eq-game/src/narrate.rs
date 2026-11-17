@@ -12,7 +12,7 @@ use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
 use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, TIDE};
-use crate::game::{pressure_percent, CharacterId, Event, Game, Outcome};
+use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
 use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
 
 /// The command list.
@@ -117,9 +117,11 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         ));
     }
     let others: Vec<String> = game
-        .characters()
-        .filter(|&(id, other)| id != viewer && other.place() == character.place())
-        .map(|(_, other)| match other.standing() {
+        .occupants(character.place())
+        .iter()
+        .filter(|&&id| id != viewer)
+        .filter_map(|&id| game.character(id))
+        .map(|other| match other.standing() {
             Standing::Clean => other.name().into(),
             Standing::Marked => format!("{} (marked)", other.name()),
         })
@@ -263,7 +265,7 @@ fn capitalise(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::Command;
+    use crate::Command;
     use eq_events::World;
 
     const ASH: CharacterId = CharacterId::new(0);

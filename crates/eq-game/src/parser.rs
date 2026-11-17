@@ -7,7 +7,7 @@ use alloc::string::String;
 
 use eq_clock::Duration;
 
-use crate::game::Action;
+use crate::command::Action;
 
 /// How long `wait` lasts when no time is given.
 pub const DEFAULT_WAIT: Duration = Duration::minutes(1);
