@@ -120,7 +120,7 @@ fn audience_matches_the_narrator_across_several_lands() {
         game.apply(&Command::join(CharacterId::new(index as u64), name), Tick::new(0), &mut events);
         check(&game, &events);
     }
-    assert_eq!(game.zones().len(), 5);
+    assert_eq!(game.zones().len(), 6);
     for tick in 1..=4_000 {
         let mut events = Vec::new();
         game.tick(Tick::new(tick), &mut events);

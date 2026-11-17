@@ -123,6 +123,8 @@ pub enum Outcome {
         /// The level at which they live again.
         needed: u32,
     },
+    /// Their soul came to the River of Souls, where the afterlife begins.
+    CameToRiver,
     /// As a spirit, they struck a shade.
     Sparred {
         /// The damage done.
