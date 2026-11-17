@@ -63,6 +63,9 @@ pub enum Input {
 
 /// Reads one line of input.
 pub fn parse(line: &str) -> Input {
+    // Names a player gives keep their own capitals; everything else is
+    // read without regard to them.
+    let given = line.trim().split_once(char::is_whitespace).map_or("", |(_, rest)| rest.trim());
     let line = line.trim().to_lowercase();
     let mut words = line.split_whitespace();
     let Some(verb) = words.next() else { return Input::Empty };
@@ -97,6 +100,12 @@ pub fn parse(line: &str) -> Input {
             Some(name) => Input::Name(name.into()),
             None => Input::Unknown("Name whom? Try \"name bryn\".".into()),
         },
+        "call" | "house" | "invite" if given.is_empty() => {
+            Input::Unknown(alloc::format!("{verb} what? Give a name: \"{verb} Saltmarch\"."))
+        }
+        "call" => Input::Do(Action::NameLand(given.into())),
+        "house" => Input::Do(Action::NameHouse(given.into())),
+        "invite" => Input::Do(Action::Invite(given.into())),
         "rite" | "mend" => Input::Do(Action::Rite),
         "tend" | "vigil" => match rest {
             Some(name) => Input::Tend(name.into()),
@@ -263,6 +272,15 @@ mod tests {
         assert_eq!(parse("seek"), Input::Do(Action::Seek));
         assert_eq!(parse("name Ash"), Input::Name("ash".into()));
         assert!(matches!(parse("name"), Input::Unknown(_)));
+    }
+
+    #[test]
+    fn a_founders_names_keep_their_capitals() {
+        assert_eq!(parse("CALL  The Salt March "), Input::Do(Action::NameLand("The Salt March".into())));
+        assert_eq!(parse("house McAllister"), Input::Do(Action::NameHouse("McAllister".into())));
+        assert_eq!(parse("invite Ada"), Input::Do(Action::Invite("Ada".into())));
+        assert!(matches!(parse("call"), Input::Unknown(_)));
+        assert!(matches!(parse("invite   "), Input::Unknown(_)));
     }
 
     #[test]

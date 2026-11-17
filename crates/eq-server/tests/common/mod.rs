@@ -22,7 +22,7 @@ impl Scratch {
 
     /// A realm saved here.
     pub fn realm(&self, seed: u64, bots: usize) -> Realm {
-        Realm::open(&Config { seed, bots, data: Some(self.0.clone()) }).unwrap()
+        Realm::open(&Config { seed, bots, founders: 0, data: Some(self.0.clone()) }).unwrap()
     }
 }
 
@@ -34,7 +34,7 @@ impl Drop for Scratch {
 
 /// A realm kept in memory only.
 pub fn unsaved(seed: u64, bots: usize) -> Realm {
-    Realm::open(&Config { seed, bots, data: None }).unwrap()
+    Realm::open(&Config { seed, bots, founders: 0, data: None }).unwrap()
 }
 
 /// Everything `to` was told, as one string.

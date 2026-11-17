@@ -57,7 +57,7 @@ pub use character::{Character, CharacterId, Death, Forgotten};
 pub use command::{Action, Command};
 pub use creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 pub use event::{Event, Outcome};
-pub use game::{Epitaph, Game};
+pub use game::Game;
 pub use haul::{pressure_percent, Haul};
 pub use solo::{Reply, Solo};
 pub use types::{Attribute, Cause, Deposit, Health, Passing, Place, Resource, Safety, SkillKind, Standing};

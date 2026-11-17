@@ -43,6 +43,7 @@ Your character does not leave when you do. Close the connection and they stay on
 
 The world is saved in `realm/` as it goes (`--data DIR` to put it elsewhere): every command, in order. Stop the server with Ctrl-C and the next start replays them and carries on from the same tick. `--seed` and `--bots` only matter the first time. The server's bots are mostly careful, with wardens among them and one greedy roamer in every eight for them to deal with.
 
+- `--founders N` (6 unless you say otherwise): the first N players to arrive uninvited each get a land of their own, made from the world's seed and joined to nothing. A founder names it (`call The Salt March`), names their house (`house Thorne`), and can `invite <name>`: whoever joins under that name arrives in the founder's land. Once every land is founded, the uninvited arrive wherever there are fewest people. `--founders 0` puts everyone on the Rocky Shoreline with the bots.
 - `--addr HOST:PORT` to listen somewhere other than `127.0.0.1:4000`.
 - `--tick-ms N` to run world time faster or slower than real time.
 

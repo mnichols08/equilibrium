@@ -1,7 +1,7 @@
 //! Runs an Equilibrium server.
 //!
 //! ```text
-//! equilibrium-server [--addr HOST:PORT] [--data DIR] [--seed N] [--bots N] [--tick-ms N]
+//! equilibrium-server [--addr HOST:PORT] [--data DIR] [--seed N] [--bots N] [--founders N] [--tick-ms N]
 //! ```
 //!
 //! The world is saved in `--data` as it goes and picked up again from
@@ -16,7 +16,7 @@ use std::time::Duration;
 use eq_server::net::Server;
 use eq_server::{Config, Realm};
 
-const USAGE: &str = "usage: equilibrium-server [--addr HOST:PORT] [--data DIR] [--seed N] [--bots N] [--tick-ms N]";
+const USAGE: &str = "usage: equilibrium-server [--addr HOST:PORT] [--data DIR] [--seed N] [--bots N] [--founders N] [--tick-ms N]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
@@ -34,7 +34,7 @@ fn value<T: std::str::FromStr>(flag: &str, given: Option<String>) -> Result<T, S
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
         address: "127.0.0.1:4000".into(),
-        config: Config { seed: 1, bots: 0, data: Some(PathBuf::from("realm")) },
+        config: Config { seed: 1, bots: 0, founders: 6, data: Some(PathBuf::from("realm")) },
         tick_ms: 1_000,
     };
     let mut args = args.skip(1);
@@ -44,6 +44,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--data" => options.config.data = Some(value(&arg, args.next())?),
             "--seed" => options.config.seed = value(&arg, args.next())?,
             "--bots" => options.config.bots = value(&arg, args.next())?,
+            "--founders" => options.config.founders = value(&arg, args.next())?,
             "--tick-ms" => options.tick_ms = value(&arg, args.next())?,
             other => return Err(format!("unknown option \"{other}\"")),
         }
@@ -100,15 +101,15 @@ mod tests {
     fn defaults_are_a_local_saved_realm_in_real_time() {
         let options = parse_args(args("equilibrium-server")).unwrap();
         assert_eq!(options.address, "127.0.0.1:4000");
-        assert_eq!(options.config, Config { seed: 1, bots: 0, data: Some(PathBuf::from("realm")) });
+        assert_eq!(options.config, Config { seed: 1, bots: 0, founders: 6, data: Some(PathBuf::from("realm")) });
         assert_eq!(options.tick_ms, 1_000);
     }
 
     #[test]
     fn every_option_is_read() {
-        let options = parse_args(args("s --addr 0.0.0.0:9 --data /tmp/w --seed 7 --bots 20 --tick-ms 50")).unwrap();
+        let options = parse_args(args("s --addr 0.0.0.0:9 --data /tmp/w --seed 7 --bots 20 --founders 2 --tick-ms 50")).unwrap();
         assert_eq!(options.address, "0.0.0.0:9");
-        assert_eq!(options.config, Config { seed: 7, bots: 20, data: Some(PathBuf::from("/tmp/w")) });
+        assert_eq!(options.config, Config { seed: 7, bots: 20, founders: 2, data: Some(PathBuf::from("/tmp/w")) });
         assert_eq!(options.tick_ms, 50);
     }
 

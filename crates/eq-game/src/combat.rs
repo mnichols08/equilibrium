@@ -41,6 +41,21 @@ pub enum ReturnRefusal {
     Risen,
 }
 
+/// Why something only a founder can do was not done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FoundRefusal {
+    /// They did not found the territory they belong to.
+    NotFounder,
+    /// It has a name already. Names are for good.
+    AlreadyNamed,
+    /// The name will not do.
+    Name(eq_naming::Problem),
+    /// Someone of that name is already in the world.
+    AlreadyHere,
+    /// They have as many invitations waiting as a founder may.
+    TooManyInvites,
+}
+
 /// Why a Restoration Rite could not be held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RiteRefusal {

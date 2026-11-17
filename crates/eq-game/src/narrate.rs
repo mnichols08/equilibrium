@@ -12,7 +12,7 @@ use eq_nodes::Quality;
 use eq_world_graph::{Passage, PlaceId};
 
 use crate::board::{Lot, TradeRefusal};
-use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
+use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
@@ -35,6 +35,10 @@ Commands:
   gather               as a spirit, draw ectoplasm where the living would work
   seek                 as a forgotten spirit, search here for a memory
   name <name>          at camp, speak a forgotten spirit's name to redeem it
+  call <name>          as a founder, name your land (for good)
+  house <name>         as a founder, name your house (for good)
+  invite <name>        as a founder, invite someone: whoever joins under
+                       that name arrives in your land
   rite                 begin a Restoration Rite over the deposit here, or
                        answer one someone else has begun
   tend <name>          look after someone asleep here, so they last longer
@@ -95,7 +99,10 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
             Some(deposit_changed(*resource, *from, *to))
         }
         Event::DepositChanged { .. } => None,
-        Event::VitalityChanged { from, to } => Some(vitality_changed(*from, *to).into()),
+        Event::VitalityChanged { anchor, from, to } if game.zone_at(*anchor).contains(here) => {
+            Some(vitality_changed(*from, *to).into())
+        }
+        Event::VitalityChanged { .. } => None,
         Event::PassageChanged { place, label, open } if *place == here => Some(if *open {
             format!("The tide draws back. The way {label} is clear.")
         } else {
@@ -118,7 +125,12 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
 /// What the viewer is told about their own action.
 fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
     match outcome {
-        Outcome::Joined => format!("You walk out of the tide at {}, new to the shoreline.", place_name(game, game.anchor())),
+        Outcome::Joined => format!("You walk out of the tide at {}, new to the shoreline.", place_name(game, home_of(game, viewer))),
+        Outcome::Founded => "Nobody has stood here before you. This land is yours to name (call <name>), and your house with it (house <name>). Those you invite (invite <name>) will arrive here.".into(),
+        Outcome::CannotFound { why } => cannot_found(*why),
+        Outcome::LandNamed { name } => format!("You name this land {name}. It will carry that name for good."),
+        Outcome::HouseNamed { name } => format!("You name your house {name}. Those you invite will carry it."),
+        Outcome::Invited { name } => format!("You send word for {name}. When they come into the world, it will be here."),
         Outcome::Moved { to, .. } => format!("You make your way to {}.", place_name(game, *to)),
         Outcome::NoSuchExit { label } => format!("You can't go \"{label}\" from here."),
         Outcome::ExitClosed { label } => format!("The way {label} is under water. Wait for the tide."),
@@ -191,7 +203,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::NothingToRemember => "There is nothing of you to find here. Try another place where the shoreline can be worked.".into(),
         Outcome::NotForgotten => "Only a forgotten spirit has anything to look for.".into(),
         Outcome::CannotName { why: NameRefusal::NotAtShrine, .. } => {
-            format!("Names are only heard at {}.", place_name(game, game.anchor()))
+            format!("Names are only heard at {}.", place_name(game, anchor_near(game, viewer)))
         }
         Outcome::CannotName { target, why: NameRefusal::NotForgotten } => {
             format!("{} is not forgotten.", name_of(game, *target))
@@ -202,15 +214,15 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Redeemed { by: Some(by), life } => format!(
             "{} has spoken your name at {}. You walk out of the tide, whole and rested, into life {life}.",
             name_of(game, *by),
-            place_name(game, game.anchor()),
+            place_name(game, home_of(game, viewer)),
         ),
         Outcome::Redeemed { by: None, life } => format!(
             "You remember who you were. You walk out of the tide at {}, whole and rested, into life {life}.",
-            place_name(game, game.anchor()),
+            place_name(game, home_of(game, viewer)),
         ),
         Outcome::Faded { life } => format!(
             "Your time has run out. Who you were is gone, and your name is cut in the stones at {}. You walk out of the tide into life {life} with almost nothing.",
-            place_name(game, game.anchor()),
+            place_name(game, home_of(game, viewer)),
         ),
         Outcome::CannotReturn { why: ReturnRefusal::NotAtBody } => {
             let body = game.character(viewer).and_then(|you| you.death()).map(|death| death.body);
@@ -222,7 +234,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Returned => "You are back in your body, weak but alive.".into(),
         Outcome::Reborn { life } => format!(
             "Your old body is gone. You walk out of the tide at {}, whole and rested, into life {life}. Little of what you knew has come with you.",
-            place_name(game, game.anchor()),
+            place_name(game, home_of(game, viewer)),
         ),
         Outcome::Warded { resource } => format!(
             "A ward lies on the {} here. It will not yield until it is pristine and at least half full again.",
@@ -247,7 +259,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             name_of(game, *target),
             span(*vigil),
         ),
-        Outcome::CannotTrade { why } => cannot_trade(game, *why),
+        Outcome::CannotTrade { why } => cannot_trade(game, viewer, *why),
         Outcome::Posted { id, give, want } => {
             format!("You pin contract {} to the board: {} for {}. The board holds what you offered.", id.get(), lot(*give), lot(*want))
         }
@@ -324,6 +336,8 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         Outcome::Mauled { by, .. } if actor.place() == here => {
             Some(format!("{} strikes {name}.", capitalise(&being_name(game, *by, viewer))))
         }
+        Outcome::LandNamed { name: land } if actor.place() == here => Some(format!("{name} names this land {land}.")),
+        Outcome::HouseNamed { name: house } if actor.place() == here => Some(format!("{name} names their house {house}.")),
         Outcome::RiteBegun if actor.place() == here => {
             Some(format!("{name} begins a rite over the ground here. It needs a second voice (rite)."))
         }
@@ -375,8 +389,17 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
             span(REDEMPTION_CLOCK.saturating_sub(forgotten.played)),
         ));
     }
-    if character.place() == game.anchor() && !game.shrine().is_empty() {
-        let names: Vec<&str> = game.shrine().iter().map(|epitaph| epitaph.name.as_str()).collect();
+    let zone = game.zone_at(character.place());
+    if character.place() == zone.anchor() {
+        if let Some(founder) = zone.founder() {
+            let land = zone.name().map_or_else(|| "A land without a name yet".into(), String::from);
+            let house = zone.house().map_or_else(String::new, |house| format!(" of House {house}"));
+            let whose = if founder == viewer { "you".into() } else { format!("{}{house}", name_of(game, founder)) };
+            lines.push(format!("{land}, founded by {whose}."));
+        }
+    }
+    if character.place() == zone.anchor() && !zone.shrine().is_empty() {
+        let names: Vec<&str> = zone.shrine().iter().map(|epitaph| epitaph.name.as_str()).collect();
         lines.push(format!("Names cut in the stones: {}.", names.join(", ")));
     }
     if let Some(deposit) = &here.deposit {
@@ -448,7 +471,8 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
 /// zone's health.
 pub fn inspect(game: &Game, viewer: CharacterId) -> String {
     let Some(here) = game.place_of(viewer) else { return NOBODY.into() };
-    let zone = format!("Shoreline vitality: {} of 100 ({}).", game.vitality(), game.health().name());
+    let land = game.zone_at(game.character(viewer).map_or(game.anchor(), |you| you.place()));
+    let zone = format!("{} vitality: {} of 100 ({}).", land.name().unwrap_or("Shoreline"), land.vitality(), land.health().name());
     match &here.deposit {
         Some(deposit) => format!(
             "{}: {} of {} left, {}.\nPressure {}% (wear {}%, bareness {}%).\n{zone}",
@@ -529,6 +553,16 @@ fn being_name(game: &Game, being: Being, viewer: CharacterId) -> String {
     }
 }
 
+/// The anchor of the territory `viewer` belongs to, where their lives begin.
+fn home_of(game: &Game, viewer: CharacterId) -> PlaceId {
+    game.character(viewer).map_or(game.anchor(), |you| you.home())
+}
+
+/// The anchor of the territory `viewer` is standing in.
+fn anchor_near(game: &Game, viewer: CharacterId) -> PlaceId {
+    game.zone_of(viewer).map_or(game.anchor(), |zone| zone.anchor())
+}
+
 fn name_of(game: &Game, who: CharacterId) -> &str {
     game.character(who).map_or("someone", |character| character.name())
 }
@@ -550,7 +584,7 @@ pub fn condition(character: &crate::Character, now: Tick) -> Option<&'static str
 /// stands to the body.
 fn died(game: &Game, killer: &str, place: PlaceId, passing: Passing) -> String {
     let killed = format!("{killer} has killed you. What you carried lies beside your body.");
-    let anchor = place_name(game, game.anchor());
+    let anchor = place_name(game, game.zone_at(place).anchor());
     let body = place_name(game, place);
     let limit = span(CORPSE_TIME);
     let next = match passing {
@@ -623,10 +657,11 @@ fn cannot_rob(name: &str, why: RobRefusal) -> String {
 /// The Contract Board as someone standing at it reads it.
 pub fn board(game: &Game, viewer: CharacterId) -> String {
     let Some(character) = game.character(viewer) else { return NOBODY.into() };
-    if character.place() != game.anchor() {
-        return cannot_trade(game, TradeRefusal::NotAtBoard);
+    let zone = game.zone_at(character.place());
+    if character.place() != zone.anchor() {
+        return cannot_trade(game, viewer, TradeRefusal::NotAtBoard);
     }
-    let mut lines: Vec<String> = game
+    let mut lines: Vec<String> = zone
         .board()
         .contracts()
         .iter()
@@ -636,7 +671,7 @@ pub fn board(game: &Game, viewer: CharacterId) -> String {
         })
         .collect();
     lines.insert(0, if lines.is_empty() { "The Contract Board is bare.".into() } else { "The Contract Board:".into() });
-    let owed = game.board().owed_to(viewer);
+    let owed = zone.board().owed_to(viewer);
     if owed.iter().any(|&amount| amount > 0) {
         lines.push(format!("Waiting for you to collect: {}.", pile(&owed)));
     }
@@ -648,6 +683,23 @@ fn lot(lot: Lot) -> String {
     format!("{} {}", lot.amount, lot.resource.name())
 }
 
+fn cannot_found(why: FoundRefusal) -> String {
+    use eq_naming::Problem;
+    match why {
+        FoundRefusal::NotFounder => "Only the founder of a land can do that, and you did not found yours.".into(),
+        FoundRefusal::AlreadyNamed => "It has its name already. Names are for good.".into(),
+        FoundRefusal::AlreadyHere => "Someone of that name is already in the world.".into(),
+        FoundRefusal::TooManyInvites => "You have as many invitations waiting as a founder may.".into(),
+        FoundRefusal::Name(Problem::TooShort) => "That name is too short.".into(),
+        FoundRefusal::Name(Problem::TooLong) => "That name is too long.".into(),
+        FoundRefusal::Name(Problem::BadCharacter(bad)) => {
+            format!("A name is made of letters, apostrophes and hyphens. \"{bad}\" is none of those.")
+        }
+        FoundRefusal::Name(Problem::Blocked) => "This world will not carry that name.".into(),
+        FoundRefusal::Name(Problem::Taken) => "That name is already taken.".into(),
+    }
+}
+
 fn cannot_tend(name: &str, why: TendRefusal) -> String {
     match why {
         TendRefusal::Yourself => "You cannot keep vigil over yourself.".into(),
@@ -657,9 +709,9 @@ fn cannot_tend(name: &str, why: TendRefusal) -> String {
     }
 }
 
-fn cannot_trade(game: &Game, why: TradeRefusal) -> String {
+fn cannot_trade(game: &Game, viewer: CharacterId, why: TradeRefusal) -> String {
     match why {
-        TradeRefusal::NotAtBoard => format!("The Contract Board is at {}.", place_name(game, game.anchor())),
+        TradeRefusal::NotAtBoard => format!("The Contract Board is at {}.", place_name(game, anchor_near(game, viewer))),
         TradeRefusal::NoSuchContract => "There is no contract with that number on the board.".into(),
         TradeRefusal::CannotPay => "You do not carry enough for that.".into(),
         TradeRefusal::YourOwn => "That contract is your own. Withdraw it if you want it back.".into(),
@@ -804,7 +856,7 @@ mod tests {
         let game = Game::new(1, &["Ash"]);
         let far = Event::PassageChanged { place: PlaceId::new(4), label: "out".into(), open: false };
         assert_eq!(event(&far, &game, ASH), None);
-        let zone = Event::VitalityChanged { from: Health::Peak, to: Health::Balanced };
+        let zone = Event::VitalityChanged { anchor: game.anchor(), from: Health::Peak, to: Health::Balanced };
         assert!(event(&zone, &game, ASH).is_some());
     }
 

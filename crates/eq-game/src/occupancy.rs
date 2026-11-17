@@ -21,6 +21,13 @@ impl Occupancy {
         Self { by_place: alloc::vec![Vec::new(); places] }
     }
 
+    /// Makes room for a map that has grown to `places` places.
+    pub(crate) fn grow(&mut self, places: usize) {
+        if places > self.by_place.len() {
+            self.by_place.resize(places, Vec::new());
+        }
+    }
+
     /// Everyone in `place`, in id order. Empty for an unknown place.
     pub(crate) fn at(&self, place: PlaceId) -> &[CharacterId] {
         slot(place).and_then(|index| self.by_place.get(index)).map_or(&[], Vec::as_slice)

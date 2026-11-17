@@ -37,6 +37,13 @@ pub enum Action {
     Seek,
     /// At the shrine, speak the name of a forgotten spirit to redeem it.
     Name(CharacterId),
+    /// As a founder, give your land its name. It keeps it for good.
+    NameLand(String),
+    /// As a founder, give your house its name. It keeps it for good.
+    NameHouse(String),
+    /// As a founder, invite someone by name. Whoever joins the world
+    /// under that name arrives in your land, as one of your house.
+    Invite(String),
     /// Take part in a Restoration Rite over the deposit here. One
     /// person begins it; a second, answering in time, completes it.
     Rite,
@@ -129,6 +136,21 @@ impl Command {
     /// `who` speaks `target`'s name at the shrine.
     pub const fn name(who: CharacterId, target: CharacterId) -> Self {
         Self { who, action: Action::Name(target) }
+    }
+
+    /// `who`, a founder, names their land.
+    pub fn name_land(who: CharacterId, name: &str) -> Self {
+        Self { who, action: Action::NameLand(name.into()) }
+    }
+
+    /// `who`, a founder, names their house.
+    pub fn name_house(who: CharacterId, name: &str) -> Self {
+        Self { who, action: Action::NameHouse(name.into()) }
+    }
+
+    /// `who`, a founder, invites whoever will join as `name`.
+    pub fn invite(who: CharacterId, name: &str) -> Self {
+        Self { who, action: Action::Invite(name.into()) }
     }
 
     /// `who` takes part in a rite where they stand.

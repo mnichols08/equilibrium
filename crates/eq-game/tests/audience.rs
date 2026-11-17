@@ -108,6 +108,49 @@ fn audience_matches_the_narrator_through_a_long_sleep_and_a_redemption() {
 }
 
 #[test]
+fn audience_matches_the_narrator_across_several_lands() {
+    // Three founders in lands of their own, three more placed among
+    // them, all wandering, working, naming and inviting at random.
+    let mut game = Game::new_world(21, 3, &[]);
+    let people = 6;
+    let mut script = Rng::from_seed(8);
+    let mut checked = 0;
+    for (index, name) in NAMES.iter().take(people).enumerate() {
+        let mut events = Vec::new();
+        game.apply(&Command::join(CharacterId::new(index as u64), name), Tick::new(0), &mut events);
+        check(&game, &events);
+    }
+    assert_eq!(game.zones().len(), 4);
+    for tick in 1..=4_000 {
+        let mut events = Vec::new();
+        game.tick(Tick::new(tick), &mut events);
+        check(&game, &events);
+        checked += events.len();
+
+        let who = CharacterId::new(script.below(people as u64));
+        let someone = CharacterId::new(script.below(people as u64));
+        let word = ["Saltmarch", "Thorne", "Gull Reach", "x", "Ash", "Zed"][script.below(6) as usize];
+        let command = match script.below(20) {
+            0..=6 => Command::gather(who),
+            7..=11 => Command::go(who, ["north", "south", "east", "west"][script.below(4) as usize]),
+            12 => Command::attack(who, someone),
+            13 => Command::rite(who),
+            14 => Command::name_land(who, word),
+            15 => Command::name_house(who, word),
+            16 => Command::invite(who, word),
+            17 => Command::rest(who),
+            _ => Command::wake(who),
+        };
+        let mut events = Vec::new();
+        game.apply(&command, Tick::new(tick), &mut events);
+        check(&game, &events);
+        checked += events.len();
+    }
+    assert!(checked > 1_000, "only {checked} events were checked");
+    assert!(game.zones().iter().any(|zone| zone.name().is_some()), "somebody should have named a land");
+}
+
+#[test]
 fn a_private_outcome_reaches_only_the_one_it_happened_to() {
     let mut game = Game::new(1, &["Ash", "Bryn"]);
     let ash = CharacterId::new(0);
@@ -119,6 +162,6 @@ fn a_private_outcome_reaches_only_the_one_it_happened_to() {
 #[test]
 fn the_zone_changing_reaches_everyone() {
     let game = Game::new(1, &NAMES);
-    let event = Event::VitalityChanged { from: eq_game::Health::Peak, to: eq_game::Health::Balanced };
+    let event = Event::VitalityChanged { anchor: game.anchor(), from: eq_game::Health::Peak, to: eq_game::Health::Balanced };
     assert_eq!(game.audience(&event).len(), NAMES.len());
 }

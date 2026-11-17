@@ -118,6 +118,20 @@ impl<P> Graph<P> {
         id
     }
 
+    /// Adds every place and exit of `other` to this graph, keeping its
+    /// exits pointing at its own places. Returns the id its first place
+    /// now has: place `n` of `other` is place `first + n` here.
+    pub fn absorb(&mut self, other: Self) -> PlaceId {
+        let first = self.entries.len() as u64;
+        for mut entry in other.entries {
+            for exit in &mut entry.exits {
+                exit.to = PlaceId::new(exit.to.get() + first);
+            }
+            self.entries.push(entry);
+        }
+        PlaceId::new(first)
+    }
+
     /// Adds a one-way exit from `from` to `to`.
     pub fn connect(
         &mut self,
@@ -246,6 +260,28 @@ fn index_of(id: PlaceId) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absorbing_a_graph_keeps_its_ways_among_its_own_places() {
+        let mut world: Graph<&str> = Graph::new();
+        let camp = world.add_place("camp");
+        let ledge = world.add_place("ledge");
+        world.connect_both(camp, "north", ledge, "south", Passage::Open).unwrap();
+
+        let mut island: Graph<&str> = Graph::new();
+        let cove = island.add_place("cove");
+        let cave = island.add_place("cave");
+        island.connect_both(cove, "east", cave, "west", Passage::Open).unwrap();
+
+        let first = world.absorb(island);
+        assert_eq!((first, world.len()), (PlaceId::new(2), 4));
+        assert_eq!(world.place(PlaceId::new(3)), Some(&"cave"));
+        assert_eq!(world.exit(PlaceId::new(2), "east").map(|exit| exit.to), Some(PlaceId::new(3)));
+        assert_eq!(world.exit(PlaceId::new(3), "west").map(|exit| exit.to), Some(PlaceId::new(2)));
+        // Nothing joins the two: no way leads from one to the other.
+        assert!(world.first_step(camp, PlaceId::new(3), |_| true).is_none());
+        assert_eq!(world.exit(camp, "north").map(|exit| exit.to), Some(ledge));
+    }
 
     fn tide() -> Passage {
         Passage::Cyclic { cycle: Cycle::new(Duration::minutes(20)), open_for: Duration::minutes(10) }

@@ -5,13 +5,12 @@ use alloc::vec::Vec;
 use eq_clock::{Duration, Tick};
 use eq_events::World;
 use eq_rng::Rng;
-use eq_world_graph::{Graph, PlaceId};
+use eq_world_graph::{Graph, Passage, PlaceId};
 
-use alloc::string::String;
 
 use crate::board::{Board, ContractId, Lot, TradeRefusal};
 use crate::character::{Character, CharacterId, Death, Rebirth};
-use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
+use crate::combat::{may_attack, may_rob, Blow, FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::command::{Action, Command};
 use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 use crate::content::{
@@ -28,18 +27,7 @@ use crate::event::{Event, Outcome};
 use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
 use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, Standing};
-use crate::zone::Zone;
-
-/// A name cut in the shrine's stones: someone who faded.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Epitaph {
-    /// Who they were.
-    pub name: String,
-    /// Which of their lives ended this way.
-    pub life: u32,
-    /// When they faded.
-    pub at: Tick,
-}
+use crate::zone::{Epitaph, Zone};
 
 /// How often the world looks for sleepers whose time has run out.
 const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
@@ -48,11 +36,18 @@ const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
 /// relics, spent Body Guards, and lairs due a new lurker.
 const UPKEEP_EVERY: Duration = Duration::seconds(10);
 
-/// The whole world: one zone and the characters in it.
+/// The whole world: its territories and the characters in them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     rng: Rng,
-    zone: Zone,
+    /// The seed the world was made from. Territories are made from it.
+    seed: u64,
+    /// How many territories may still be made for founders.
+    founders_left: usize,
+    /// Every place in the world. Each zone is a run of them.
+    map: Graph<Place>,
+    /// The world's territories, oldest first. There is always one.
+    zones: Vec<Zone>,
     characters: Vec<Character>,
     occupancy: Occupancy,
     /// Every spirit with a body still lying somewhere, so the tick need
@@ -60,8 +55,6 @@ pub struct Game {
     dead: Vec<CharacterId>,
     /// Every forgotten spirit, dormant or not.
     forgotten: Vec<CharacterId>,
-    /// Those who faded, oldest first.
-    shrine: Vec<Epitaph>,
     /// Every creature now in the world, oldest first.
     creatures: Vec<Creature>,
     /// The id the next creature will get.
@@ -70,10 +63,6 @@ pub struct Game {
     empty_lairs: Vec<(Tick, PlaceId)>,
     /// What the dead dropped, oldest first.
     relics: Vec<Relic>,
-    /// The Contract Board, which stands at the anchor.
-    board: Board,
-    /// Where severed spirits are pulled to and new lives begin.
-    anchor: PlaceId,
 }
 
 impl Game {
@@ -96,23 +85,38 @@ impl Game {
         let lairs: Vec<PlaceId> = map.places().filter(|(_, place)| place.lair.is_some()).map(|(id, _)| id).collect();
         let mut game = Self {
             rng: Rng::from_seed(seed),
-            zone: Zone::new(map),
+            seed,
+            founders_left: 0,
+            zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
+            map,
             characters,
             occupancy,
             dead: Vec::new(),
             forgotten: Vec::new(),
-            shrine: Vec::new(),
             creatures: Vec::new(),
             next_creature: 0,
             empty_lairs: Vec::new(),
             relics: Vec::new(),
-            board: Board::new(),
-            anchor: start,
         };
         for lair in lairs {
             let id = game.new_creature_id();
             game.creatures.push(Creature::lurker(id, lair, Tick::ZERO));
         }
+        game
+    }
+
+    /// An empty world for founders: the Rocky Shoreline, and room for
+    /// `founders` more territories. Each of the first `founders` people
+    /// to join uninvited gets a territory of their own, made from the
+    /// seed. Those a founder has invited arrive in that founder's land.
+    /// Once every territory is founded, the uninvited arrive wherever
+    /// there are fewest people.
+    ///
+    /// `settlers` are already living on the shoreline when the world
+    /// begins. They found nothing.
+    pub fn new_world(seed: u64, founders: usize, settlers: &[&str]) -> Self {
+        let mut game = Self::new(seed, settlers);
+        game.founders_left = founders;
         game
     }
 
@@ -137,9 +141,118 @@ impl Game {
         if who != self.next_id() {
             return events.push(Event::UnknownCharacter { who });
         }
-        self.characters.push(Character::new(name, self.anchor));
-        self.occupancy.enter(self.anchor, who);
+        let (zone, founded) = self.zone_for_newcomer(who, name);
+        let anchor = self.zones[zone].anchor();
+        self.characters.push(Character::new(name, anchor));
+        self.occupancy.enter(anchor, who);
         events.push(Event::Character { who, outcome: Outcome::Joined });
+        if founded {
+            events.push(Event::Character { who, outcome: Outcome::Founded });
+        }
+    }
+
+    /// Which territory a newcomer arrives in, and whether it was made
+    /// for them: the land of whoever invited them; or, while there is
+    /// room for founders, a new land of their own; or wherever there
+    /// are fewest people.
+    fn zone_for_newcomer(&mut self, who: CharacterId, name: &str) -> (usize, bool) {
+        let handle = name.to_lowercase();
+        if let Some(zone) = self.zones.iter().position(|zone| zone.invited.contains(&handle)) {
+            self.zones[zone].invited.retain(|invited| *invited != handle);
+            return (zone, false);
+        }
+        if self.founders_left > 0 {
+            self.founders_left -= 1;
+            return (self.found_territory(who), true);
+        }
+        let people = |zone: &Zone| self.characters.iter().filter(|character| zone.contains(character.home())).count();
+        let emptiest = (0..self.zones.len()).min_by_key(|&index| (people(&self.zones[index]), index));
+        (emptiest.unwrap_or(0), false)
+    }
+
+    /// Makes a new territory from the world's seed and adds it to the
+    /// map, joined to nothing. Returns which zone it is.
+    fn found_territory(&mut self, founder: CharacterId) -> usize {
+        // Each territory gets its own seed, so the world's own dice are
+        // left alone and the lands come out the same on every replay.
+        let number = self.zones.len() as u64;
+        let seed = Rng::from_seed(self.seed).split(number).below(u64::MAX);
+        let territory = crate::territory::generate(seed);
+        let places = territory.map.len();
+        let first = self.map.absorb(territory.map);
+        let anchor = PlaceId::new(first.get() + territory.anchor.get());
+        self.occupancy.grow(self.map.len());
+        let zone = Zone::new(first, places, anchor, Some(founder));
+        let lairs: Vec<PlaceId> =
+            zone.place_ids().filter(|&place| self.map.place(place).is_some_and(|data| data.lair.is_some())).collect();
+        for lair in lairs {
+            let id = self.new_creature_id();
+            self.creatures.push(Creature::lurker(id, lair, Tick::ZERO));
+        }
+        self.zones.push(zone);
+        self.zones.len() - 1
+    }
+
+    /// The territory the character at `index` founded, if they stand as
+    /// its founder.
+    fn founded_by(&self, index: usize) -> Result<usize, FoundRefusal> {
+        let zone = self.zone_index(self.characters[index].home());
+        if self.zones[zone].founder == Some(id_at(index)) {
+            Ok(zone)
+        } else {
+            Err(FoundRefusal::NotFounder)
+        }
+    }
+
+    /// A founder names their land, or their house. Either is for good.
+    fn name_founding(&mut self, index: usize, raw: &str, house: bool, outcomes: &mut Vec<Outcome>) {
+        let checked = self.founded_by(index).and_then(|zone| {
+            let named = if house { &self.zones[zone].house } else { &self.zones[zone].name };
+            if named.is_some() {
+                return Err(FoundRefusal::AlreadyNamed);
+            }
+            let taken = self.zones.iter().filter_map(|other| if house { other.house() } else { other.name() });
+            let name = eq_naming::check(raw, &content::LAND_NAME_RULES, taken, &content::BLOCKED_NAMES);
+            name.map(|name| (zone, name)).map_err(FoundRefusal::Name)
+        });
+        match checked {
+            Ok((zone, name)) if house => {
+                self.zones[zone].house = Some(name.clone());
+                outcomes.push(Outcome::HouseNamed { name });
+            }
+            Ok((zone, name)) => {
+                self.zones[zone].name = Some(name.clone());
+                outcomes.push(Outcome::LandNamed { name });
+            }
+            Err(why) => outcomes.push(Outcome::CannotFound { why }),
+        }
+    }
+
+    /// A founder invites someone by name. Whoever joins the world under
+    /// that name arrives in the founder's land.
+    fn invite(&mut self, index: usize, raw: &str, outcomes: &mut Vec<Outcome>) {
+        let checked = self.founded_by(index).and_then(|zone| {
+            let name = eq_naming::check(raw, &content::PERSON_NAME_RULES, [], &content::BLOCKED_NAMES).map_err(FoundRefusal::Name)?;
+            if self.characters.iter().any(|character| character.name().eq_ignore_ascii_case(&name)) {
+                return Err(FoundRefusal::AlreadyHere);
+            }
+            if self.zones[zone].invited.len() >= content::MOST_INVITES {
+                return Err(FoundRefusal::TooManyInvites);
+            }
+            Ok((zone, name))
+        });
+        match checked {
+            Ok((zone, name)) => {
+                let handle = name.to_lowercase();
+                // An invitation goes to one land only: the latest to offer it.
+                for other in &mut self.zones {
+                    other.invited.retain(|invited| *invited != handle);
+                }
+                self.zones[zone].invited.push(handle);
+                outcomes.push(Outcome::Invited { name });
+            }
+            Err(why) => outcomes.push(Outcome::CannotFound { why }),
+        }
     }
 
     /// How many characters the world holds.
@@ -149,7 +262,7 @@ impl Game {
 
     /// The place a character is in.
     pub fn place_of(&self, who: CharacterId) -> Option<&Place> {
-        self.zone.map().place(self.character(who)?.place())
+        self.map.place(self.character(who)?.place())
     }
 
     /// Everyone in `place`, in id order.
@@ -157,21 +270,41 @@ impl Game {
         self.occupancy.at(place)
     }
 
-    /// The zone's spirit anchor: where severed spirits are pulled to and
-    /// new lives begin.
-    pub const fn anchor(&self) -> PlaceId {
-        self.anchor
+    /// The first territory's anchor. In a world of one territory this
+    /// is the anchor; in a larger one, ask the zone ([`Game::zone_at`]).
+    pub fn anchor(&self) -> PlaceId {
+        self.zones[0].anchor()
     }
 
-    /// The names of those who faded, oldest first. They are cut in the
-    /// stones at the anchor.
+    /// The first territory's shrine: the names of those who faded.
     pub fn shrine(&self) -> &[Epitaph] {
-        &self.shrine
+        self.zones[0].shrine()
     }
 
-    /// The Contract Board. It stands at the anchor.
-    pub const fn board(&self) -> &Board {
-        &self.board
+    /// The first territory's Contract Board.
+    pub fn board(&self) -> &Board {
+        self.zones[0].board()
+    }
+
+    /// Every territory, oldest first.
+    pub fn zones(&self) -> &[Zone] {
+        &self.zones
+    }
+
+    /// The territory `place` is part of.
+    pub fn zone_at(&self, place: PlaceId) -> &Zone {
+        &self.zones[self.zone_index(place)]
+    }
+
+    /// The territory `who` is standing in.
+    pub fn zone_of(&self, who: CharacterId) -> Option<&Zone> {
+        self.character(who).map(|character| self.zone_at(character.place()))
+    }
+
+    /// Which territory `place` is part of. A place that is on no map
+    /// counts as the first territory's.
+    fn zone_index(&self, place: PlaceId) -> usize {
+        self.zones.iter().position(|zone| zone.contains(place)).unwrap_or(0)
     }
 
     /// Whether `who` may tend `target` at `now`.
@@ -238,24 +371,24 @@ impl Game {
         viewer == other || !is_spirit(other) || is_spirit(viewer)
     }
 
-    /// The zone.
-    pub const fn zone(&self) -> &Zone {
-        &self.zone
+    /// The first territory.
+    pub fn zone(&self) -> &Zone {
+        &self.zones[0]
     }
 
     /// The map.
     pub const fn map(&self) -> &Graph<Place> {
-        self.zone.map()
+        &self.map
     }
 
-    /// Zone vitality, from 0 to 100.
-    pub const fn vitality(&self) -> i64 {
-        self.zone.vitality()
+    /// The first territory's vitality, from 0 to 100.
+    pub fn vitality(&self) -> i64 {
+        self.zones[0].vitality()
     }
 
-    /// The zone's vitality band.
+    /// The first territory's vitality band.
     pub fn health(&self) -> Health {
-        self.zone.health()
+        self.zones[0].health()
     }
 
     /// Whether `attacker` may trade blows with `target` right now.
@@ -308,7 +441,11 @@ impl Game {
             | Event::PassageChanged { place, .. }
             | Event::CreatureAppeared { place, .. }
             | Event::CreatureGone { place, .. } => self.occupants(*place).to_vec(),
-            Event::VitalityChanged { .. } => self.characters().map(|(id, _)| id).collect(),
+            // Everyone standing in that territory feels it.
+            Event::VitalityChanged { anchor, .. } => {
+                let zone = self.zone_at(*anchor);
+                self.characters().filter(|(_, character)| zone.contains(character.place())).map(|(id, _)| id).collect()
+            }
         };
         audience.sort_unstable();
         audience.dedup();
@@ -344,6 +481,8 @@ impl Game {
             | Outcome::LayDown { .. }
             | Outcome::Stole { .. }
             | Outcome::Returned
+            | Outcome::LandNamed { .. }
+            | Outcome::HouseNamed { .. }
             | Outcome::RiteBegun
             | Outcome::Tended { .. }
             | Outcome::Posted { .. }
@@ -410,6 +549,9 @@ impl Game {
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
             Action::Name(target) => self.name(index, *target, now, outcomes, events),
+            Action::NameLand(name) => self.name_founding(index, name, false, outcomes),
+            Action::NameHouse(name) => self.name_founding(index, name, true, outcomes),
+            Action::Invite(name) => self.invite(index, name, outcomes),
             Action::Rite => self.rite(index, now, outcomes, events),
             Action::Tend(target) => self.tend(index, *target, now, outcomes),
             Action::Post { give, want } => self.post(index, *give, *want, now, outcomes),
@@ -475,7 +617,7 @@ impl Game {
     /// A spirit draws ectoplasm from any place the living can work.
     fn draw(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
         let character = &mut self.characters[index];
-        let workable = self.zone.map().place(character.place()).is_some_and(|place| place.deposit.is_some());
+        let workable = self.map.place(character.place()).is_some_and(|place| place.deposit.is_some());
         if !workable {
             return outcomes.push(Outcome::NothingToGather);
         }
@@ -491,7 +633,7 @@ impl Game {
     fn seek(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
         let character = &mut self.characters[index];
         let here = character.place();
-        let holds_one = self.zone.map().place(here).is_some_and(|place| place.deposit.is_some());
+        let holds_one = self.map.place(here).is_some_and(|place| place.deposit.is_some());
         let Some(forgotten) = character.forgotten_mut() else { return outcomes.push(Outcome::NotForgotten) };
         if !holds_one || forgotten.found_in.contains(&here) {
             return outcomes.push(Outcome::NothingToRemember);
@@ -514,7 +656,7 @@ impl Game {
         let character = &mut self.characters[index];
         let place = character.place();
         let marked = character.standing() == Standing::Marked;
-        let refusal = match self.zone.map().place(place).and_then(|place| place.deposit) {
+        let refusal = match self.map.place(place).and_then(|place| place.deposit) {
             None => Some(RiteRefusal::NothingToMend),
             Some(_) if marked => Some(RiteRefusal::Marked),
             Some(deposit) if deposit.is_warded(now) => Some(RiteRefusal::Warded),
@@ -525,7 +667,7 @@ impl Game {
             return outcomes.push(Outcome::CannotRite { why });
         }
         character.busy_until = now + RITE_TIME;
-        let Some(deposit) = self.zone.map_mut().place_mut(place).and_then(|place| place.deposit.as_mut()) else { return };
+        let Some(deposit) = self.map.place_mut(place).and_then(|place| place.deposit.as_mut()) else { return };
         let Some(beginner) = deposit.rite_open(now).filter(|beginner| *beginner != who) else {
             deposit.rite_begun = Some((who, now));
             return outcomes.push(Outcome::RiteBegun);
@@ -535,7 +677,8 @@ impl Game {
         deposit.warded_until = now + WARD_TIME;
         deposit.rite_begun = None;
         let (resource, after) = (deposit.resource, deposit.node.quality());
-        self.zone.cleanse(RITE_CLEANSES);
+        let zone = self.zone_index(place);
+        self.zones[zone].cleanse(RITE_CLEANSES);
         outcomes.push(Outcome::RiteDone { with: beginner });
         events.push(Event::Character { who: beginner, outcome: Outcome::RiteAnswered { by: who } });
         if after != before {
@@ -554,9 +697,20 @@ impl Game {
         outcomes.push(Outcome::Tended { target, vigil });
     }
 
+    /// The territory the character at `index` stands in.
+    fn zone_of_index(&self, index: usize) -> &Zone {
+        self.zone_at(self.characters[index].place())
+    }
+
+    fn zone_of_index_mut(&mut self, index: usize) -> &mut Zone {
+        let zone = self.zone_index(self.characters[index].place());
+        &mut self.zones[zone]
+    }
+
     /// Whether the character at `index` is standing at the board.
     fn at_the_board(&self, index: usize) -> Result<(), TradeRefusal> {
-        if self.characters[index].place() == self.anchor {
+        let here = self.characters[index].place();
+        if here == self.zone_at(here).anchor() {
             Ok(())
         } else {
             Err(TradeRefusal::NotAtBoard)
@@ -566,7 +720,7 @@ impl Game {
     /// Pins up an offer. What is offered leaves the pack at once.
     fn post(&mut self, index: usize, give: Lot, want: Lot, now: Tick, outcomes: &mut Vec<Outcome>) {
         let who = id_at(index);
-        let allowed = self.at_the_board(index).and_then(|()| self.board.may_post(who, give, want));
+        let allowed = self.at_the_board(index).and_then(|()| self.zone_of_index(index).board.may_post(who, give, want));
         if let Err(why) = allowed {
             return outcomes.push(Outcome::CannotTrade { why });
         }
@@ -575,7 +729,7 @@ impl Game {
             return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::CannotPay });
         }
         poster.busy_until = now + BOARD_TIME;
-        let id = self.board.post(who, give, want);
+        let id = self.zone_of_index_mut(index).board.post(who, give, want);
         outcomes.push(Outcome::Posted { id, give, want });
     }
 
@@ -583,7 +737,7 @@ impl Game {
     /// at the board for whoever posted it.
     fn accept(&mut self, index: usize, id: ContractId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
         let who = id_at(index);
-        let found = self.at_the_board(index).and_then(|()| match self.board.contract(id) {
+        let found = self.at_the_board(index).and_then(|()| match self.zone_of_index(index).board.contract(id) {
             None => Err(TradeRefusal::NoSuchContract),
             Some(contract) if contract.by == who => Err(TradeRefusal::YourOwn),
             Some(contract) => Ok(*contract),
@@ -598,8 +752,9 @@ impl Game {
         }
         buyer.stow(contract.give.resource, contract.give.amount);
         buyer.busy_until = now + BOARD_TIME;
-        self.board.take_down(id);
-        self.board.hold_for(contract.by, contract.want);
+        let board = &mut self.zone_of_index_mut(index).board;
+        board.take_down(id);
+        board.hold_for(contract.by, contract.want);
         outcomes.push(Outcome::Accepted { id, paid: contract.want, got: contract.give });
         events.push(Event::Character { who: contract.by, outcome: Outcome::Filled { id, by: who, earned: contract.want } });
     }
@@ -607,14 +762,14 @@ impl Game {
     /// Takes down a contract of one's own and has back what it held.
     fn withdraw(&mut self, index: usize, id: ContractId, now: Tick, outcomes: &mut Vec<Outcome>) {
         let who = id_at(index);
-        let found = self.at_the_board(index).and_then(|()| match self.board.contract(id) {
+        let found = self.at_the_board(index).and_then(|()| match self.zone_of_index(index).board.contract(id) {
             None => Err(TradeRefusal::NoSuchContract),
             Some(contract) if contract.by != who => Err(TradeRefusal::NotYours),
             Some(contract) => Ok(*contract),
         });
         match found {
             Ok(contract) => {
-                self.board.take_down(id);
+                self.zone_of_index_mut(index).board.take_down(id);
                 let owner = &mut self.characters[index];
                 owner.stow(contract.give.resource, contract.give.amount);
                 owner.busy_until = now + BOARD_TIME;
@@ -629,7 +784,7 @@ impl Game {
         if let Err(why) = self.at_the_board(index) {
             return outcomes.push(Outcome::CannotTrade { why });
         }
-        let spoils = self.board.collect(id_at(index));
+        let spoils = self.zone_of_index_mut(index).board.collect(id_at(index));
         if spoils.iter().all(|&amount| amount == 0) {
             return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::NothingOwed });
         }
@@ -642,7 +797,8 @@ impl Game {
     /// Speaks a forgotten spirit's name at the shrine, which redeems it
     /// wherever it lies.
     fn name(&mut self, index: usize, target: CharacterId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
-        let refusal = if self.characters[index].place() != self.anchor {
+        let here = self.characters[index].place();
+        let refusal = if here != self.zone_at(here).anchor() {
             Some(NameRefusal::NotAtShrine)
         } else if !self.forgotten.contains(&target) {
             Some(NameRefusal::NotForgotten)
@@ -690,13 +846,14 @@ impl Game {
         // Whoever died where something can be worked remembers that work best.
         let favoured = self.characters[index]
             .death()
-            .and_then(|death| self.zone.map().place(death.body))
+            .and_then(|death| self.map.place(death.body))
             .and_then(|place| place.deposit)
             .map(|deposit| deposit.resource.attributes()[0]);
         let character = &mut self.characters[index];
+        let home = character.home();
         self.occupancy.leave(character.place(), who);
-        self.occupancy.enter(self.anchor, who);
-        character.be_reborn(self.anchor, now, Rebirth { base, favoured, spend_ectoplasm });
+        self.occupancy.enter(home, who);
+        character.be_reborn(home, now, Rebirth { base, favoured, spend_ectoplasm });
         self.dead.retain(|&spirit| spirit != who);
         self.forgotten.retain(|&spirit| spirit != who);
         character.life()
@@ -808,12 +965,14 @@ impl Game {
         let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false });
         self.relics.extend(Relic::new(who, body, dropped, now));
         // Only a tethered spirit stays by its body.
+        let zone = self.zones.iter().position(|zone| zone.contains(body)).unwrap_or(0);
         if passing != Passing::Tethered {
-            character.place = self.anchor;
+            let anchor = self.zones[zone].anchor();
+            character.place = anchor;
             self.occupancy.leave(body, who);
-            self.occupancy.enter(self.anchor, who);
+            self.occupancy.enter(anchor, who);
         }
-        self.zone.mourn(corruption);
+        self.zones[zone].mourn(corruption);
         self.dead.push(who);
         events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
@@ -822,7 +981,7 @@ impl Game {
     /// How a spirit will stand to its body: corrupted in a collapsed
     /// zone, tethered if anyone but the killer stood by, severed if not.
     fn passing(&self, who: CharacterId, by: Cause, place: PlaceId) -> Passing {
-        if self.zone.health() == Health::Collapsed {
+        if self.zone_at(place).health() == Health::Collapsed {
             return Passing::Corrupted;
         }
         let someone_stood_by = self.occupants(place).iter().any(|&other| {
@@ -960,6 +1119,20 @@ impl Game {
         foe.or_else(anyone).and_then(|&who| self.index_of(who))
     }
 
+    /// Reports every tidal exit that opened or closed this tick.
+    fn report_passages(&self, now: Tick, events: &mut Vec<Event>) {
+        let Some(previous) = now.get().checked_sub(1).map(Tick::new) else { return };
+        for (place, exit) in self.map.all_exits() {
+            if matches!(exit.passage, Passage::Open) {
+                continue;
+            }
+            let open = exit.passage.is_open(now);
+            if open != exit.passage.is_open(previous) {
+                events.push(Event::PassageChanged { place, label: exit.label.clone(), open });
+            }
+        }
+    }
+
     /// Clears away what has had its time: relics crumble, spent Body
     /// Guards fall, and empty lairs fill.
     fn upkeep(&mut self, now: Tick, events: &mut Vec<Event>) {
@@ -1000,7 +1173,7 @@ impl Game {
         if !now.get().is_multiple_of(HEALTH_MENDS_EVERY.as_ticks()) {
             return;
         }
-        let map = self.zone.map();
+        let map = &self.map;
         for character in self.characters.iter_mut().filter(|character| !character.is_spirit()) {
             let in_haven = map.place(character.place()).is_some_and(|place| place.safety == Safety::Haven);
             let mending_well = in_haven || character.is_asleep(now);
@@ -1036,7 +1209,8 @@ impl Game {
             let (who, place) = (id_at(index), character.place());
             let (dropped, cleansed) = character.sleep_to_death(now);
             self.relics.extend(Relic::new(who, place, dropped, now));
-            self.zone.mourn(CORRUPTION_PER_SLEEPER_DEATH);
+            let zone = self.zone_index(place);
+            self.zones[zone].mourn(CORRUPTION_PER_SLEEPER_DEATH);
             self.forgotten.push(who);
             let outcome = Outcome::Died { by: Cause::LongSleep, place, passing: Passing::Forgotten, lost_at: now };
             events.push(Event::Character { who, outcome });
@@ -1062,7 +1236,9 @@ impl Game {
         }
         for index in faded {
             let character = &self.characters[index];
-            self.shrine.push(Epitaph { name: character.name().into(), life: character.life(), at: now });
+            let epitaph = Epitaph { name: character.name().into(), life: character.life(), at: now };
+            let zone = self.zone_index(character.home());
+            self.zones[zone].shrine.push(epitaph);
             let life = self.begin_life(index, now, FADED_CARRYOVER_PERCENT, false);
             events.push(Event::Character { who: id_at(index), outcome: Outcome::Faded { life } });
         }
@@ -1094,7 +1270,7 @@ impl Game {
     fn go(&mut self, index: usize, label: &str, now: Tick, outcomes: &mut Vec<Outcome>) {
         let character = &mut self.characters[index];
         let from = character.place();
-        let Some(exit) = self.zone.map().exit(from, label) else {
+        let Some(exit) = self.map.exit(from, label) else {
             outcomes.push(Outcome::NoSuchExit { label: label.into() });
             return;
         };
@@ -1121,10 +1297,10 @@ impl Game {
     }
 
     fn gather(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
-        let health = self.zone.health();
+        let health = self.zone_of_index(index).health();
         let character = &mut self.characters[index];
         let place = character.place();
-        let Some(deposit) = self.zone.map_mut().place_mut(place).and_then(|place| place.deposit.as_mut()) else {
+        let Some(deposit) = self.map.place_mut(place).and_then(|place| place.deposit.as_mut()) else {
             outcomes.push(Outcome::NothingToGather);
             return;
         };
@@ -1188,7 +1364,10 @@ impl World for Game {
     type Event = Event;
 
     fn tick(&mut self, now: Tick, events: &mut Vec<Event>) {
-        self.zone.tick(now, events);
+        for zone in &mut self.zones {
+            zone.tick(&mut self.map, now, events);
+        }
+        self.report_passages(now, events);
         self.fade_taint(now, events);
         self.tire(now);
         self.mend(now);
@@ -2519,5 +2698,130 @@ mod tests {
         assert_eq!(outcome(&events), Some(&Outcome::RiteBegun), "too late to answer: Bryn begins anew");
         game.apply(&Command::rite(ASH), Tick::new(late + 5), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::RiteAnswered { by: ASH }), "Ash answers the new one");
+    }
+
+    const COLE: CharacterId = CharacterId::new(2);
+    const DARA: CharacterId = CharacterId::new(3);
+
+    /// A world with room for two founders, and Ash and Bryn in it.
+    fn two_founders() -> Game {
+        let mut game = Game::new_world(1, 2, &[]);
+        let mut events = Vec::new();
+        game.apply(&Command::join(ASH, "Ash"), Tick::new(0), &mut events);
+        game.apply(&Command::join(BRYN, "Bryn"), Tick::new(0), &mut events);
+        assert_eq!(events[1], Event::Character { who: ASH, outcome: Outcome::Founded });
+        game
+    }
+
+    #[test]
+    fn each_founder_arrives_alone_in_a_land_of_their_own() {
+        let game = two_founders();
+        assert_eq!(game.zones().len(), 3, "the shoreline and one land each");
+        let (ash, bryn) = (game.character(ASH).unwrap(), game.character(BRYN).unwrap());
+        let (hers, his) = (game.zone_at(ash.place()), game.zone_at(bryn.place()));
+        assert_eq!((hers.founder(), his.founder()), (Some(ASH), Some(BRYN)));
+        assert_eq!((ash.place(), ash.home()), (hers.anchor(), hers.anchor()));
+        assert_ne!(hers.anchor(), his.anchor());
+        assert_eq!(game.occupants(hers.anchor()), [ASH]);
+        assert_eq!(game.occupants(game.anchor()), [], "nobody is on the old shoreline");
+
+        // The lands are different places, each whole, and nothing joins them.
+        let names = |zone: &Zone| zone.place_ids().map(|place| game.map().place(place).unwrap().name).collect::<Vec<_>>();
+        assert_eq!((names(hers).len(), names(his).len()), (10, 10));
+        assert_ne!(names(hers), names(his));
+        assert!(game.map().first_step(hers.anchor(), his.anchor(), |_| true).is_none());
+        assert_eq!(game.creatures_at(game.map().places().find(|(id, place)| hers.contains(*id) && place.lair.is_some()).unwrap().0).count(), 1);
+    }
+
+    #[test]
+    fn the_same_seed_founds_the_same_lands_and_another_seed_others() {
+        let places = |seed: u64| {
+            let mut game = Game::new_world(seed, 1, &[]);
+            game.apply(&Command::join(ASH, "Ash"), Tick::new(0), &mut Vec::new());
+            game.zones()[1].place_ids().map(|place| game.map().place(place).unwrap().position).collect::<Vec<_>>()
+        };
+        assert_eq!(places(4), places(4));
+        assert_ne!(places(4), places(5));
+    }
+
+    #[test]
+    fn a_founder_names_land_and_house_once_and_no_two_lands_share_a_name() {
+        let mut game = two_founders();
+        let mut events = Vec::new();
+        let refused = |events: &[Event]| match outcome(events) {
+            Some(Outcome::CannotFound { why }) => Some(*why),
+            _ => None,
+        };
+        game.apply(&Command::name_land(ASH, "  the salt   march "), Tick::new(1), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::LandNamed { name: "The Salt March".into() }));
+        game.apply(&Command::name_house(ASH, "thorne"), Tick::new(1), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::HouseNamed { name: "Thorne".into() }));
+        let land = game.zone_of(ASH).unwrap();
+        assert_eq!((land.name(), land.house()), (Some("The Salt March"), Some("Thorne")));
+
+        game.apply(&Command::name_land(ASH, "Second Thoughts"), Tick::new(2), &mut events);
+        assert_eq!(refused(&events), Some(FoundRefusal::AlreadyNamed));
+        game.apply(&Command::name_land(BRYN, "the saltmarch"), Tick::new(2), &mut events);
+        assert_eq!(refused(&events), Some(FoundRefusal::Name(eq_naming::Problem::Taken)));
+        game.apply(&Command::name_land(BRYN, "x"), Tick::new(2), &mut events);
+        assert_eq!(refused(&events), Some(FoundRefusal::Name(eq_naming::Problem::TooShort)));
+        game.apply(&Command::name_land(BRYN, "Fort 9"), Tick::new(2), &mut events);
+        assert_eq!(refused(&events), Some(FoundRefusal::Name(eq_naming::Problem::BadCharacter('9'))));
+        assert_eq!(game.zone_of(BRYN).unwrap().name(), None);
+    }
+
+    #[test]
+    fn the_invited_arrive_in_their_founders_land_and_the_uninvited_where_there_are_fewest() {
+        let mut game = two_founders();
+        let mut events = Vec::new();
+        game.apply(&Command::invite(BRYN, "cole"), Tick::new(1), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Invited { name: "Cole".into() }));
+        game.apply(&Command::invite(BRYN, "Ash"), Tick::new(1), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotFound { why: FoundRefusal::AlreadyHere }));
+
+        // Both lands are founded, so Cole would otherwise go where there are fewest.
+        events.clear();
+        game.apply(&Command::join(COLE, "Cole"), Tick::new(2), &mut events);
+        assert_eq!(events, [Event::Character { who: COLE, outcome: Outcome::Joined }], "invited, not a founder");
+        let brynsland = game.zone_of(BRYN).unwrap().anchor();
+        assert_eq!((game.character(COLE).unwrap().place(), game.character(COLE).unwrap().home()), (brynsland, brynsland));
+        assert_eq!(game.audience(&events[0]), [BRYN, COLE], "Bryn sees them arrive; Ash, elsewhere, does not");
+
+        // The invitation is used up, and only a founder can give one.
+        game.apply(&Command::invite(COLE, "Dara"), Tick::new(3), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotFound { why: FoundRefusal::NotFounder }));
+        game.apply(&Command::join(DARA, "Dara"), Tick::new(4), &mut events);
+        assert_eq!(game.character(DARA).unwrap().home(), game.anchor(), "the empty shoreline has fewest people");
+    }
+
+    #[test]
+    fn each_land_has_its_own_health_board_and_rebirth() {
+        let mut game = two_founders();
+        let mut events = Vec::new();
+        let home = game.character(ASH).unwrap().home();
+        // Ash strips whatever lies one step from her haven.
+        let way = game.map().exits(home)[0].label.clone();
+        game.apply(&Command::go(ASH, &way), Tick::new(0), &mut events);
+        let mut now = 30;
+        for _ in 0..400 {
+            game.tick(Tick::new(now), &mut events);
+            game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
+            now += GATHER_TIME.as_ticks();
+        }
+        ticks(&mut game, now, now + 5);
+        let (hers, his) = (game.zone_of(ASH).unwrap(), game.zone_of(BRYN).unwrap());
+        assert!(hers.vitality() < 100, "Ash's land should feel it: {}", hers.vitality());
+        assert_eq!(his.vitality(), 100, "Bryn's land is another land");
+        assert_eq!(game.vitality(), 100, "and so is the shoreline");
+
+        // A contract pinned in one land is not on another's board.
+        let back = game.map().exits(game.character(ASH).unwrap().place())[0].label.clone();
+        game.apply(&Command::go(ASH, &back), Tick::new(now + 10), &mut events);
+        let ore = Lot { resource: game.map().place(game.map().exits(home)[0].to).unwrap().deposit.unwrap().resource, amount: 1 };
+        game.apply(&Command::post(ASH, ore, lot(Resource::Kelp, 1)), Tick::new(now + 40), &mut events);
+        assert_eq!(game.zone_at(home).board().contracts().len(), 1);
+        assert_eq!(game.zone_of(BRYN).unwrap().board().contracts().len(), 0);
+        game.apply(&Command::accept(BRYN, ContractId::new(0)), Tick::new(now + 40), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::NoSuchContract }));
     }
 }

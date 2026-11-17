@@ -8,7 +8,7 @@ use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
 use crate::board::{ContractId, Lot, TradeRefusal};
-use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
+use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::creature::Being;
 use crate::spirit::SpiritTier;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
@@ -18,6 +18,29 @@ use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Stand
 pub enum Outcome {
     /// They came into the world.
     Joined,
+    /// They are the first in a new territory, made for them. It has no
+    /// name until they give it one.
+    Founded,
+    /// Something only a founder can do was not done.
+    CannotFound {
+        /// Why not.
+        why: FoundRefusal,
+    },
+    /// They named their land.
+    LandNamed {
+        /// The name, as the world will keep it.
+        name: String,
+    },
+    /// They named their house.
+    HouseNamed {
+        /// The name, as the world will keep it.
+        name: String,
+    },
+    /// They invited someone to their land.
+    Invited {
+        /// The name invited, as the world will keep it.
+        name: String,
+    },
     /// They walked from one place to another.
     Moved {
         /// Where they left.
@@ -361,6 +384,8 @@ pub enum Event {
     },
     /// The zone moved from one vitality band to another.
     VitalityChanged {
+        /// The anchor of the zone it happened in.
+        anchor: PlaceId,
         /// The band before.
         from: Health,
         /// The band now.
