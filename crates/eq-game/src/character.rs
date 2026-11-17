@@ -72,6 +72,9 @@ impl Forgotten {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Character {
     name: String,
+    /// The anchor of the territory they belong to: where each of their
+    /// lives begins.
+    pub(crate) home: PlaceId,
     pub(crate) place: PlaceId,
     pub(crate) busy_until: Tick,
     skills: [Proficiency; SkillKind::ALL.len()],
@@ -118,6 +121,7 @@ impl Character {
     pub(crate) fn new(name: &str, place: PlaceId) -> Self {
         Self {
             name: name.into(),
+            home: place,
             place,
             busy_until: Tick::ZERO,
             skills: [Proficiency::new(); SkillKind::ALL.len()],
@@ -157,6 +161,12 @@ impl Character {
             *held -= amount;
         }
         enough
+    }
+
+    /// The anchor of the territory they belong to, where each of their
+    /// lives begins.
+    pub const fn home(&self) -> PlaceId {
+        self.home
     }
 
     /// Ectoplasm held.

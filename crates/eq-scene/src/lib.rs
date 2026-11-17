@@ -28,6 +28,10 @@ pub struct Scene {
     pub vitality: i64,
     /// The zone's vitality band, as shown to players.
     pub health: &'static str,
+    /// What its founder called the land the viewer is in, if it has a name.
+    pub land: Option<String>,
+    /// What its founder called their house, if it has a name.
+    pub house: Option<String>,
     /// The viewer.
     pub you: You,
     /// Everyone else standing where the viewer is.
@@ -283,12 +287,14 @@ impl Scene {
         Some(Self {
             clock: clock(now),
             tide: if TIDE.is_within(now, LOW_TIDE) { "low" } else { "high" },
-            vitality: game.vitality(),
-            health: game.health().name(),
+            vitality: game.zone_at(here).vitality(),
+            health: game.zone_at(here).health().name(),
+            land: game.zone_at(here).name().map(String::from),
+            house: game.zone_at(here).house().map(String::from),
             you,
             company: people(game, viewer, here, now).into_iter().filter(|person| !person.you).collect(),
             places: places(game, viewer, here, now),
-            links: links(game, now),
+            links: links(game, here, now),
             exits: exits(game, here, now),
         })
     }
@@ -332,9 +338,13 @@ fn clock(now: Tick) -> String {
     full.split(' ').next().unwrap_or_default().to_owned()
 }
 
+/// The places of the land the viewer is in. Other lands are not on
+/// their map: nothing joins them.
 fn places(game: &Game, viewer: CharacterId, here: PlaceId, now: Tick) -> Vec<PlaceView> {
+    let land = game.zone_at(here);
     game.map()
         .places()
+        .filter(|(id, _)| land.contains(*id))
         .map(|(id, place)| PlaceView {
             id: id.get(),
             name: place.name,
@@ -387,10 +397,11 @@ fn people(game: &Game, viewer: CharacterId, place: PlaceId, now: Tick) -> Vec<Pe
 }
 
 /// Each two-way path once, taken from its lower-numbered end.
-fn links(game: &Game, now: Tick) -> Vec<LinkView> {
+fn links(game: &Game, here: PlaceId, now: Tick) -> Vec<LinkView> {
+    let land = game.zone_at(here);
     game.map()
         .all_exits()
-        .filter(|(from, exit)| *from < exit.to)
+        .filter(|(from, exit)| *from < exit.to && land.contains(*from))
         .map(|(from, exit)| LinkView {
             from: from.get(),
             to: exit.to.get(),
@@ -541,6 +552,28 @@ mod tests {
         let here = after.places.iter().find(|place| place.here).unwrap();
         assert_eq!(here.bodies, ["Bryn"]);
         assert!(here.spoils && after.you.can_take, "what Bryn dropped should be there to take: {here:?}");
+    }
+
+    #[test]
+    fn the_scene_is_the_land_the_viewer_stands_in_and_no_other() {
+        use eq_events::World;
+        use eq_game::Command;
+        let mut game = Game::new_world(3, 2, &[]);
+        let (ada, ben) = (CharacterId::new(0), CharacterId::new(1));
+        let mut events = Vec::new();
+        game.apply(&Command::join(ada, "Ada"), Tick::new(0), &mut events);
+        game.apply(&Command::join(ben, "Ben"), Tick::new(0), &mut events);
+        game.apply(&Command::name_land(ada, "saltmarch"), Tick::new(1), &mut events);
+
+        let hers = Scene::of(&game, ada, Tick::new(1)).unwrap();
+        let his = Scene::of(&game, ben, Tick::new(1)).unwrap();
+        assert_eq!((hers.places.len(), his.places.len()), (10, 10));
+        assert_eq!((hers.land.as_deref(), his.land.as_deref()), (Some("Saltmarch"), None));
+        let ids = |scene: &Scene| scene.places.iter().map(|place| place.id).collect::<Vec<_>>();
+        assert!(ids(&hers).iter().all(|id| !ids(&his).contains(id)), "the two maps share no place");
+        assert!(hers.links.iter().all(|link| ids(&hers).contains(&link.from) && ids(&hers).contains(&link.to)));
+        assert_eq!(hers.links.len(), 9, "ten places in a tree");
+        assert!(hers.company.is_empty() && his.company.is_empty());
     }
 
     #[test]

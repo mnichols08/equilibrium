@@ -93,6 +93,19 @@ pub const ATROPHY_FLOOR_PERCENT: u32 = 50;
 /// out of a fight.
 pub const DISCONNECT_GRACE: Duration = Duration::seconds(120);
 
+/// What a founder may call their land or their house.
+pub const LAND_NAME_RULES: eq_naming::Rules = eq_naming::Rules { shortest: 3, longest: 24, words: true };
+
+/// What a person may be called.
+pub const PERSON_NAME_RULES: eq_naming::Rules = eq_naming::Rules { shortest: 3, longest: 16, words: false };
+
+/// Words no land or house in this world may carry. Empty for now: a
+/// server that opens its doors to strangers fills this in.
+pub const BLOCKED_NAMES: [&str; 0] = [];
+
+/// How many invitations a founder may have waiting at once.
+pub const MOST_INVITES: usize = 12;
+
 /// How long one's part in a Restoration Rite takes.
 pub const RITE_TIME: Duration = Duration::seconds(30);
 

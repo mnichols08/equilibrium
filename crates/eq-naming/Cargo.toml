@@ -1,0 +1,12 @@
+[package]
+name = "eq-naming"
+description = "Checks and tidies names that players give to things: length, letters, a blocklist, and what is already taken."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

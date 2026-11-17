@@ -225,7 +225,7 @@ mod tests {
     /// A server on a free port with fast ticks, on its own thread.
     fn server() -> (String, tokio::sync::oneshot::Sender<()>, std::thread::JoinHandle<()>) {
         use eq_server::{net::Server, Config, Realm};
-        let realm = Realm::open(&Config { seed: 1, bots: 0, data: None }).unwrap();
+        let realm = Realm::open(&Config { seed: 1, bots: 0, founders: 0, data: None }).unwrap();
         let (ready, address) = std::sync::mpsc::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let thread = std::thread::spawn(move || {

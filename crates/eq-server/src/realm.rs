@@ -47,6 +47,9 @@ pub struct Config {
     pub seed: u64,
     /// How many bots share the world. Ignored if the realm already exists.
     pub bots: usize,
+    /// How many players may found a territory of their own. Ignored if
+    /// the realm already exists.
+    pub founders: usize,
     /// Where the realm is saved, or `None` to keep it in memory only.
     pub data: Option<PathBuf>,
 }
@@ -56,6 +59,9 @@ pub struct Config {
 struct Founding {
     seed: u64,
     bots: usize,
+    /// Left out of realms saved before there were founders: none.
+    #[serde(default)]
+    founders: usize,
 }
 
 /// Why a realm could not be opened.
@@ -168,14 +174,14 @@ impl Realm {
     /// command.
     pub fn open(config: &Config) -> Result<Self, RealmError> {
         let Some(data) = &config.data else {
-            let founding = Founding { seed: config.seed, bots: config.bots };
+            let founding = Founding { seed: config.seed, bots: config.bots, founders: config.founders };
             return Ok(Self::found(founding, None, None, BTreeMap::new()));
         };
         fs::create_dir_all(data)?;
         let founding = match read_json::<Founding>(&data.join("realm.json"))? {
             Some(founding) => founding,
             None => {
-                let founding = Founding { seed: config.seed, bots: config.bots };
+                let founding = Founding { seed: config.seed, bots: config.bots, founders: config.founders };
                 write_json(&data.join("realm.json"), &founding)?;
                 founding
             }
@@ -189,8 +195,7 @@ impl Realm {
         let mut realm = Self::found(founding, Some(store), Some(keys_path), keys);
         realm.clock_path = Some(clock_path);
         if !commands.is_empty() {
-            // The founding joined the bots already; replay starts clean.
-            realm.session = Session::new(Game::new(founding.seed, &[]));
+            realm.session = Session::new(fresh_world(&founding));
             for (tick, command) in commands {
                 realm.session.submit(Tick::new(tick), command).map_err(|_| {
                     RealmError::Corrupt(format!("a command at tick {tick} is out of order in commands.log"))
@@ -206,14 +211,11 @@ impl Realm {
         Ok(realm)
     }
 
-    /// A new realm: an empty world, then its bots.
+    /// A new realm: the world as it begins, with its bots at their rounds.
     fn found(founding: Founding, store: Option<LogFile<Command>>, keys_path: Option<PathBuf>, keys: BTreeMap<String, String>) -> Self {
-        let mut session = Session::new(Game::new(founding.seed, &[]));
+        let session = Session::new(fresh_world(&founding));
         let crew: Vec<(CharacterId, Plan)> =
             Plan::settlement(founding.bots).into_iter().enumerate().map(|(index, plan)| (CharacterId::new(index as u64), plan)).collect();
-        for (who, _) in &crew {
-            session.submit(Tick::ZERO, Command::join(*who, &bot_name(who.get() as usize))).expect("tick zero is never in the past");
-        }
         Self {
             founding,
             session,
@@ -447,6 +449,14 @@ fn digest(handle: &str, key: &str) -> String {
     hasher.update([0]);
     hasher.update(key.as_bytes());
     hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The world a realm begins as: the Rocky Shoreline with the bots
+/// already settled on it, and room for the founders to come.
+fn fresh_world(founding: &Founding) -> Game {
+    let bots: Vec<String> = (0..founding.bots).map(bot_name).collect();
+    let names: Vec<&str> = bots.iter().map(String::as_str).collect();
+    Game::new_world(founding.seed, founding.founders, &names)
 }
 
 /// Adds `lines` to what `to` will be told.

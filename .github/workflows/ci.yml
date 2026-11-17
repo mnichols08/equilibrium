@@ -69,7 +69,7 @@ jobs:
         run: |
           cargo build -p eq-server --release
           cp web/test/e2e-online.html web/dist/e2e-online.html
-          ./target/release/equilibrium-server --tick-ms 20 --data "$RUNNER_TEMP/realm" --bots 4 &
+          ./target/release/equilibrium-server --tick-ms 20 --data "$RUNNER_TEMP/realm" --bots 4 --founders 0 &
           node web/tools/serve.js web/dist 8081 &
           sleep 2
           google-chrome --headless=new --no-sandbox --disable-gpu \

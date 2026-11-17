@@ -14,6 +14,7 @@ eq-clock = { path = "../eq-clock" }
 eq-events = { path = "../eq-events" }
 eq-ids = { path = "../eq-ids" }
 eq-meter = { path = "../eq-meter" }
+eq-naming = { path = "../eq-naming" }
 eq-nodes = { path = "../eq-nodes" }
 eq-rng = { path = "../eq-rng" }
 eq-skills = { path = "../eq-skills" }

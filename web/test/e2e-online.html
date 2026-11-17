@@ -4,7 +4,7 @@
   players at once, and writes "E2E PASS" or "E2E FAIL: why" into the page.
 
   It needs a server at ws://127.0.0.1:4000 with fast ticks:
-    equilibrium-server --tick-ms 20 --data <a fresh directory>
+    equilibrium-server --tick-ms 20 --founders 0 --data <a fresh directory>
 
   It proves that the same components draw a shared world: no game runs in
   the page, only what the server sends.

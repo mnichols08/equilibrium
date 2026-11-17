@@ -187,3 +187,34 @@ fn a_client_that_draws_gets_a_scene_with_everything_it_is_told_and_every_few_tic
     let plain = realm.enter("Ada", "a", false).unwrap();
     assert!(plain.deliveries.iter().all(|delivery| delivery.scene.is_none()));
 }
+
+#[test]
+fn the_first_players_found_lands_of_their_own_and_the_invited_join_them() {
+    let scratch = Scratch::new("founders");
+    let mut realm = eq_server::Realm::open(&eq_server::Config { seed: 4, bots: 6, founders: 2, data: Some(scratch.path().to_path_buf()) }).unwrap();
+    assert_eq!(realm.game().population(), 6, "the bots are settled on the shoreline");
+    assert_eq!(realm.game().zones().len(), 1);
+
+    let ada = realm.enter("Ada", "a", false).unwrap();
+    assert!(told(&ada.deliveries, ada.who).contains("Nobody has stood here before you."));
+    let ada = ada.who;
+    assert!(!told(&realm.line(ada, "look"), ada).contains("Tidewatch Camp"), "Ada is not on the shoreline");
+    assert_eq!(told(&realm.line(ada, "call The Salt March"), ada), "You name this land The Salt March. It will carry that name for good.");
+    assert_eq!(told(&realm.line(ada, "house Thorne"), ada), "You name your house Thorne. Those you invite will carry it.");
+    assert!(told(&realm.line(ada, "invite Cyd"), ada).starts_with("You send word for Cyd."));
+
+    let ben = realm.enter("Ben", "b", false).unwrap().who;
+    let cyd = realm.enter("Cyd", "c", false).unwrap();
+    assert!(told(&cyd.deliveries, ada).contains("Cyd walks out of the tide"), "Ada sees her guest arrive");
+    assert!(told(&cyd.deliveries, cyd.who).contains("The Salt March, founded by Ada of House Thorne."));
+    assert_eq!(told(&cyd.deliveries, ben), "", "Ben is in another land");
+    assert_eq!(realm.game().zones().len(), 3);
+
+    // The lands, their names and who lives where all survive a restart.
+    realm.close();
+    let world = realm.game().clone();
+    drop(realm);
+    let again = eq_server::Realm::open(&eq_server::Config { seed: 0, bots: 0, founders: 0, data: Some(scratch.path().to_path_buf()) }).unwrap();
+    assert_eq!(again.game(), &world);
+    assert_eq!(again.game().zone_of(cyd.who).unwrap().name(), Some("The Salt March"));
+}

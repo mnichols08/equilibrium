@@ -100,6 +100,7 @@ dependencies = [
  "eq-events",
  "eq-ids",
  "eq-meter",
+ "eq-naming",
  "eq-nodes",
  "eq-rng",
  "eq-skills",
@@ -117,6 +118,10 @@ version = "0.1.0"
 
 [[package]]
 name = "eq-meter"
+version = "0.1.0"
+
+[[package]]
+name = "eq-naming"
 version = "0.1.0"
 
 [[package]]
