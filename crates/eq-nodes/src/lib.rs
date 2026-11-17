@@ -184,6 +184,16 @@ impl Node {
         self.recover();
     }
 
+    /// Tears away `percent` of what the node holds, rounded down, as a
+    /// storm would. Nothing is strained: it is simply gone. Anything
+    /// over 100 is treated as 100. Returns how much was lost.
+    pub fn scour(&mut self, percent: u32) -> u32 {
+        // Stock times a percentage fits easily in 64 bits.
+        let lost = (u64::from(self.stock) * u64::from(percent.min(100)) / 100) as u32;
+        self.stock -= lost;
+        lost
+    }
+
     /// Takes up to `wanted` units and adds the strain of taking them.
     pub fn harvest(&mut self, wanted: u32) -> Harvest {
         let quality = self.quality();

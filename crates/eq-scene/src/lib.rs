@@ -24,6 +24,9 @@ pub struct Scene {
     pub clock: String,
     /// `"low"` or `"high"`.
     pub tide: &'static str,
+    /// What the world at large is like: `"parched"`, `"dry"`, `"even"`,
+    /// `"restless"` or `"raging"`.
+    pub mood: &'static str,
     /// Zone vitality, 0 to 100.
     pub vitality: i64,
     /// The zone's vitality band, as shown to players.
@@ -325,6 +328,7 @@ impl Scene {
         Some(Self {
             clock: clock(now),
             tide: if TIDE.is_within(now, LOW_TIDE) { "low" } else { "high" },
+            mood: game.balance().mood().name(),
             vitality: game.zone_at(here).vitality(),
             health: game.zone_at(here).health().name(),
             land: game.zone_at(here).name().map(String::from),

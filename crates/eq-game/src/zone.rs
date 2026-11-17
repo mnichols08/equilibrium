@@ -30,6 +30,16 @@ pub struct Epitaph {
     pub at: Tick,
 }
 
+/// What the world at large does to every land's deposits this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Weather {
+    /// How much of their usual regrowth deposits get, as a percentage.
+    pub growth_percent: u32,
+    /// The share of their stock a storm tears away this tick, as a
+    /// percentage. Zero on a tick with no storm.
+    pub storm_percent: u32,
+}
+
 /// One territory of the world, with its own ecology.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Zone {
@@ -149,20 +159,25 @@ impl Zone {
     }
 
     /// Runs one tick of the zone's ecology on its part of `map`.
-    pub(crate) fn tick(&mut self, map: &mut Graph<Place>, now: Tick, events: &mut Vec<Event>) {
-        self.grow_deposits(map, events);
+    ///
+    /// `growth_percent` is how much of their usual regrowth the world
+    /// allows its deposits; `storm_percent` is the share of their stock
+    /// a storm tears away this tick, if one has come.
+    pub(crate) fn tick(&mut self, map: &mut Graph<Place>, now: Tick, weather: Weather, events: &mut Vec<Event>) {
+        self.grow_deposits(map, weather, events);
         if now.get().is_multiple_of(CORRUPTION_FADES_EVERY.as_ticks()) {
             self.corruption.adjust(-1);
         }
         self.update_vitality(map, events);
     }
 
-    fn grow_deposits(&self, map: &mut Graph<Place>, events: &mut Vec<Event>) {
-        let growth = self.health().growth();
+    fn grow_deposits(&self, map: &mut Graph<Place>, weather: Weather, events: &mut Vec<Event>) {
+        let growth = self.health().growth() * weather.growth_percent / 100;
         for place in self.place_ids() {
             let Some(deposit) = map.place_mut(place).and_then(|data| data.deposit.as_mut()) else { continue };
             let from = deposit.node.quality();
             deposit.node.tick(growth);
+            deposit.node.scour(weather.storm_percent);
             let to = deposit.node.quality();
             if from != to {
                 events.push(Event::DepositChanged { place, resource: deposit.resource, from, to });

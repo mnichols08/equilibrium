@@ -9,6 +9,7 @@ use eq_world_graph::PlaceId;
 use crate::character::CharacterId;
 use crate::board::{ContractId, Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
+use crate::balance::Mood;
 use crate::creature::Being;
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::spirit::SpiritTier;
@@ -437,6 +438,16 @@ pub enum Event {
         /// What they are to each other now.
         dealt: Dealt,
     },
+    /// The world itself changed, pushed by the peace and war between
+    /// its lands. Everyone feels it.
+    MoodChanged {
+        /// What it was like.
+        from: Mood,
+        /// What it is like now.
+        to: Mood,
+    },
+    /// A storm tore at everything that can be worked. Everyone feels it.
+    Storm,
     /// A command named a character who does not exist.
     UnknownCharacter {
         /// The id that was asked for.

@@ -274,6 +274,20 @@ pub const REBIRTH_CARRYOVER_PERCENT: u32 = 0;
 /// before it lives again.
 pub const AFTERLIFE_LEVEL: u32 = 10;
 
+/// How often the pacts between lands push the balance of the world.
+pub const BALANCE_EVERY: Duration = Duration::minutes(10);
+
+/// How far each standing war pushes the world toward fury, and each
+/// standing alliance toward stillness, every [`BALANCE_EVERY`].
+pub const LEAN_PER_PACT: i64 = 1;
+
+/// How far the world is pushed at once when a war is declared (toward
+/// fury) or an alliance or a truce is made (toward stillness).
+pub const LEAN_PER_DEALING: i64 = 10;
+
+/// How often a storm comes, when the world is roused enough for storms.
+pub const STORM_EVERY: Duration = Duration::minutes(20);
+
 /// What raising a land's house takes from its founder's pack.
 pub const HOUSE_COST: [(Resource, u64); 2] = [(Resource::Driftwood, 40), (Resource::Ore, 20)];
 

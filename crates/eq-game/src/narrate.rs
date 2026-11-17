@@ -14,6 +14,7 @@ use eq_world_graph::{Passage, PlaceId};
 use crate::board::{Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
+use crate::balance::Mood;
 use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
@@ -115,6 +116,8 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::Character { who, outcome } if *who == viewer => Some(own(outcome, game, viewer)),
         Event::Character { who, outcome } => witnessed(*who, outcome, game, viewer, here),
         Event::UnknownCharacter { .. } => None,
+        Event::MoodChanged { to, .. } => Some(mood_changed(*to).into()),
+        Event::Storm => Some("A storm comes through. The sea tears at the shore, and everything that can be worked is the poorer for it.".into()),
         Event::Pact { by, with, dealt } => Some(pact_news(game, *by, *with, *dealt)),
         Event::DepositChanged { place, resource, from, to } if *place == here => {
             Some(deposit_changed(*resource, *from, *to))
@@ -470,6 +473,10 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
             lines.push(format!("{land}, founded by {whose}."));
         }
     }
+    let mood = game.balance().mood();
+    if mood != Mood::Even {
+        lines.push(format!("The world is {}.", mood.name()));
+    }
     if zone.hall() == Some(character.place()) {
         let whose = zone.house().map_or_else(|| "this land".into(), |house| format!("House {house}"));
         let roof = if game.is_sheltered(character) { " Under its roof nobody can strike or rob you." } else { "" };
@@ -492,7 +499,8 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         .iter()
         .filter(|&&id| id != viewer && game.can_see(viewer, id))
         .filter_map(|&id| game.character(id))
-        .map(|other| match condition(other, now) {
+        // To a spirit, a sleeper is hardly there: an ethereal.
+        .map(|other| match condition(other, now).map(|note| if character.is_spirit() && note == "asleep" { "an ethereal" } else { note }) {
             Some(note) => format!("{} ({note})", other.name()),
             None => other.name().into(),
         })
@@ -692,6 +700,17 @@ fn pact_news(game: &Game, by: PlaceId, with: PlaceId, dealt: Dealt) -> String {
         Dealt::Peace => format!("{by} and {with} have made a truce. The war between them is over."),
         Dealt::Parted => format!("{by} has left its alliance with {with}. The sentinels will not know each other's people now."),
         Dealt::Offered => format!("{by} has made {with} an offer."),
+    }
+}
+
+/// What everyone is told when the world itself changes.
+const fn mood_changed(to: Mood) -> &'static str {
+    match to {
+        Mood::Parched => "There has been too much peace. The springs have failed and the fields are waste. Nothing taken from the ground comes back now.",
+        Mood::Dry => "The world is going still. Water runs thin, and what is taken from the ground comes back slowly.",
+        Mood::Even => "The world settles. Water runs as it should, and the weather is only weather.",
+        Mood::Restless => "The world is restless with war. The rivers are loud, the tide comes harder, and storms will take their share.",
+        Mood::Raging => "There has been too much war. The rivers are in flood, the mountains smoke, and the storms will leave little standing.",
     }
 }
 

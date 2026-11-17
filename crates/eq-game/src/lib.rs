@@ -29,6 +29,7 @@
 
 extern crate alloc;
 
+pub mod balance;
 pub mod board;
 pub mod bots;
 mod character;
