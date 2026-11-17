@@ -28,6 +28,8 @@ Being up wears off your rested bonus, and the rested learn faster. `sleep` puts 
 - `--bots N` puts N bots on the shoreline with you: mostly careful, with a greedy one among every four.
 - `--verify` replays your command log when you quit and checks it rebuilds the same world.
 
+`--generated` plays alone in a territory made from the seed, not the hand-built shoreline: a haven and nine places to work, laid out differently for every `--seed`, with the rare things furthest in and the tide across the way to them. Each holds exactly what the shoreline holds.
+
 ### With other people
 
 ```

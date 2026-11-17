@@ -1,7 +1,7 @@
 //! Play Equilibrium in a terminal.
 //!
 //! ```text
-//! equilibrium [--seed N] [--bots N] [--verify]
+//! equilibrium [--seed N] [--bots N] [--generated] [--verify]
 //! equilibrium --connect ws://HOST:PORT --name NAME --key PASSPHRASE
 //! ```
 //!
@@ -23,7 +23,7 @@ mod online;
 
 use online::Login;
 
-const USAGE: &str = "usage: equilibrium [--seed N] [--bots N] [--verify]\n       equilibrium --connect ws://HOST:PORT --name NAME --key PASSPHRASE";
+const USAGE: &str = "usage: equilibrium [--seed N] [--bots N] [--generated] [--verify]\n       equilibrium --connect ws://HOST:PORT --name NAME --key PASSPHRASE";
 
 const INTRO: &str = "\
 EQUILIBRIUM
@@ -35,6 +35,8 @@ struct Options {
     seed: u64,
     bots: usize,
     verify: bool,
+    /// Play alone in a territory made from the seed, not the Rocky Shoreline.
+    generated: bool,
     /// Where to play, if not alone.
     login: Option<Login>,
 }
@@ -46,12 +48,13 @@ fn number<T: std::str::FromStr>(flag: &str, value: Option<String>) -> Result<T, 
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
-    let mut options = Options { seed: 1, bots: 0, verify: false, login: None };
+    let mut options = Options { seed: 1, bots: 0, verify: false, login: None, generated: false };
     let (mut url, mut name, mut key) = (None, None, None);
     let mut args = args.skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--verify" => options.verify = true,
+            "--generated" => options.generated = true,
             "--seed" => options.seed = number(&arg, args.next())?,
             "--bots" => options.bots = number(&arg, args.next())?,
             "--connect" => url = Some(args.next().ok_or("--connect needs an address")?),
@@ -86,7 +89,11 @@ fn prompt(solo: &Solo, out: &mut impl Write) -> io::Result<()> {
 /// Plays until the input ends or the player quits. Returns `false` only
 /// if `--verify` was asked for and the replay did not match.
 fn run(options: &Options, input: impl BufRead, mut out: impl Write, echo: bool) -> io::Result<bool> {
-    let mut solo = Solo::with_company(options.seed, options.bots);
+    let mut solo = if options.generated {
+        Solo::in_generated_territory(options.seed)
+    } else {
+        Solo::with_company(options.seed, options.bots)
+    };
     writeln!(out, "{INTRO}\n\n{}", solo.look())?;
     prompt(&solo, &mut out)?;
 
@@ -152,7 +159,7 @@ mod tests {
 
     #[test]
     fn a_session_reads_as_a_transcript() {
-        let (text, passed) = transcript(&Options { seed: 1, bots: 0, verify: false, login: None }, "north\ngather\nquit\nlook\n");
+        let (text, passed) = transcript(&Options { seed: 1, bots: 0, verify: false, login: None, generated: false }, "north\ngather\nquit\nlook\n");
         assert!(passed);
         assert!(text.starts_with("EQUILIBRIUM"));
         assert!(text.contains("Tidewatch Camp [haven]"));
@@ -163,14 +170,14 @@ mod tests {
 
     #[test]
     fn verify_reports_the_replay_check() {
-        let (text, passed) = transcript(&Options { seed: 3, bots: 0, verify: true, login: None }, "east\ngather\nwait 5m\n");
+        let (text, passed) = transcript(&Options { seed: 3, bots: 0, verify: true, login: None, generated: false }, "east\ngather\nwait 5m\n");
         assert!(passed);
         assert!(text.contains("Replay check passed: 2 commands over 335 ticks rebuilt the same world."));
     }
 
     #[test]
     fn bots_share_the_shoreline_and_the_replay_still_matches() {
-        let (text, passed) = transcript(&Options { seed: 1, bots: 3, verify: true, login: None }, "look\nwait 10m\n");
+        let (text, passed) = transcript(&Options { seed: 1, bots: 3, verify: true, login: None, generated: false }, "look\nwait 10m\n");
         assert!(passed);
         assert!(text.contains("Also here: Ash, Bryn, Cole."));
         assert!(text.contains("leaves for"));
@@ -186,13 +193,23 @@ mod tests {
         let args = |list: &[&str]| parse_args(list.iter().map(|arg| arg.to_string()));
         assert_eq!(
             args(&["eq", "--seed", "42", "--bots", "3", "--verify"]),
-            Ok(Options { seed: 42, bots: 3, verify: true, login: None })
+            Ok(Options { seed: 42, bots: 3, verify: true, login: None, generated: false })
         );
-        assert_eq!(args(&["eq"]), Ok(Options { seed: 1, bots: 0, verify: false, login: None }));
+        assert_eq!(args(&["eq"]), Ok(Options { seed: 1, bots: 0, verify: false, login: None, generated: false }));
         assert!(args(&["eq", "--bots", "-1"]).is_err());
         assert!(args(&["eq", "--seed"]).is_err());
         assert!(args(&["eq", "--seed", "x"]).is_err());
         assert!(args(&["eq", "--fast"]).is_err());
+    }
+
+    #[test]
+    fn a_generated_territory_is_a_different_place_for_each_seed() {
+        let options = |seed| Options { seed, bots: 0, verify: true, login: None, generated: true };
+        let (first, passed) = transcript(&options(1), "look\n");
+        let (second, _) = transcript(&options(2), "look\n");
+        assert!(passed && first.contains("[haven]") && first.contains("Replay check passed"), "{first}");
+        assert_ne!(first, second);
+        assert!(!first.contains("Tidewatch Camp"));
     }
 
     #[test]

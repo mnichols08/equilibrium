@@ -80,7 +80,14 @@ impl Game {
     /// A fresh world with one character per name, all at the starting
     /// place. The same seed and names always play out the same way.
     pub fn new(seed: u64, names: &[&str]) -> Self {
-        let (map, start) = content::rocky_shoreline();
+        let (map, anchor) = content::rocky_shoreline();
+        Self::in_territory(seed, names, crate::territory::Territory { map, anchor })
+    }
+
+    /// A fresh world in `territory`, with one character per name, all
+    /// at its anchor.
+    pub fn in_territory(seed: u64, names: &[&str], territory: crate::territory::Territory) -> Self {
+        let (map, start) = (territory.map, territory.anchor);
         let mut occupancy = Occupancy::new(map.len());
         let characters: Vec<Character> = names.iter().map(|name| Character::new(name, start)).collect();
         for index in 0..characters.len() {

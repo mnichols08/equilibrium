@@ -37,6 +37,9 @@ const COMPANIONS: [&str; 8] = ["Ash", "Bryn", "Cole", "Dara", "Eli", "Fen", "Gil
 pub struct Solo {
     seed: u64,
     company: usize,
+    /// Whether the world is a territory made from the seed, not the
+    /// hand-built Rocky Shoreline.
+    generated: bool,
     session: Session<Game>,
     bots: Bots,
 }
@@ -55,7 +58,13 @@ impl Solo {
     /// careful, with a greedy one among every four.
     pub fn with_company(seed: u64, company: usize) -> Self {
         let crew = Plan::company(company).into_iter().enumerate().map(|(index, plan)| (companion_id(index), plan));
-        Self { seed, company, session: Session::new(fresh_world(seed, company)), bots: Bots::new(crew) }
+        Self { seed, company, generated: false, session: Session::new(fresh_world(seed, company, false)), bots: Bots::new(crew) }
+    }
+
+    /// Starts a game alone in a territory made from `seed`: a haven and
+    /// nine places to work, laid out differently for every seed.
+    pub fn in_generated_territory(seed: u64) -> Self {
+        Self { seed, company: 0, generated: true, session: Session::new(fresh_world(seed, 0, true)), bots: Bots::new([]) }
     }
 
     /// The world as it stands.
@@ -93,7 +102,7 @@ impl Solo {
     /// Replays the command log from scratch and says whether it rebuilds
     /// exactly this world.
     pub fn replays_identically(&self) -> bool {
-        let (rebuilt, _) = replay(fresh_world(self.seed, self.company), self.session.log(), self.now());
+        let (rebuilt, _) = replay(fresh_world(self.seed, self.company, self.generated), self.session.log(), self.now());
         &rebuilt == self.game()
     }
 
@@ -173,13 +182,17 @@ const fn companion_id(index: usize) -> CharacterId {
 }
 
 /// The world a game starts from: the player, then their company.
-fn fresh_world(seed: u64, company: usize) -> Game {
+fn fresh_world(seed: u64, company: usize, generated: bool) -> Game {
     let strangers: Vec<String> = (COMPANIONS.len()..company).map(|index| format!("Stranger {}", index + 1)).collect();
     let names: Vec<&str> = core::iter::once("You")
         .chain(COMPANIONS.into_iter().take(company))
         .chain(strangers.iter().map(String::as_str))
         .collect();
-    Game::new(seed, &names)
+    if generated {
+        Game::in_territory(seed, &names, crate::territory::generate(seed))
+    } else {
+        Game::new(seed, &names)
+    }
 }
 
 /// Folds a run of identical lines into one, so a companion gathering
@@ -320,6 +333,36 @@ mod tests {
         let lines = solo.handle("wait 30m").lines;
         assert!(lines.iter().any(|line| line.starts_with("Ash arrives from ")), "{lines:?}");
         assert!(!lines.iter().any(|line| line.contains("gathers")), "the player never left camp: {lines:?}");
+    }
+
+    #[test]
+    fn a_generated_territory_can_be_walked_end_to_end_worked_and_replayed() {
+        for seed in [1, 2, 3] {
+            let mut solo = Solo::in_generated_territory(seed);
+            let map = solo.game().map().clone();
+            let anchor = solo.game().anchor();
+            // Walk to every place by the shortest way, waiting out the tide, and work what is there.
+            let targets: Vec<eq_world_graph::PlaceId> = map.places().map(|(id, _)| id).filter(|&id| id != anchor).collect();
+            let mut hauls = 0;
+            for target in targets {
+                for _ in 0..200 {
+                    let here = solo.game().character(Solo::YOU).unwrap().place();
+                    if here == target || solo.game().character(Solo::YOU).unwrap().is_spirit() {
+                        break;
+                    }
+                    let way = map.first_step(here, target, |_| true).unwrap().label.clone();
+                    if solo.handle(&way).lines.iter().any(|line| line.contains("flooded") || line.contains("tide")) {
+                        solo.handle("wait 1m");
+                    }
+                }
+                if solo.game().character(Solo::YOU).unwrap().is_spirit() {
+                    break;
+                }
+                hauls += usize::from(solo.handle("gather").lines.iter().any(|line| line.starts_with("You gather ")));
+            }
+            assert!(hauls >= 5, "seed {seed}: only {hauls} places could be worked");
+            assert!(solo.replays_identically(), "seed {seed}");
+        }
     }
 
     #[test]
