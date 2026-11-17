@@ -10,7 +10,7 @@ the browser.
 cargo run -p eq-cli
 ```
 
-One character on the Rocky Shoreline. Walk, gather, wait and watch what your choices do to the place. Type `help` in the game for commands.
+One character on the Rocky Shoreline (the rules support many; the terminal plays one). Walk, gather, wait and watch what your choices do to the place. Type `help` in the game for commands.
 
 - `--seed N` picks the world's random seed (default 1).
 - `--verify` replays your command log when you quit and checks it rebuilds the same world.
@@ -29,7 +29,7 @@ One character on the Rocky Shoreline. Walk, gather, wait and watch what your cho
 | `eq-world-graph` | Places joined by labelled exits that can open and close on a cycle |
 | `eq-nodes` | Resource nodes that regrow, and wear out when over-harvested |
 | `eq-skills` | Use-based proficiency with diminishing returns and a remembered peak |
-| `eq-game` | The first playable build: rules, map, tuning, parser and narrator |
+| `eq-game` | The first playable build: rules for many characters, map, tuning, parser and narrator |
 | `eq-cli` | Terminal client for `eq-game` |
 
 Every crate except `eq-cli` is `no_std` and builds for wasm. The crates above `eq-game` are usable without the game.

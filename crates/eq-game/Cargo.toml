@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 eq-clock = { path = "../eq-clock" }
 eq-events = { path = "../eq-events" }
+eq-ids = { path = "../eq-ids" }
 eq-meter = { path = "../eq-meter" }
 eq-nodes = { path = "../eq-nodes" }
 eq-rng = { path = "../eq-rng" }
