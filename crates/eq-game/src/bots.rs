@@ -14,7 +14,10 @@ use eq_events::{Events, OutOfOrder, Session};
 use eq_nodes::Quality;
 
 use crate::content::{CIRCUIT, DEPOSIT_ROUTES, MIN_WORKABLE_STOCK};
-use crate::{CharacterId, Command, Event, Game, Outcome};
+use crate::{CharacterId, Command, Event, Game, Outcome, Standing};
+
+/// A warden with less health than this leaves fighting to others.
+const HEALTH_TO_FIGHT: u32 = 40;
 
 /// How long a bot stands idle when there is nothing it wants to do.
 const IDLE: Duration = Duration::seconds(5);
@@ -80,17 +83,25 @@ pub struct Plan {
     pub approach: &'static [Leg],
     /// Exits walked round and round afterwards. Empty means stay put.
     pub circuit: &'static [Leg],
+    /// Whether it challenges marked characters it meets, and picks up
+    /// what they drop.
+    pub warden: bool,
 }
 
 impl Plan {
     /// Walks the whole shoreline, gathering wherever `policy` allows.
     pub const fn roam(policy: Policy) -> Self {
-        Self { policy, approach: &[], circuit: CIRCUIT }
+        Self { policy, approach: &[], circuit: CIRCUIT, warden: false }
     }
 
     /// Walks to one place and stays, gathering whenever `policy` allows.
     pub const fn camp(policy: Policy, approach: &'static [Leg]) -> Self {
-        Self { policy, approach, circuit: &[] }
+        Self { policy, approach, circuit: &[], warden: false }
+    }
+
+    /// The same plan, but challenging any marked character it meets.
+    pub const fn as_warden(self) -> Self {
+        Self { warden: true, ..self }
     }
 
     /// A small mixed cast for keeping a lone player company: mostly
@@ -167,13 +178,27 @@ impl Bots {
         (0..self.bots.len()).min_by_key(|&index| self.bots[index].free_at).filter(|&index| self.bots[index].free_at < until)
     }
 
-    /// One bot gathers if its policy says so, and otherwise walks the
-    /// next leg of its plan.
+    /// One bot's turn. In order of preference: a warden deals with a
+    /// marked character or with spoils on the ground; any bot gathers if
+    /// its policy says so; otherwise it walks the next leg of its plan.
     fn take_turn(&mut self, index: usize, session: &mut Session<Game>, events: &mut Events<Game>) -> Result<(), OutOfOrder> {
         let bot = &mut self.bots[index];
         let now = bot.free_at.max(session.now());
+        // Bring the world up to the bot's turn first, so it decides on
+        // what is there now and not on what was there when someone last
+        // acted.
+        events.extend(session.advance_to(now)?);
         let busy_until = |session: &Session<Game>| session.world().character(bot.who).map_or(now, |character| character.busy_until());
 
+        if let Some(until) = session.world().character(bot.who).and_then(|character| character.down_until()) {
+            bot.free_at = until.max(now + PAUSE);
+            return Ok(());
+        }
+        if let Some(duty) = warden_duty(session.world(), bot) {
+            events.extend(session.submit(now, duty)?);
+            bot.free_at = busy_until(session).max(now + PAUSE);
+            return Ok(());
+        }
         if bot.plan.policy.wants_to_gather(session.world(), bot.who) {
             events.extend(session.submit(now, Command::gather(bot.who))?);
             bot.free_at = busy_until(session).max(now + IDLE);
@@ -199,9 +224,72 @@ impl Bots {
     }
 }
 
+/// What a warden would do before anything else: challenge a marked
+/// character standing with it, or pick up what lies on the ground.
+fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
+    if !bot.plan.warden {
+        return None;
+    }
+    let me = game.character(bot.who)?;
+    let fit_to_fight = me.health() >= HEALTH_TO_FIGHT;
+    let marked = game.occupants(me.place()).iter().copied().find(|&other| {
+        game.character(other).is_some_and(|character| character.standing() == Standing::Marked)
+            && game.can_attack(bot.who, other).is_ok()
+    });
+    if let (true, Some(target)) = (fit_to_fight, marked) {
+        return Some(Command::attack(bot.who, target));
+    }
+    let spoils = game.place_of(bot.who)?.spoils.iter().any(|&amount| amount > 0);
+    spoils.then(|| Command::take(bot.who))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_warden_puts_down_a_marked_bot_and_takes_what_it_drops() {
+        let mut session = session(&["Ash", "Bryn"]);
+        let ledge = DEPOSIT_ROUTES[0];
+        let mut bots = Bots::new([
+            (ASH, Plan::camp(Policy::Careful, ledge).as_warden()),
+            (BRYN, Plan::camp(Policy::Greedy, ledge)),
+        ]);
+        let events = bots.run(&mut session, Tick::new(3_000)).unwrap();
+        let downed = Event::Character { who: BRYN, outcome: Outcome::Downed { by: ASH } };
+        assert!(events.iter().any(|stamped| stamped.value == downed), "Bryn was never put down");
+        assert!(events.iter().any(|stamped| {
+            matches!(stamped.value, Event::Character { who: ASH, outcome: Outcome::Took { .. } })
+        }));
+        assert!(!events.iter().any(|stamped| {
+            matches!(stamped.value, Event::Character { who: ASH, outcome: Outcome::Downed { .. } })
+        }));
+    }
+
+    #[test]
+    fn a_waiting_bot_sees_the_world_change_around_it() {
+        // A careful camper alone: once the ledge is no longer pristine it
+        // must wait, with nobody else acting, and notice when it heals.
+        let mut session = session(&["Ash"]);
+        let mut bots = Bots::new([(ASH, Plan::camp(Policy::Careful, DEPOSIT_ROUTES[0]))]);
+        bots.run(&mut session, Tick::new(1_000)).unwrap();
+        let early = session.world().character(ASH).unwrap().carried_total();
+        bots.run(&mut session, Tick::new(10_000)).unwrap();
+        let late = session.world().character(ASH).unwrap().carried_total();
+        assert!(late > early * 3, "it stopped noticing: {early} then {late}");
+    }
+
+    #[test]
+    fn bots_that_are_not_wardens_never_fight() {
+        let mut session = session(&["Ash", "Bryn"]);
+        let ledge = DEPOSIT_ROUTES[0];
+        let mut bots =
+            Bots::new([(ASH, Plan::camp(Policy::Careful, ledge)), (BRYN, Plan::camp(Policy::Greedy, ledge))]);
+        let events = bots.run(&mut session, Tick::new(3_000)).unwrap();
+        assert!(!events.iter().any(|stamped| {
+            matches!(stamped.value, Event::Character { outcome: Outcome::Struck { .. }, .. })
+        }));
+    }
 
     const ASH: CharacterId = CharacterId::new(0);
     const BRYN: CharacterId = CharacterId::new(1);

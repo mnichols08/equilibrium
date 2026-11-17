@@ -7,6 +7,7 @@ use eq_nodes::Quality;
 use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
+use crate::combat::Refusal;
 use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
 
 /// What came of one character's action.
@@ -64,6 +65,48 @@ pub enum Outcome {
         /// The new level.
         level: u32,
     },
+    /// They are down and cannot act yet.
+    Down {
+        /// When they will get up.
+        until: Tick,
+    },
+    /// They were not allowed to attack.
+    CannotAttack {
+        /// Who they meant to attack.
+        target: CharacterId,
+        /// Why not.
+        why: Refusal,
+    },
+    /// They landed a blow.
+    Struck {
+        /// Who they hit.
+        target: CharacterId,
+        /// The health it took.
+        damage: u32,
+    },
+    /// They took a blow.
+    Hurt {
+        /// Who hit them.
+        by: CharacterId,
+        /// The health it took.
+        damage: u32,
+        /// The health they have left.
+        health: u32,
+    },
+    /// They lost a fight. Everything they carried is on the ground.
+    Downed {
+        /// Who put them down.
+        by: CharacterId,
+    },
+    /// They got back on their feet.
+    Rose,
+    /// They picked up what lay on the ground.
+    Took {
+        /// How much of each resource, in pack order.
+        spoils: [u64; Resource::ALL.len()],
+    },
+    /// There was nothing on the ground to pick up.
+    NothingToTake,
     /// Their taint carried them from one standing to another.
     StandingChanged {
         /// Their standing before.

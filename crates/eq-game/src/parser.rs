@@ -20,6 +20,9 @@ pub const MAX_WAIT: Duration = Duration::days(1);
 pub enum Input {
     /// Have the player's character act.
     Do(Action),
+    /// Attack someone by name. The parser does not know who is here, so
+    /// whoever holds the game turns the name into a character.
+    Attack(String),
     /// Let time pass.
     Wait(Duration),
     /// Describe the current place.
@@ -55,6 +58,11 @@ pub fn parse(line: &str) -> Input {
         "help" | "?" => Input::Help,
         "quit" | "exit" | "q" => Input::Quit,
         "gather" | "g" | "mine" | "forage" | "harvest" => Input::Do(Action::Gather),
+        "take" | "loot" | "grab" => Input::Do(Action::Take),
+        "attack" | "fight" | "strike" | "hit" => match rest {
+            Some(name) => Input::Attack(name.into()),
+            None => Input::Unknown("Attack whom? Try \"attack bryn\".".into()),
+        },
         "wait" | "rest" | "z" => parse_wait(rest),
         "go" | "walk" | "enter" => match rest {
             Some(label) => go(label),
@@ -123,6 +131,15 @@ mod tests {
         for word in ["gather", "g", "mine", "forage", "harvest", "GATHER"] {
             assert_eq!(parse(word), Input::Do(Action::Gather), "{word}");
         }
+    }
+
+    #[test]
+    fn fighting_and_taking() {
+        assert_eq!(parse("attack Bryn"), Input::Attack("bryn".into()));
+        assert_eq!(parse("hit cole"), Input::Attack("cole".into()));
+        assert!(matches!(parse("attack"), Input::Unknown(_)));
+        assert_eq!(parse("take"), Input::Do(Action::Take));
+        assert_eq!(parse("loot"), Input::Do(Action::Take));
     }
 
     #[test]

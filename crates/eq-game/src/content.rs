@@ -56,6 +56,49 @@ pub const YIELD_LOST_AT_FULL_TAINT: u32 = 75;
 /// combat exists; until then the mark is only recorded and shown.
 pub const STANDING_BANDS: Bands<Standing, 1> = Bands::new(Standing::Clean, [(50, Standing::Marked)]);
 
+/// The most health a character can have.
+pub const MAX_HEALTH: i64 = 100;
+
+/// How long one exchange of blows takes the attacker.
+pub const ATTACK_TIME: Duration = Duration::seconds(3);
+
+/// Health a blow takes before anything else is counted.
+pub const BASE_DAMAGE: u32 = 12;
+
+/// A blow adds `0..DAMAGE_SPREAD` to its base.
+pub const DAMAGE_SPREAD: u64 = 7;
+
+/// Percentage points of damage per level of the attacker's Vigor.
+pub const DAMAGE_PERCENT_PER_VIGOR: u32 = 1;
+
+/// Levels of the defender's Resilience that turn aside one percent of a blow.
+pub const RESILIENCE_PER_PERCENT_RESISTED: u32 = 2;
+
+/// The most of a blow that Resilience can turn aside, as a percentage.
+pub const MOST_DAMAGE_RESISTED: u32 = 50;
+
+/// The share of their damage a fully tainted character loses, as a
+/// percentage. A clean challenger has the better of a marked one.
+pub const DAMAGE_LOST_AT_FULL_TAINT: u32 = 50;
+
+/// How often health mends by itself.
+pub const HEALTH_MENDS_EVERY: Duration = Duration::seconds(10);
+
+/// Health mended each time in the wilderness and in contested places.
+pub const MENDING: i64 = 1;
+
+/// Health mended each time in a haven.
+pub const HAVEN_MENDING: i64 = 5;
+
+/// How long a character stays down after losing a fight.
+pub const DOWNED_TIME: Duration = Duration::minutes(5);
+
+/// The health a character has when they get back up.
+pub const HEALTH_ON_RISING: i64 = 25;
+
+/// How long it takes to pick up what lies on the ground.
+pub const TAKE_TIME: Duration = Duration::seconds(5);
+
 /// How skills grow: about a hundred units gathered for the first level.
 pub const SKILL_RULES: Rules = Rules { cap: 100, xp_per_level: 100 };
 
@@ -80,8 +123,8 @@ impl Health {
     /// meant to be the fast way out.
     pub const fn growth(self) -> u32 {
         match self {
-            Self::Peak => 30,
-            Self::Balanced => 20,
+            Self::Peak => 60,
+            Self::Balanced => 40,
             Self::Collapsed => 1,
         }
     }
@@ -158,7 +201,7 @@ const fn place(
         Some(resource) => Some(Deposit { resource, node: Node::new(resource.node()) }),
         None => None,
     };
-    Place { name, description, safety, deposit, position }
+    Place { name, description, safety, deposit, spoils: [0; Resource::ALL.len()], position }
 }
 
 /// Builds the Rocky Shoreline and returns it with the starting place.

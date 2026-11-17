@@ -1,7 +1,7 @@
 <!--
   The shoreline seen from above: places as tiles, the ways between them as lines.
   Tiles are coloured by how worn their deposit is. Press a neighbouring tile to walk there.
-  @prop {{ id: number, name: string, x: number, y: number, safety: string, here: boolean, deposit: null | { resource: string, stock_percent: number, quality: string, pressure: number }, people: { name: string, you: boolean, marked: boolean }[] }[]} places - Every place in the zone.
+  @prop {{ id: number, name: string, x: number, y: number, safety: string, here: boolean, deposit: null | { resource: string, stock_percent: number, quality: string, pressure: number }, people: { name: string, you: boolean, marked: boolean, down: boolean }[], spoils: boolean }[]} places - Every place in the zone.
   @prop {{ from: number, to: number, tidal: boolean, open: boolean }[]} links - Every way between two places.
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
   @fires travel - A neighbouring tile was pressed; `detail` is the exit's label.
@@ -53,6 +53,7 @@
       hasDeposit: Boolean(place.deposit),
       others: others.length,
       marked: others.some((person) => person.marked),
+      spoils: place.spoils,
       exit: exit && exit.open ? exit.label : '',
       blocked: Boolean(exit) && !exit.open,
       summary: describe(place, exit),
@@ -68,6 +69,7 @@
   function describe(place, exit) {
     const parts = [place.name, place.safety]
     if (place.deposit) parts.push(`${place.deposit.resource} ${place.deposit.stock_percent}% left, ${place.deposit.quality}`)
+    if (place.spoils) parts.push('something lies on the ground')
     if (place.here) parts.push('you are here')
     else if (exit) parts.push(exit.open ? `press to go ${exit.label}` : `${exit.label} is under water`)
     return parts.join(', ')
@@ -109,6 +111,7 @@
   .other { fill: var(--eq-other, #6b5b95); stroke: #fff; stroke-width: 1; }
   .other.marked { fill: var(--eq-marked, #a3262a); }
   .count { font-size: 9px; fill: var(--eq-ink, #24221e); }
+  .spoils { fill: var(--eq-spoils, #c9a227); stroke: var(--eq-edge, #3d3a34); stroke-width: 1; }
 </style>
 <eq-map places={[]} links={[]} exits={[]}>
   <svg viewBox={viewBox} role="group" aria-label="Map of the shoreline">
@@ -143,6 +146,9 @@
         <zb-if test={tile.others > 0}>
           <circle class="other" class:marked={tile.marked} cx="46" cy="66" r="6"></circle>
           <text class="count" x="56" y="69">{tile.others}</text>
+        </zb-if>
+        <zb-if test={tile.spoils}>
+          <rect class="spoils" x="65" y="61" width="9" height="9" transform="rotate(45 69.5 65.5)"></rect>
         </zb-if>
       </g>
     </zb-each>

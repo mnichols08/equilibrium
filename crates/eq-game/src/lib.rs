@@ -15,6 +15,7 @@
 //! - [`Game`]: the rules, as an [`eq_events::World`]. It holds a [`Zone`]
 //!   (map, deposits, vitality) and the [`Character`]s in it.
 //! - [`Haul`]: the sums behind a harvest.
+//! - [`combat`]: who may be attacked, and how hard a blow lands.
 //! - [`parser`]: text to intent.
 //! - [`narrate`]: events and state to text, for one viewer.
 //! - [`bots`]: simple characters that play by themselves.
@@ -30,6 +31,7 @@ extern crate alloc;
 
 pub mod bots;
 mod character;
+pub mod combat;
 mod command;
 pub mod content;
 mod event;

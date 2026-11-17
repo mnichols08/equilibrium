@@ -8,12 +8,16 @@ use eq_rng::Rng;
 use eq_world_graph::{Graph, PlaceId};
 
 use crate::character::{Character, CharacterId};
+use crate::combat::{may_attack, Blow, Refusal};
 use crate::command::{Action, Command};
-use crate::content::{self, BASE_EFFORT, EFFORT_SPREAD, GATHER_TIME, MIN_WORKABLE_STOCK, TAINT_FADES_EVERY, TRAVEL_TIME};
+use crate::content::{
+    self, ATTACK_TIME, BASE_EFFORT, DAMAGE_SPREAD, DOWNED_TIME, EFFORT_SPREAD, GATHER_TIME, HAVEN_MENDING,
+    HEALTH_MENDS_EVERY, MENDING, MIN_WORKABLE_STOCK, TAINT_FADES_EVERY, TAKE_TIME, TRAVEL_TIME,
+};
 use crate::event::{Event, Outcome};
 use crate::haul::{pressure_percent, taint_for, Haul};
 use crate::occupancy::Occupancy;
-use crate::types::{Health, Place, Standing};
+use crate::types::{Attribute, Health, Place, Safety, Standing};
 use crate::zone::Zone;
 
 /// The whole world: one zone and the characters in it.
@@ -23,6 +27,8 @@ pub struct Game {
     zone: Zone,
     characters: Vec<Character>,
     occupancy: Occupancy,
+    /// Everyone who is down, so the tick need not search for them.
+    fallen: Vec<CharacterId>,
 }
 
 impl Game {
@@ -35,7 +41,7 @@ impl Game {
         for index in 0..characters.len() {
             occupancy.enter(start, id_at(index));
         }
-        Self { rng: Rng::from_seed(seed), zone: Zone::new(map), characters, occupancy }
+        Self { rng: Rng::from_seed(seed), zone: Zone::new(map), characters, occupancy, fallen: Vec::new() }
     }
 
     /// A character, if the id belongs to this world.
@@ -83,6 +89,24 @@ impl Game {
         self.zone.health()
     }
 
+    /// Whether `attacker` may trade blows with `target` right now.
+    pub fn can_attack(&self, attacker: CharacterId, target: CharacterId) -> Result<(), Refusal> {
+        if attacker == target {
+            return Err(Refusal::Yourself);
+        }
+        let (Some(aggressor), Some(victim)) = (self.character(attacker), self.character(target)) else {
+            return Err(Refusal::NotHere);
+        };
+        if aggressor.place() != victim.place() {
+            return Err(Refusal::NotHere);
+        }
+        if victim.is_down() {
+            return Err(Refusal::AlreadyDown);
+        }
+        let safety = self.place_of(attacker).map_or(Safety::Haven, |place| place.safety);
+        may_attack(safety, victim.standing())
+    }
+
     /// Everyone who should be told about `event`, in id order.
     ///
     /// This is who is close enough to notice, not who the event is about.
@@ -101,7 +125,8 @@ impl Game {
     }
 
     /// The actor always learns their own outcome. Bystanders see only
-    /// what is visible: coming, going, gathering and being marked.
+    /// what is visible: coming, going, gathering, being marked, blows
+    /// landing, falling, rising and picking things up.
     fn audience_of_outcome(&self, who: CharacterId, outcome: &Outcome) -> Vec<CharacterId> {
         let mut audience = alloc::vec![who];
         let here = self.character(who).map(Character::place);
@@ -110,7 +135,16 @@ impl Game {
                 audience.extend_from_slice(self.occupants(*from));
                 audience.extend_from_slice(self.occupants(*to));
             }
-            Outcome::Gathered { .. } | Outcome::StandingChanged { to: Standing::Marked, .. } => {
+            // The one who was struck hears of it as their own `Hurt`.
+            Outcome::Struck { target, .. } => {
+                let bystanders = here.map_or(&[][..], |place| self.occupants(place));
+                audience.extend(bystanders.iter().filter(|&&other| other != *target));
+            }
+            Outcome::Gathered { .. }
+            | Outcome::StandingChanged { to: Standing::Marked, .. }
+            | Outcome::Downed { .. }
+            | Outcome::Rose
+            | Outcome::Took { .. } => {
                 audience.extend_from_slice(here.map_or(&[], |place| self.occupants(place)));
             }
             _ => {}
@@ -123,6 +157,10 @@ impl Game {
     }
 
     fn act(&mut self, index: usize, action: &Action, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        if let Some(until) = self.characters[index].down_until() {
+            outcomes.push(Outcome::Down { until });
+            return;
+        }
         let busy_until = self.characters[index].busy_until();
         if now < busy_until {
             outcomes.push(Outcome::Busy { until: busy_until });
@@ -131,7 +169,107 @@ impl Game {
         match action {
             Action::Go(label) => self.go(index, label, now, outcomes),
             Action::Gather => self.gather(index, now, outcomes, events),
+            Action::Attack(target) => self.attack(index, *target, now, outcomes, events),
+            Action::Take => self.take(index, now, outcomes),
         }
+    }
+
+    /// One exchange: the attacker strikes, and the target, if still
+    /// standing, strikes back.
+    fn attack(&mut self, index: usize, target: CharacterId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let attacker = id_at(index);
+        if let Err(why) = self.can_attack(attacker, target) {
+            outcomes.push(Outcome::CannotAttack { target, why });
+            return;
+        }
+        let Some(victim) = self.index_of(target) else { return };
+        self.characters[index].busy_until = now + ATTACK_TIME;
+
+        let (damage, health) = self.strike(index, victim);
+        outcomes.push(Outcome::Struck { target, damage });
+        events.push(Event::Character { who: target, outcome: Outcome::Hurt { by: attacker, damage, health } });
+        if health == 0 {
+            self.fell(victim, attacker, now, events);
+            return;
+        }
+
+        let (damage, health) = self.strike(victim, index);
+        events.push(Event::Character { who: target, outcome: Outcome::Struck { target: attacker, damage } });
+        outcomes.push(Outcome::Hurt { by: target, damage, health });
+        if health == 0 {
+            self.fell(index, target, now, events);
+        }
+    }
+
+    /// Lands one blow and returns the damage done and the health left.
+    fn strike(&mut self, striker: usize, struck: usize) -> (u32, u32) {
+        // DAMAGE_SPREAD is tiny, so the cast cannot truncate.
+        let roll = self.rng.below(DAMAGE_SPREAD) as u32;
+        let blow = Blow {
+            roll,
+            vigor: self.characters[striker].attribute(Attribute::Vigor).level(),
+            taint: self.characters[striker].taint(),
+            resilience: self.characters[struck].attribute(Attribute::Resilience).level(),
+        };
+        let damage = blow.damage();
+        (damage, self.characters[struck].hurt(damage))
+    }
+
+    /// Puts a character down: what they carried spills where they stand.
+    fn fell(&mut self, index: usize, by: CharacterId, now: Tick, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let character = &mut self.characters[index];
+        let (dropped, cleansed) = character.fall(now + DOWNED_TIME);
+        if let Some(place) = self.zone.map_mut().place_mut(character.place()) {
+            for (lying, more) in place.spoils.iter_mut().zip(dropped) {
+                *lying += more;
+            }
+        }
+        self.fallen.push(who);
+        events.push(Event::Character { who, outcome: Outcome::Downed { by } });
+        events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
+    }
+
+    fn take(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let character = &mut self.characters[index];
+        let spoils = self.zone.map_mut().place_mut(character.place()).map(|place| core::mem::take(&mut place.spoils));
+        match spoils {
+            Some(spoils) if spoils.iter().any(|&amount| amount > 0) => {
+                character.stow_all(spoils);
+                character.busy_until = now + TAKE_TIME;
+                outcomes.push(Outcome::Took { spoils });
+            }
+            _ => outcomes.push(Outcome::NothingToTake),
+        }
+    }
+
+    /// Health mends slowly everywhere and quickly in a haven. Those who
+    /// are down mend only by getting up.
+    fn mend(&mut self, now: Tick) {
+        if !now.get().is_multiple_of(HEALTH_MENDS_EVERY.as_ticks()) {
+            return;
+        }
+        let map = self.zone.map();
+        for character in self.characters.iter_mut().filter(|character| !character.is_down()) {
+            let in_haven = map.place(character.place()).is_some_and(|place| place.safety == Safety::Haven);
+            character.mend(if in_haven { HAVEN_MENDING } else { MENDING });
+        }
+    }
+
+    /// Gets everyone up whose time on the ground is over.
+    fn raise_the_fallen(&mut self, now: Tick, events: &mut Vec<Event>) {
+        let characters = &mut self.characters;
+        self.fallen.retain(|&who| {
+            let Some(character) = usize::try_from(who.get()).ok().and_then(|index| characters.get_mut(index)) else {
+                return false;
+            };
+            let still_down = character.down_until().is_some_and(|until| now < until);
+            if !still_down {
+                character.rise();
+                events.push(Event::Character { who, outcome: Outcome::Rose });
+            }
+            still_down
+        });
     }
 
     fn go(&mut self, index: usize, label: &str, now: Tick, outcomes: &mut Vec<Outcome>) {
@@ -217,6 +355,8 @@ impl World for Game {
     fn tick(&mut self, now: Tick, events: &mut Vec<Event>) {
         self.zone.tick(now, events);
         self.fade_taint(now, events);
+        self.mend(now);
+        self.raise_the_fallen(now, events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
@@ -271,6 +411,153 @@ mod tests {
         let cleansed = Outcome::StandingChanged { from: Standing::Marked, to: Standing::Clean };
         assert!(events.contains(&Event::Character { who: ASH, outcome: cleansed }));
         assert_eq!(game.character(ASH).unwrap().taint(), 0);
+    }
+
+    /// Ash and Bryn on the Ore Ledge, with Bryn having stripped it and
+    /// been marked. Returns the world and the tick it has reached.
+    fn bryn_marked_on_the_ledge() -> (Game, u64) {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        game.apply(&Command::go(BRYN, "north"), Tick::new(0), &mut events);
+        let mut now = 30;
+        while game.character(BRYN).unwrap().standing() == Standing::Clean {
+            game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
+            now += GATHER_TIME.as_ticks();
+        }
+        (game, now)
+    }
+
+    /// Ash attacks Bryn until one of them is down. Returns every event.
+    fn fight_to_the_end(game: &mut Game, mut now: u64) -> (Vec<Event>, u64) {
+        let mut events = Vec::new();
+        while !game.character(ASH).unwrap().is_down() && !game.character(BRYN).unwrap().is_down() {
+            game.apply(&Command::attack(ASH, BRYN), Tick::new(now), &mut events);
+            now += ATTACK_TIME.as_ticks();
+        }
+        (events, now)
+    }
+
+    #[test]
+    fn the_clean_cannot_be_attacked_in_the_wilderness_and_nobody_can_in_a_haven() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        assert_eq!(game.can_attack(ASH, BRYN), Err(Refusal::Haven));
+        assert_eq!(game.can_attack(ASH, ASH), Err(Refusal::Yourself));
+
+        let mut events = Vec::new();
+        game.apply(&Command::go(ASH, "north"), Tick::new(0), &mut events);
+        assert_eq!(game.can_attack(ASH, BRYN), Err(Refusal::NotHere));
+        game.apply(&Command::go(BRYN, "north"), Tick::new(0), &mut events);
+        assert_eq!(game.can_attack(ASH, BRYN), Err(Refusal::Unmarked));
+
+        game.apply(&Command::attack(ASH, BRYN), Tick::new(30), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotAttack { target: BRYN, why: Refusal::Unmarked }));
+        assert_eq!(game.character(BRYN).unwrap().health(), 100);
+    }
+
+    #[test]
+    fn anyone_can_be_attacked_on_contested_ground() {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        let mut events = Vec::new();
+        for (tick, exit) in [(0, "east"), (30, "cave")] {
+            game.apply(&Command::go(ASH, exit), Tick::new(tick), &mut events);
+            game.apply(&Command::go(BRYN, exit), Tick::new(tick), &mut events);
+        }
+        assert_eq!(game.can_attack(ASH, BRYN), Ok(()));
+    }
+
+    #[test]
+    fn an_exchange_hurts_both_and_the_marked_one_hits_softer() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::attack(ASH, BRYN), Tick::new(now), &mut events);
+
+        let (ash, bryn) = (game.character(ASH).unwrap(), game.character(BRYN).unwrap());
+        assert!(bryn.health() < ash.health(), "Ash {} vs Bryn {}", ash.health(), bryn.health());
+        assert!(ash.health() < 100, "Bryn should have struck back");
+        assert_eq!(ash.busy_until(), Tick::new(now) + ATTACK_TIME);
+        let kinds: Vec<&Event> = events.iter().collect();
+        assert!(matches!(kinds[0], Event::Character { who: ASH, outcome: Outcome::Struck { target: BRYN, .. } }));
+        assert!(matches!(kinds[1], Event::Character { who: ASH, outcome: Outcome::Hurt { by: BRYN, .. } }));
+        assert!(matches!(kinds[2], Event::Character { who: BRYN, outcome: Outcome::Hurt { by: ASH, .. } }));
+        assert!(matches!(kinds[3], Event::Character { who: BRYN, outcome: Outcome::Struck { target: ASH, .. } }));
+    }
+
+    #[test]
+    fn the_loser_goes_down_drops_everything_and_pays_off_the_mark() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let carried = game.character(BRYN).unwrap().carried(Resource::Ore);
+        assert!(carried > 0);
+
+        let (events, now) = fight_to_the_end(&mut game, now);
+
+        let bryn = game.character(BRYN).unwrap();
+        assert!(bryn.is_down() && !game.character(ASH).unwrap().is_down(), "the clean challenger should win");
+        assert_eq!((bryn.carried_total(), bryn.taint(), bryn.standing()), (0, 0, Standing::Clean));
+        assert_eq!(game.place_of(BRYN).unwrap().spoils[Resource::Ore.index()], carried);
+        assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::Downed { by: ASH } }));
+        let cleansed = Outcome::StandingChanged { from: Standing::Marked, to: Standing::Clean };
+        assert!(events.contains(&Event::Character { who: BRYN, outcome: cleansed }));
+
+        // Down means out of it: no acting, and no kicking them while down.
+        let mut events = Vec::new();
+        game.apply(&Command::gather(BRYN), Tick::new(now), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::Down { .. })));
+        assert_eq!(game.can_attack(ASH, BRYN), Err(Refusal::AlreadyDown));
+    }
+
+    #[test]
+    fn the_winner_can_take_the_spoils_once() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let carried = game.character(BRYN).unwrap().carried(Resource::Ore);
+        let (_, now) = fight_to_the_end(&mut game, now);
+
+        let mut events = Vec::new();
+        game.apply(&Command::take(ASH), Tick::new(now), &mut events);
+        assert_eq!(game.character(ASH).unwrap().carried(Resource::Ore), carried);
+        assert_eq!(game.place_of(ASH).unwrap().spoils, [0; Resource::ALL.len()]);
+
+        game.apply(&Command::take(ASH), Tick::new(now + TAKE_TIME.as_ticks()), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::NothingToTake));
+    }
+
+    #[test]
+    fn the_fallen_get_up_after_a_while_weak_but_standing() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let until = game.character(BRYN).unwrap().down_until().unwrap().get();
+
+        let mut events = Vec::new();
+        for tick in now..until {
+            game.tick(Tick::new(tick), &mut events);
+        }
+        assert!(game.character(BRYN).unwrap().is_down());
+        game.tick(Tick::new(until), &mut events);
+
+        let bryn = game.character(BRYN).unwrap();
+        assert!(!bryn.is_down());
+        assert_eq!(i64::from(bryn.health()), crate::content::HEALTH_ON_RISING);
+        assert_eq!(events.iter().filter(|event| matches!(event, Event::Character { outcome: Outcome::Rose, .. })).count(), 1);
+    }
+
+    #[test]
+    fn health_mends_slowly_in_the_wilds_and_quickly_in_a_haven() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::attack(ASH, BRYN), Tick::new(now), &mut events);
+        let hurt = game.character(ASH).unwrap().health();
+
+        for tick in now + 1..=now + 100 {
+            game.tick(Tick::new(tick), &mut events);
+        }
+        let in_the_wilds = game.character(ASH).unwrap().health() - hurt;
+        assert!((1..=10).contains(&in_the_wilds), "mended {in_the_wilds}");
+
+        game.apply(&Command::go(ASH, "south"), Tick::new(now + 100), &mut events);
+        for tick in now + 101..=now + 200 {
+            game.tick(Tick::new(tick), &mut events);
+        }
+        assert_eq!(game.character(ASH).unwrap().health(), 100);
     }
 
     #[test]

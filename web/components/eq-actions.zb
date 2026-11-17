@@ -1,6 +1,8 @@
 <!--
-  What you can do right now: walk out by an exit, gather, or let time pass.
+  What you can do right now: walk out by an exit, gather, pick things up, challenge someone, or let time pass.
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
+  @prop {{ name: string }[]} targets - Everyone here you may attack right now.
+  @prop {boolean} down - Whether you are down; if so only waiting is possible.
   @fires command - A button was pressed; `detail` is the line to send to the game, such as "north" or "wait 10m".
 -->
 <script>
@@ -21,20 +23,29 @@
     background: var(--eq-button, #f6f2e7); color: var(--eq-ink, #24221e); cursor: pointer;
   }
   button.primary { background: var(--eq-you, #1f4e79); color: #fff; border-color: transparent; }
+  button.danger { background: var(--eq-marked, #a3262a); color: #fff; border-color: transparent; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false}>
+<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} down={false}>
+  <div zb-if={targets.length > 0} role="group" aria-label="Challenge">
+    <zb-each items={targets} as="target" key={target.name}>
+      <button type="button" class="danger" disabled={down} onclick={() => emit('command', `attack ${target.name}`)}>
+        Attack {target.name}
+      </button>
+    </zb-each>
+  </div>
   <div role="group" aria-label="Go">
     <zb-each items={exits} as="exit" key={exit.label}>
-      <button type="button" disabled={!exit.open} onclick={() => emit('command', exit.label)}>
+      <button type="button" disabled={!exit.open || down} onclick={() => emit('command', exit.label)}>
         Go {exit.label}
         <small>{exit.open ? exit.to_name : "under water"}</small>
       </button>
     </zb-each>
   </div>
   <div role="group" aria-label="Do">
-    <button type="button" class="primary" disabled={!canGather} onclick={() => emit('command', 'gather')}>Gather</button>
+    <button type="button" class="primary" disabled={!canGather || down} onclick={() => emit('command', 'gather')}>Gather</button>
+    <button zb-if={canTake} type="button" class="primary" disabled={down} onclick={() => emit('command', 'take')}>Take what's here</button>
     <button type="button" onclick={() => emit('command', 'inspect')}>Inspect</button>
     <zb-each items={WAITS} as="wait" key={wait.line}>
       <button type="button" onclick={() => emit('command', wait.line)}>{wait.text}</button>
