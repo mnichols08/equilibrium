@@ -1,0 +1,20 @@
+[package]
+name = "eq-game"
+description = "The first playable build: one character on the Rocky Shoreline."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+eq-clock = { path = "../eq-clock" }
+eq-events = { path = "../eq-events" }
+eq-meter = { path = "../eq-meter" }
+eq-nodes = { path = "../eq-nodes" }
+eq-rng = { path = "../eq-rng" }
+eq-skills = { path = "../eq-skills" }
+eq-curve = { path = "../eq-curve" }
+eq-world-graph = { path = "../eq-world-graph" }

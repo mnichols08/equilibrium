@@ -1,0 +1,19 @@
+[package]
+name = "eq-cli"
+description = "Play Equilibrium in a terminal."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "equilibrium"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+eq-clock = { path = "../eq-clock" }
+eq-events = { path = "../eq-events" }
+eq-game = { path = "../eq-game" }

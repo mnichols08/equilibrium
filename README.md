@@ -4,6 +4,17 @@ A text-first MMO whose world is shaped by its players, built from small,
 reusable Rust crates that compile natively for the server and to wasm for
 the browser.
 
+## Play
+
+```sh
+cargo run -p eq-cli
+```
+
+One character on the Rocky Shoreline. Walk, gather, wait and watch what your choices do to the place. Type `help` in the game for commands.
+
+- `--seed N` picks the world's random seed (default 1).
+- `--verify` replays your command log when you quit and checks it rebuilds the same world.
+
 ## Crates
 
 | Crate | Job |
@@ -18,8 +29,10 @@ the browser.
 | `eq-world-graph` | Places joined by labelled exits that can open and close on a cycle |
 | `eq-nodes` | Resource nodes that regrow, and wear out when over-harvested |
 | `eq-skills` | Use-based proficiency with diminishing returns and a remembered peak |
+| `eq-game` | The first playable build: rules, map, tuning, parser and narrator |
+| `eq-cli` | Terminal client for `eq-game` |
 
-Every crate is `no_std` and usable without the game. `eq-events` and `eq-world-graph` need `alloc`.
+Every crate except `eq-cli` is `no_std` and builds for wasm. The crates above `eq-game` are usable without the game.
 
 ## Ground rules
 
@@ -33,5 +46,5 @@ Every crate is `no_std` and usable without the game. `eq-events` and `eq-world-g
 cargo test --workspace
 cargo clippy --workspace --all-targets
 rustup target add wasm32-unknown-unknown
-cargo build --workspace --target wasm32-unknown-unknown
+cargo build --workspace --exclude eq-cli --target wasm32-unknown-unknown
 ```
