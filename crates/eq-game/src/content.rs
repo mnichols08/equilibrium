@@ -192,6 +192,39 @@ pub const HEALTH_ON_RETURN: i64 = 25;
 /// as a percentage.
 pub const REBIRTH_CARRYOVER_PERCENT: u32 = 15;
 
+/// How long one draw of ectoplasm takes a spirit.
+pub const DRAW_TIME: Duration = Duration::seconds(10);
+
+/// The most ectoplasm a spirit can hold.
+pub const MOST_ECTOPLASM: u64 = 500;
+
+/// Ectoplasm spent at rebirth for each extra percent of the old life kept.
+pub const ECTOPLASM_PER_PERCENT: u64 = 20;
+
+/// The most that ectoplasm can add to an inheritance, in percent.
+pub const MOST_ECTOPLASM_BONUS_PERCENT: u32 = 15;
+
+/// Levels of Lineage for each extra percent of the old life kept.
+pub const LINEAGE_PER_PERCENT: u32 = 2;
+
+/// The most of an old life that any rebirth can keep, in percent.
+pub const MOST_CARRYOVER_PERCENT: u32 = 50;
+
+/// Lineage experience for each life lived to its end. Lineage is the
+/// one attribute that is never cut back at rebirth.
+pub const LINEAGE_XP_PER_LIFE: u64 = 500;
+
+/// How many times its share the attribute of the place of death keeps:
+/// die on the ore and the next life remembers the ore.
+pub const DEATH_PLACE_CARRYOVER_TIMES: u32 = 2;
+
+/// Attunement experience for each level the body wastes in too long a
+/// sleep. The spirit grows as the body fails.
+pub const AFFINITY_XP_PER_WASTED_LEVEL: u64 = 100;
+
+/// Ectoplasm ever drawn at which each spirit tier is reached.
+pub const SPIRIT_TIER_AT: [u64; 4] = [0, 100, 400, 1_000];
+
 /// Vitality a zone loses for each death in it. Small on purpose: one
 /// death is a scratch, and it takes a massacre to sicken a zone.
 pub const CORRUPTION_PER_DEATH: i64 = 2;

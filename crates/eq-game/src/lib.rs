@@ -43,6 +43,7 @@ mod occupancy;
 pub mod parser;
 pub mod rest;
 mod solo;
+pub mod spirit;
 mod types;
 mod zone;
 

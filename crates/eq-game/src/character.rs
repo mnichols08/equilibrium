@@ -10,11 +10,13 @@ use eq_skills::Proficiency;
 use eq_world_graph::PlaceId;
 
 use crate::content::{
-    ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, HEALTH_ON_RETURN, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
+    AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES, HEALTH_ON_RETURN,
+    LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
 use crate::rest::{atrophy, atrophy_floor, rest_gained, with_rested_bonus, FULLY_RESTED};
+use crate::spirit::{ectoplasm_per_draw, inheritance, SpiritTier};
 use crate::types::{Attribute, Passing, Resource, SkillKind, Standing};
 
 eq_ids::define_id!(
@@ -83,6 +85,24 @@ pub struct Character {
     rested: Meter,
     /// When sleep began, or will begin once they have settled.
     asleep_from: Option<Tick>,
+    /// Ectoplasm held. It is the one thing death does not take.
+    ectoplasm: u64,
+    /// Ectoplasm drawn over every life, which sets the spirit tier.
+    drawn: u64,
+    /// The share of the last life this one began with, as a percentage.
+    kept: u32,
+}
+
+/// How a new life begins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rebirth {
+    /// The share of the old life kept before Lineage and ectoplasm.
+    pub base: u32,
+    /// The attribute of the place of death, which keeps more.
+    pub favoured: Option<Attribute>,
+    /// Whether ectoplasm may be spent on a better inheritance. If not,
+    /// it is lost.
+    pub spend_ectoplasm: bool,
 }
 
 /// The attributes that waste when the body lies too long.
@@ -105,7 +125,43 @@ impl Character {
             degradation: Meter::empty(0, MOST_DEGRADATION),
             rested: Meter::full(0, FULLY_RESTED as i64),
             asleep_from: None,
+            ectoplasm: 0,
+            drawn: 0,
+            kept: 0,
         }
+    }
+
+    /// Ectoplasm held.
+    pub const fn ectoplasm(&self) -> u64 {
+        self.ectoplasm
+    }
+
+    /// How far the character has come as a spirit, over every life.
+    pub fn spirit_tier(&self) -> SpiritTier {
+        SpiritTier::of(self.drawn)
+    }
+
+    /// The share of the last life this one began with, as a percentage.
+    /// Zero in a first life.
+    pub const fn kept(&self) -> u32 {
+        self.kept
+    }
+
+    /// Draws ectoplasm from the place the spirit is in. Returns how
+    /// much was drawn and what else came of it.
+    pub(crate) fn draw(&mut self, outcomes: &mut Vec<Outcome>) -> u64 {
+        let attunement = &mut self.attributes[Attribute::Attunement.index()];
+        let amount = ectoplasm_per_draw(attunement.level()).min(MOST_ECTOPLASM - self.ectoplasm);
+        if attunement.practice(amount * ATTRIBUTE_XP_PER_UNIT, &ATTRIBUTE_RULES).levels_gained > 0 {
+            outcomes.push(Outcome::AttributeRose { attribute: Attribute::Attunement, level: attunement.level() });
+        }
+        let before = self.spirit_tier();
+        self.ectoplasm += amount;
+        self.drawn += amount;
+        if self.spirit_tier() != before {
+            outcomes.push(Outcome::SpiritRose { tier: self.spirit_tier() });
+        }
+        amount
     }
 
     /// How rested the character is, from 0 to 100.
@@ -155,11 +211,16 @@ impl Character {
         let levels = atrophy(slept);
         let body = BODY.map(Attribute::index);
         let attributes = self.attributes.iter_mut().enumerate().filter(|(index, _)| body.contains(index));
-        self.skills
+        let wasted: u32 = self
+            .skills
             .iter_mut()
             .chain(attributes.map(|(_, attribute)| attribute))
             .map(|proficiency| proficiency.lose(levels, atrophy_floor(proficiency.peak())))
-            .sum()
+            .sum();
+        // The spirit grows as the body fails.
+        let affinity = u64::from(wasted) * AFFINITY_XP_PER_WASTED_LEVEL;
+        self.attributes[Attribute::Attunement.index()].practice(affinity, &ATTRIBUTE_RULES);
+        wasted
     }
 
     /// Empties the pack and returns what was in it.
@@ -264,9 +325,19 @@ impl Character {
         Some(death.body)
     }
 
-    /// Begins a new life at `place`: whole and rested, with `carryover`
-    /// percent of what the last life learned and no memory of its peaks.
-    pub(crate) fn be_reborn(&mut self, place: PlaceId, now: Tick, carryover: u32) {
+    /// Begins a new life at `place`: whole and rested, with a share of
+    /// what the last life learned and no memory of its peaks.
+    ///
+    /// The share starts from `rebirth.base` and is raised by Lineage
+    /// and by ectoplasm, which is spent. The attribute of the place of
+    /// death keeps more than the rest. Lineage itself is never cut
+    /// back, and grows with every life lived.
+    pub(crate) fn be_reborn(&mut self, place: PlaceId, now: Tick, rebirth: Rebirth) {
+        let lineage = Attribute::Lineage.index();
+        let held = if rebirth.spend_ectoplasm { self.ectoplasm } else { 0 };
+        let inheritance = inheritance(rebirth.base, self.attributes[lineage].level(), held);
+        self.ectoplasm = held - inheritance.spent;
+        self.kept = inheritance.percent;
         self.death = None;
         self.forgotten = None;
         self.place = place;
@@ -274,9 +345,15 @@ impl Character {
         self.life += 1;
         self.health.set(MAX_HEALTH);
         self.rested.set(i64::from(FULLY_RESTED));
-        for proficiency in self.skills.iter_mut().chain(&mut self.attributes) {
-            *proficiency = proficiency.reborn(carryover);
+        let favoured = rebirth.favoured.map(Attribute::index);
+        for skill in &mut self.skills {
+            *skill = skill.reborn(inheritance.percent);
         }
+        for (index, attribute) in self.attributes.iter_mut().enumerate().filter(|(index, _)| *index != lineage) {
+            let times = if favoured == Some(index) { DEATH_PLACE_CARRYOVER_TIMES } else { 1 };
+            *attribute = attribute.reborn((inheritance.percent * times).min(100));
+        }
+        self.attributes[lineage].practice(LINEAGE_XP_PER_LIFE, &ATTRIBUTE_RULES);
     }
 
     /// What the character is called.
@@ -362,5 +439,72 @@ impl Character {
                 outcomes.push(Outcome::AttributeRose { attribute, level: progress.level() });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CAMP: PlaceId = PlaceId::new(0);
+
+    /// Someone who has mined enough ore to have levels worth losing.
+    fn miner() -> Character {
+        let mut miner = Character::new("Ash", CAMP);
+        let mut outcomes = Vec::new();
+        for _ in 0..400 {
+            miner.train(Resource::Ore, 12, &mut outcomes);
+        }
+        miner
+    }
+
+    fn rebirth(favoured: Option<Attribute>) -> Rebirth {
+        Rebirth { base: 15, favoured, spend_ectoplasm: true }
+    }
+
+    #[test]
+    fn the_attribute_of_the_place_of_death_keeps_twice_the_share() {
+        let before = miner();
+        let (vigor, resilience) = (before.attribute(Attribute::Vigor).level(), before.attribute(Attribute::Resilience).level());
+        assert!(vigor >= 10 && resilience >= 10, "not enough to test with: {vigor}, {resilience}");
+
+        let mut after = before.clone();
+        after.be_reborn(CAMP, Tick::ZERO, rebirth(Some(Attribute::Vigor)));
+        assert_eq!(after.attribute(Attribute::Vigor).level(), vigor * 30 / 100);
+        assert_eq!(after.attribute(Attribute::Resilience).level(), resilience * 15 / 100);
+        assert_eq!(after.kept(), 15);
+    }
+
+    #[test]
+    fn lineage_is_never_cut_back_and_raises_what_later_lives_keep() {
+        let mut ash = miner();
+        for life in 2..=8 {
+            let lineage = ash.attribute(Attribute::Lineage).level();
+            ash.be_reborn(CAMP, Tick::ZERO, rebirth(None));
+            assert_eq!(ash.life(), life);
+            assert!(ash.attribute(Attribute::Lineage).level() > lineage, "life {life} should add to Lineage");
+            assert_eq!(ash.kept(), 15 + lineage / 2);
+        }
+    }
+
+    #[test]
+    fn fading_loses_the_ectoplasm_with_everything_else() {
+        let mut ash = miner();
+        let mut outcomes = Vec::new();
+        for _ in 0..60 {
+            ash.draw(&mut outcomes);
+        }
+        assert_eq!(ash.ectoplasm(), 60);
+        ash.be_reborn(CAMP, Tick::ZERO, Rebirth { base: 5, favoured: None, spend_ectoplasm: false });
+        assert_eq!((ash.kept(), ash.ectoplasm()), (5, 0));
+        assert_eq!(ash.spirit_tier(), crate::spirit::SpiritTier::LostShade, "the tier counts what was ever drawn: 60");
+    }
+
+    #[test]
+    fn a_spirit_can_hold_only_so_much_ectoplasm() {
+        let mut ash = Character::new("Ash", CAMP);
+        let mut outcomes = Vec::new();
+        let drawn: u64 = (0..600).map(|_| ash.draw(&mut outcomes)).sum();
+        assert_eq!((drawn, ash.ectoplasm()), (MOST_ECTOPLASM, MOST_ECTOPLASM));
     }
 }

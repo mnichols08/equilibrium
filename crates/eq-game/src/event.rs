@@ -9,6 +9,7 @@ use eq_world_graph::PlaceId;
 use crate::character::CharacterId;
 use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal};
 use crate::creature::Being;
+use crate::spirit::SpiritTier;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
 
 /// What came of one character's action.
@@ -65,6 +66,18 @@ pub enum Outcome {
         attribute: Attribute,
         /// The new level.
         level: u32,
+    },
+    /// As a spirit, they drew ectoplasm from the place they are in.
+    Drew {
+        /// How much they drew.
+        amount: u64,
+        /// How much they now hold.
+        held: u64,
+    },
+    /// They reached a new spirit tier.
+    SpiritRose {
+        /// The tier reached.
+        tier: SpiritTier,
     },
     /// They are a spirit and have no hands for that.
     Bodiless,
