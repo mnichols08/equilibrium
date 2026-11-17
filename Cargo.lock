@@ -31,5 +31,27 @@ name = "eq-meter"
 version = "0.1.0"
 
 [[package]]
+name = "eq-nodes"
+version = "0.1.0"
+dependencies = [
+ "eq-meter",
+]
+
+[[package]]
 name = "eq-rng"
 version = "0.1.0"
+
+[[package]]
+name = "eq-skills"
+version = "0.1.0"
+dependencies = [
+ "eq-curve",
+]
+
+[[package]]
+name = "eq-world-graph"
+version = "0.1.0"
+dependencies = [
+ "eq-clock",
+ "eq-ids",
+]

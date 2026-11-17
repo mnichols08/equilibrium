@@ -15,8 +15,11 @@ the browser.
 | `eq-curve` | Deterministic, integer-only progression maths |
 | `eq-ledger` | Point pools with a cap per entry and a cap overall |
 | `eq-events` | Command log, tick-by-tick sessions and deterministic replay |
+| `eq-world-graph` | Places joined by labelled exits that can open and close on a cycle |
+| `eq-nodes` | Resource nodes that regrow, and wear out when over-harvested |
+| `eq-skills` | Use-based proficiency with diminishing returns and a remembered peak |
 
-Every crate is `no_std` and usable without the game. `eq-events` needs `alloc`.
+Every crate is `no_std` and usable without the game. `eq-events` and `eq-world-graph` need `alloc`.
 
 ## Ground rules
 
