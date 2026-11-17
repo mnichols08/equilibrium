@@ -31,10 +31,9 @@ Commands:
   sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
   rob <name>           go through the pack of someone asleep here
   return               as a spirit, go back into your body
-  seek                 as a spirit, search here for a memory of yourself:
-                       three, from three places, and you live again
   bury <name>          lay someone's body in the ground where it lies
-  gather               as a spirit, draw ectoplasm where the living would work
+  gather               as a spirit, practise where the living would work:
+                       reach level 10 in a skill there and you live again
   seek                 as a forgotten spirit, search here for a memory
   name <name>          at camp, speak a forgotten spirit's name to redeem it
   call <name>          as a founder, name your land (for good)
@@ -64,14 +63,16 @@ few days and the body starts to waste.
 If you are killed your body stays where it fell and you become a spirit.
 Get back to it within ten minutes and return. Leave it longer and it
 rises as a guard over what you dropped. Then, or if someone buries it,
-the only way back to the living is through the afterlife: seek three
-memories of yourself in three places that can be worked. You arise in
-whichever land has fewest people, with a little of what you knew.
+the only way back to the living is through the afterlife. Nothing can
+hurt you there, so it is the place to practise: gather where the living
+would work, learning each skill as if for the first time. Reach level
+10 in one and you arise in whichever land has fewest people, starting
+with whatever you practised.
 
-Someone standing at a body can bury it instead of taking what lies
-beside it. What was dropped goes into the ground. Whoever is buried
-remembers the life they had: in the next they learn it again fast, up
-to where they were.
+Death itself gives you nothing. But if nobody took what lay beside
+your body, or someone buried it, your next life remembers the last:
+skills you had come back four times as fast, up to where they stood.
+Someone standing at a body can bury it instead of looting it.
 
 Ectoplasm is the one thing you keep through death. At rebirth it is
 spent, twenty for each extra percent of the old life you keep, up to
@@ -193,13 +194,13 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             capitalise(&being_name(game, *by, viewer)),
         ),
         Outcome::BodyRose => {
-            "You left it too long. Your body has risen without you and stands guard over what you dropped. The way back to the living is through your memories now: seek three, in three places that can be worked.".into()
+            "You left it too long. Your body has risen without you and stands guard over what you dropped. The way back to the living is through the afterlife now: gather where the living would work, until you reach level 10 in a skill.".into()
         }
         Outcome::RelicSealed => {
             "The relic here is sealed. It opens for its owner, or once the body it belongs to is gone or brought down.".into()
         }
         Outcome::CannotReturn { why: ReturnRefusal::Risen } => {
-            "Your body has risen as a guard. There is no going back into it. Seek your memories to live again.".into()
+            "Your body has risen as a guard. There is no going back into it. Practise in the afterlife to live again.".into()
         }
         Outcome::Died { by: Cause::LongSleep, place, .. } => format!(
             "You slept too long. Your body has died where it lay at {}, and what you carried lies there. \
@@ -207,15 +208,18 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             place_name(game, *place),
         ),
         Outcome::CannotReturn { why: ReturnRefusal::Buried } => {
-            "Your body is in the ground. There is no going back into it. Seek your memories to live again.".into()
+            "Your body is in the ground. There is no going back into it. Practise in the afterlife to live again.".into()
         }
         Outcome::CannotReturn { why: ReturnRefusal::Unredeemed } => {
-            "There is no giving up and starting again. Return to your body if you still can, or seek three memories of yourself, in three places that can be worked, and live again.".into()
+            "There is no giving up and starting again. Return to your body if you still can, or practise in the afterlife: gather where the living would work until you reach level 10 in a skill.".into()
         }
-        Outcome::Unborn => "You have not lived yet. Every land was founded before you came, and nobody sent for you, so you begin as a spirit. Seek three memories, in three places that can be worked, and you will be born wherever the world has most need of people.".into(),
+        Outcome::Unborn => "You have not lived yet. Every land was founded before you came, and nobody sent for you, so you begin as a spirit. Nothing can hurt you here, so practise: gather where the living would work. Reach level 10 in a skill and you will be born wherever the world has most need of people, already knowing it.".into(),
+        Outcome::Practised { skill, level, needed } => {
+            format!("Your {} comes on in the afterlife: {level} of the {needed} that will carry you back to the living.", skill.name())
+        }
         Outcome::CannotBury { target } => format!("{}'s body does not lie here.", name_of(game, *target)),
         Outcome::Buried { target } => format!(
-            "You lay {} in the ground, and what they dropped with them. Their next life will remember this one.",
+            "You lay {} in the ground, and what they dropped with them. Nobody can disturb them now: their next life will remember this one.",
             name_of(game, *target),
         ),
         Outcome::WasBuried { by } => format!(
@@ -418,18 +422,15 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         lines.push("You are a spirit. The living cannot see you, and the tide is nothing to you.".into());
     }
     let needed = crate::content::MEMORIES_TO_REDEEM;
+    let practised = format!("Practised in the afterlife: level {} of {}.", character.best_practised(), crate::content::AFTERLIFE_LEVEL);
     match character.forgotten() {
-        Some(forgotten) if forgotten.unborn => {
-            lines.push(format!("You have not lived yet: {} of {needed} memories found.", forgotten.memories()));
-        }
+        Some(forgotten) if forgotten.unborn => lines.push(format!("You have not lived yet. {practised}")),
         Some(forgotten) => lines.push(format!(
             "You are forgotten: {} of {needed} memories found, {} left awake.",
             forgotten.memories(),
             span(REDEMPTION_CLOCK.saturating_sub(forgotten.played)),
         )),
-        None if character.is_spirit() => {
-            lines.push(format!("Memories found on the way back to the living: {} of {needed}.", character.memories().len()));
-        }
+        None if character.is_spirit() => lines.push(practised),
         None => {}
     }
     let zone = game.zone_at(character.place());

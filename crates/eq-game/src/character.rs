@@ -11,7 +11,7 @@ use eq_world_graph::PlaceId;
 
 use crate::content::{
     AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES, HEALTH_ON_RETURN,
-    LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
+    AFTERLIFE_LEVEL, AFTERLIFE_XP_PER_DRAW, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
@@ -42,8 +42,19 @@ pub struct Death {
     /// Whether the body has risen. There is no returning to it then.
     pub risen: bool,
     /// Whether someone buried the body. There is no returning to it,
-    /// but the next life will remember this one.
+    /// and nobody can disturb it.
     pub buried: bool,
+    /// Whether someone else took what lay beside the body. A life whose
+    /// body was disturbed is not remembered by the next.
+    pub disturbed: bool,
+}
+
+impl Death {
+    /// Whether the next life will remember this one, and so learn
+    /// again fast what it knew: the body was buried, or left in peace.
+    pub const fn is_remembered(&self) -> bool {
+        self.buried || !self.disturbed
+    }
 }
 
 /// A spirit whose body died in its sleep. It has no body to return to
@@ -90,9 +101,10 @@ pub struct Character {
     health: Meter,
     death: Option<Death>,
     forgotten: Option<Forgotten>,
-    /// The places where a dead spirit has recovered a memory of itself
-    /// on its way back to the living.
-    memories: Vec<PlaceId>,
+    /// What the spirit has practised in the afterlife since it left
+    /// the living. It is learned from nothing, and the next life
+    /// begins with it.
+    practised: [Proficiency; SkillKind::ALL.len()],
     /// Which life this is, counting the first as 1.
     life: u32,
     /// How worn the spirit is by recent deaths. It outlasts rebirth.
@@ -140,7 +152,7 @@ impl Character {
             health: Meter::full(0, MAX_HEALTH),
             death: None,
             forgotten: None,
-            memories: Vec::new(),
+            practised: [Proficiency::new(); SkillKind::ALL.len()],
             life: 1,
             degradation: Meter::empty(0, MOST_DEGRADATION),
             rested: Meter::full(0, FULLY_RESTED as i64),
@@ -373,23 +385,33 @@ impl Character {
         }
     }
 
-    /// The places where this spirit has recovered a memory of itself.
-    pub fn memories(&self) -> &[PlaceId] {
-        match &self.forgotten {
-            Some(forgotten) => &forgotten.found_in,
-            None => &self.memories,
+    /// Notes that someone else took what lay beside the body.
+    pub(crate) fn be_disturbed(&mut self) {
+        if let Some(death) = &mut self.death {
+            death.disturbed = true;
         }
     }
 
-    /// Records a memory recovered at `place`. Returns how many there are now.
-    pub(crate) fn remember(&mut self, place: PlaceId) -> u32 {
-        let found = match &mut self.forgotten {
-            Some(forgotten) => &mut forgotten.found_in,
-            None => &mut self.memories,
-        };
-        found.push(place);
-        // A world has only so many places.
-        found.len() as u32
+    /// How far the spirit has come in `skill` in the afterlife.
+    pub const fn practised(&self, skill: SkillKind) -> &Proficiency {
+        &self.practised[skill.index()]
+    }
+
+    /// The best the spirit has done in any one skill in the afterlife.
+    pub fn best_practised(&self) -> u32 {
+        self.practised.iter().map(Proficiency::level).max().unwrap_or(0)
+    }
+
+    /// Practises, as a spirit, the skill that working `resource` uses.
+    /// It is learned as if for the first time, whatever the living
+    /// character knew. Returns the level reached.
+    pub(crate) fn practise(&mut self, resource: Resource, outcomes: &mut Vec<Outcome>) -> u32 {
+        let skill = resource.skill();
+        let progress = &mut self.practised[skill.index()];
+        if progress.practice(AFTERLIFE_XP_PER_DRAW, &SKILL_RULES).levels_gained > 0 {
+            outcomes.push(Outcome::Practised { skill, level: progress.level(), needed: AFTERLIFE_LEVEL });
+        }
+        progress.level()
     }
 
     /// Marks the body as risen: it is a Body Guard now, and lost to its spirit.
@@ -402,7 +424,8 @@ impl Character {
     /// Goes back into the body, weak but alive. Returns where the body lay.
     pub(crate) fn return_to_body(&mut self) -> Option<PlaceId> {
         let death = self.death.take()?;
-        self.memories.clear();
+        // What was practised in the afterlife is only for a new life.
+        self.practised = [Proficiency::new(); SkillKind::ALL.len()];
         self.place = death.body;
         self.health.set(HEALTH_ON_RETURN);
         Some(death.body)
@@ -421,12 +444,14 @@ impl Character {
         let inheritance = inheritance(rebirth.base, self.attributes[lineage].level(), held);
         self.ectoplasm = held - inheritance.spent;
         self.kept = inheritance.percent;
-        // Whoever was buried remembers what they were, and learns it again fast.
-        let buried = self.death.is_some_and(|death| death.buried);
+        // A body buried or left in peace is remembered: what it knew
+        // comes back fast. What was practised in the afterlife comes
+        // along whole.
+        let remembered = self.death.is_some_and(|death| death.is_remembered());
+        let practised = core::mem::replace(&mut self.practised, [Proficiency::new(); SkillKind::ALL.len()]);
         let unborn = self.forgotten.as_ref().is_some_and(|forgotten| forgotten.unborn);
         self.death = None;
         self.forgotten = None;
-        self.memories.clear();
         self.place = place;
         self.home = place;
         self.busy_until = now;
@@ -436,14 +461,14 @@ impl Character {
         self.rested.set(i64::from(FULLY_RESTED));
         let favoured = rebirth.favoured.map(Attribute::index);
         let carry = |known: &Proficiency, percent: u32| {
-            if buried {
+            if remembered {
                 known.reborn_remembering(percent)
             } else {
                 known.reborn(percent)
             }
         };
-        for skill in &mut self.skills {
-            *skill = carry(skill, inheritance.percent);
+        for (skill, practised) in self.skills.iter_mut().zip(practised) {
+            *skill = carry(skill, inheritance.percent).at_least(practised.level());
         }
         for (index, attribute) in self.attributes.iter_mut().enumerate().filter(|(index, _)| *index != lineage) {
             let times = if favoured == Some(index) { DEATH_PLACE_CARRYOVER_TIMES } else { 1 };

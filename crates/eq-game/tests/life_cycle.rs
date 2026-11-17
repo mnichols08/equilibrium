@@ -70,18 +70,19 @@ fn a_life_ends_in_the_grotto_and_the_spirit_buys_a_better_next_one() {
     // By now the body has risen in the grotto. Nothing to go back to.
     assert!(said(&mut solo, "return").contains("risen as a guard") || said(&mut solo, "return").contains("not here"));
     assert!(said(&mut solo, "relinquish").contains("no giving up"));
-    // The long way: a memory here on the beach, and one on each ore shelf.
-    for way in ["seek", "west", "north", "seek", "north"] {
-        solo.handle(way);
+    // The way back is practice. Drawing on the beach has been foraging all along.
+    let mut reborn = String::new();
+    while you(&solo).is_spirit() {
+        reborn = said(&mut solo, "gather");
     }
-    let reborn = said(&mut solo, "seek");
     assert!(reborn.contains("into life 2"), "{reborn}");
     assert_eq!(you(&solo).place(), solo.game().anchor(), "alone in the world, so home is where they arise");
 
     let next = you(&solo);
-    assert!(!next.is_spirit());
-    assert_eq!((next.life(), next.kept(), next.ectoplasm()), (2, 20, 10), "100 ectoplasm buys five percent");
-    assert_eq!(next.skill(SkillKind::Mining).level(), mining * 20 / 100);
+    assert_eq!((next.life(), next.kept(), next.ectoplasm()), (2, 5, 15), "death keeps nothing; 100 ectoplasm buys five percent");
+    assert_eq!(next.skill(SkillKind::Mining).level(), mining * 5 / 100);
+    assert!(next.skill(SkillKind::Mining).peak() >= mining, "nobody disturbed the body, so the old life is remembered");
+    assert_eq!(next.skill(SkillKind::Foraging).level(), 10, "what was practised in the afterlife comes back whole");
     assert!(next.attribute(Attribute::Lineage).level() > 0);
     assert!(solo.replays_identically());
 }

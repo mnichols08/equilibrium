@@ -265,9 +265,18 @@ pub const CREATURE_BLOW_EVERY: Duration = Duration::seconds(6);
 /// The health a character has on returning to their body.
 pub const HEALTH_ON_RETURN: i64 = 25;
 
-/// The share of each skill and attribute that carries into a new life,
-/// as a percentage.
-pub const REBIRTH_CARRYOVER_PERCENT: u32 = 15;
+/// The share of each skill and attribute that carries into a new life
+/// by itself, as a percentage. Nothing does: death gives nothing away.
+/// Lineage and ectoplasm can still buy a share.
+pub const REBIRTH_CARRYOVER_PERCENT: u32 = 0;
+
+/// The level a spirit must reach in any one skill in the afterlife
+/// before it lives again.
+pub const AFTERLIFE_LEVEL: u32 = 10;
+
+/// What one draw is worth toward the skill a spirit practises: as
+/// much as one good haul is worth to the living.
+pub const AFTERLIFE_XP_PER_DRAW: u64 = 10;
 
 /// How long one draw of ectoplasm takes a spirit.
 pub const DRAW_TIME: Duration = Duration::seconds(10);
