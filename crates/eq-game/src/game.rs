@@ -49,6 +49,8 @@ pub struct Game {
     /// Where the passes out of the founders' lands all lead, if this is
     /// a world for founders.
     meeting_ground: Option<PlaceId>,
+    /// Where souls enter the afterlife, in a world with founders.
+    river: Option<PlaceId>,
     /// How the lands stand to each other.
     pacts: Pacts,
     /// How far all that peace and war has tipped the world.
@@ -97,6 +99,7 @@ impl Game {
             seed,
             founders_left: 0,
             meeting_ground: None,
+            river: None,
             pacts: Pacts::new(),
             balance: Balance::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
@@ -134,6 +137,11 @@ impl Game {
             game.occupancy.grow(game.map.len());
             game.zones.push(Zone::new(ground, 1, ground, None));
             game.meeting_ground = Some(ground);
+            // Where souls enter the afterlife. Also a zone of its own.
+            let river = game.map.add_place(content::river_of_souls());
+            game.occupancy.grow(game.map.len());
+            game.zones.push(Zone::new(river, 1, river, None));
+            game.river = Some(river);
         }
         game
     }
@@ -165,7 +173,8 @@ impl Game {
         let invited = self.zones.iter().any(|zone| zone.invited.contains(&name.to_lowercase()));
         let unborn = self.is_founded() && !invited && self.founders_left == 0;
         let (zone, founded) = self.zone_for_newcomer(who, name);
-        let anchor = self.zones[zone].anchor();
+        // The unborn begin where every soul enters the afterlife.
+        let anchor = self.river.filter(|_| unborn).unwrap_or_else(|| self.zones[zone].anchor());
         let mut newcomer = Character::new(name, anchor);
         if unborn {
             newcomer.be_unborn();
@@ -197,6 +206,31 @@ impl Game {
             return (self.found_territory(who), true);
         }
         (self.emptiest_land(None), false)
+    }
+
+    /// Where souls enter the afterlife, if this world has such a place.
+    pub const fn river(&self) -> Option<PlaceId> {
+        self.river
+    }
+
+    /// Carries a soul to the River of Souls. Returns whether the world
+    /// has one to carry it to.
+    fn carry_to_river(&mut self, index: usize) -> bool {
+        let Some(river) = self.river else { return false };
+        let who = id_at(index);
+        let character = &mut self.characters[index];
+        self.occupancy.leave(character.place(), who);
+        character.place = river;
+        self.occupancy.enter(river, who);
+        true
+    }
+
+    /// Carries a soul to the River of Souls, if the world has one, and
+    /// tells it so.
+    fn send_to_river(&mut self, index: usize, events: &mut Vec<Event>) {
+        if self.carry_to_river(index) {
+            events.push(Event::Character { who: id_at(index), outcome: Outcome::CameToRiver });
+        }
     }
 
     /// Whether anyone has founded a land here yet.
@@ -242,6 +276,7 @@ impl Game {
         self.characters[index].busy_until = now + BURY_TIME;
         outcomes.push(Outcome::Buried { target });
         events.push(Event::Character { who: target, outcome: Outcome::WasBuried { by: who } });
+        self.send_to_river(body, events);
     }
 
     /// Makes a new territory from the world's seed and adds it to the
@@ -262,6 +297,11 @@ impl Game {
             let founded = self.zones.iter().filter(|zone| zone.founder.is_some()).count();
             let way_back = content::pass_label(founded);
             self.map.connect_both(pass, "beyond", ground, &way_back, Passage::Open).expect("both places are on the map");
+            // And a way leads into it from the River of Souls, for spirits only:
+            // nothing leads back.
+            if let Some(river) = self.river {
+                self.map.connect(river, &way_back, anchor, Passage::Open).expect("both places are on the map");
+            }
         }
         self.occupancy.grow(self.map.len());
         let zone = Zone::new(first, places, anchor, Some(founder));
@@ -822,16 +862,21 @@ impl Game {
     fn act_as_forgotten(&mut self, index: usize, action: &Action, now: Tick, outcomes: &mut Vec<Outcome>) {
         let character = &mut self.characters[index];
         if character.is_dormant() {
-            outcomes.push(match action {
-                Action::Wake => {
-                    character.forgotten_mut().expect("a dormant spirit is forgotten").dormant = false;
-                    character.busy_until = now;
-                    Outcome::Stirred
-                }
-                _ => Outcome::Asleep,
-            });
+            if *action != Action::Wake {
+                return outcomes.push(Outcome::Asleep);
+            }
+            let forgotten = character.forgotten_mut().expect("a dormant spirit is forgotten");
+            forgotten.dormant = false;
+            // Waking for the first time, it comes ashore where every soul does.
+            let first_waking = forgotten.played == Duration::ZERO;
+            character.busy_until = now;
+            outcomes.push(Outcome::Stirred);
+            if first_waking && self.carry_to_river(index) {
+                outcomes.push(Outcome::CameToRiver);
+            }
             return;
         }
+        let character = &mut self.characters[index];
         let busy_until = character.busy_until();
         if now < busy_until {
             outcomes.push(Outcome::Busy { until: busy_until });
@@ -1596,6 +1641,8 @@ impl Game {
             let id = self.new_creature_id();
             let guard = Creature::body_guard(id, who, &self.characters[index], death.body, now, now + GUARD_LASTS);
             events.push(Event::Character { who, outcome: Outcome::BodyRose });
+            // With the body lost, the afterlife begins.
+            self.send_to_river(index, events);
             events.push(Event::CreatureAppeared { place: death.body, being: guard.being });
             self.creatures.push(guard);
         }
@@ -3258,7 +3305,7 @@ mod tests {
     #[test]
     fn each_founder_arrives_alone_in_a_land_of_their_own() {
         let game = two_founders();
-        assert_eq!(game.zones().len(), 4, "the shoreline, the Meeting Ground, and one land each");
+        assert_eq!(game.zones().len(), 5, "the shoreline, the Meeting Ground, the River of Souls, and one land each");
         let (ash, bryn) = (game.character(ASH).unwrap(), game.character(BRYN).unwrap());
         let (hers, his) = (game.zone_at(ash.place()), game.zone_at(bryn.place()));
         assert_eq!((hers.founder(), his.founder()), (Some(ASH), Some(BRYN)));
@@ -3337,7 +3384,50 @@ mod tests {
         assert_eq!(outcome(&events), Some(&Outcome::Unborn), "nobody asked for Dara");
         let dara = game.character(DARA).unwrap();
         assert!(dara.is_spirit());
-        assert_eq!(dara.place(), game.zone_of(ASH).unwrap().anchor(), "Ash's land has fewest people");
+        assert_eq!(Some(dara.place()), game.river(), "every soul enters the afterlife at the river");
+    }
+
+    #[test]
+    fn souls_come_ashore_at_the_river_and_ways_lead_from_it_into_every_land() {
+        let mut game = two_founders();
+        let river = game.river().unwrap();
+        assert_eq!(game.map().place(river).map(|place| (place.name, place.deposit.is_none())), Some(("The River of Souls", true)));
+        let (ashland, brynsland) = (game.character(ASH).unwrap().home(), game.character(BRYN).unwrap().home());
+        assert_eq!(game.map().exit(river, "first").map(|exit| exit.to), Some(ashland));
+        assert_eq!(game.map().exit(river, "second").map(|exit| exit.to), Some(brynsland));
+        assert!(game.map().first_step(ashland, river, |_| true).is_none(), "nothing leads the living there");
+
+        // The unborn begin on its bank, with a shade to fight, and can walk into a land.
+        let mut events = Vec::new();
+        game.apply(&Command::join(COLE, "Cole"), Tick::new(1), &mut events);
+        assert_eq!(game.occupants(river), [COLE]);
+        game.apply(&Command::spar(COLE), Tick::new(1), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::Sparred { .. })));
+        game.apply(&Command::go(COLE, "second"), Tick::new(10), &mut events);
+        assert_eq!(game.character(COLE).unwrap().place(), brynsland);
+
+        // Bryn dies alone at home. For ten minutes the spirit may still go
+        // back; when the body rises, the afterlife begins, at the river.
+        let lair = game.zone_at(brynsland).place_ids().find(|&place| game.map().place(place).unwrap().lair == Some(CreatureKind::Lurker));
+        let mut now = walk_to(&mut game, BRYN, lair.unwrap(), 20);
+        while !game.character(BRYN).unwrap().is_spirit() {
+            ticks(&mut game, now, now);
+            now += 1;
+        }
+        assert_eq!(game.character(BRYN).unwrap().place(), brynsland, "severed: pulled to the haven first");
+        let lost = ticks(&mut game, now, now + CORPSE_TIME.as_ticks());
+        assert!(lost.contains(&Event::Character { who: BRYN, outcome: Outcome::CameToRiver }));
+        assert_eq!(game.occupants(river), [BRYN]);
+    }
+
+    #[test]
+    fn a_world_of_one_shoreline_has_no_river_and_its_dead_stay_where_they_are() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        assert_eq!(game.river(), None);
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let events = ticks(&mut game, now, now + CORPSE_TIME.as_ticks());
+        assert!(!events.iter().any(|event| matches!(event, Event::Character { outcome: Outcome::CameToRiver, .. })));
+        assert_eq!(game.character(BRYN).unwrap().place(), CAMP);
     }
 
     const EDDA: CharacterId = CharacterId::new(4);
@@ -3801,7 +3891,7 @@ mod tests {
         game.apply(&Command::go(ASH, "beyond"), Tick::new(now), &mut events);
         let ground = game.meeting_ground().unwrap();
         assert_eq!(game.character(ASH).unwrap().place(), ground);
-        assert_eq!(game.character(ASH).unwrap().home(), game.zones()[2].anchor(), "her home is still her own land");
+        assert_eq!(game.character(ASH).unwrap().home(), game.zones()[3].anchor(), "her home is still her own land");
 
         // In time another sentinel bars the pass.
         let later = ticks(&mut game, now + 1, now + LURKER_RETURNS.as_ticks() + 10);

@@ -464,6 +464,20 @@ pub(crate) const fn meeting_ground() -> Place {
     )
 }
 
+/// Where every soul enters the afterlife: the unborn, the forgotten
+/// who wake, and the dead once their bodies are lost to them. The
+/// living cannot come here. Ways lead from its bank into every land.
+pub(crate) const fn river_of_souls() -> Place {
+    place(
+        "The River of Souls",
+        "A slow grey river with no far bank. Souls come ashore here and stand a while, remembering how to want things. Shades drift along the water's edge.",
+        Safety::Haven,
+        None,
+        (0, 0),
+        None,
+    )
+}
+
 /// The name of the way from the Meeting Ground back into the land that
 /// was founded `nth` (counting the first as 0).
 pub(crate) fn pass_label(nth: usize) -> alloc::string::String {

@@ -200,6 +200,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Died { by: Cause::Creature(being), place, passing, .. } => {
             died(game, &capitalise(&being_name(game, *being, viewer)), *place, *passing)
         }
+        Outcome::CameToRiver => "You are on the bank of the River of Souls, where every soul enters the afterlife. Shades drift here to be fought (attack shade), and ways lead from the bank into the lands of the living, where a spirit can practise the work (gather). Nothing leads back.".into(),
         Outcome::Sparred { damage, left: 0 } => {
             format!("You strike the shade for {damage} and it comes apart like smoke. Another gathers where it stood.")
         }
