@@ -17,6 +17,26 @@
  * @property {(scene: object, lines: string[]) => void} show
  */
 
+/** How many bots share the shoreline unless the address says otherwise. */
+export const DEFAULT_BOTS = 3
+
+/** The most bots the address can ask for. */
+export const MOST_BOTS = 24
+
+/**
+ * Reads the game's settings from the page address: `?seed=7&bots=0`.
+ * Anything missing or malformed falls back to seed 1 and three bots.
+ * @param {URLSearchParams} query
+ * @returns {{ seed: number, bots: number }}
+ */
+export function settings(query) {
+  const whole = (name) => (/^\d+$/.test(query.get(name) ?? '') ? Number(query.get(name)) : null)
+  return {
+    seed: whole('seed') ?? 1,
+    bots: Math.min(whole('bots') ?? DEFAULT_BOTS, MOST_BOTS),
+  }
+}
+
 /**
  * Starts a game and draws its first frame.
  * @param {Game} game
@@ -56,6 +76,7 @@ export function pageView(root) {
         vitality: scene.vitality,
         health: scene.health,
         you: scene.you,
+        company: scene.company,
       })
       Object.assign(actions, { exits: scene.exits, canGather: scene.you.can_gather })
       log.lines = lines

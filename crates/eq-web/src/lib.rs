@@ -5,7 +5,7 @@
 //! the [`Scene`] it gives back. All the game logic stays in Rust.
 //!
 //! ```js
-//! const shore = new Shore(1);
+//! const shore = new Shore(1, 3);                    // seed, bots for company
 //! const lines = JSON.parse(shore.input("north"));   // what happened
 //! const scene = JSON.parse(shore.scene());          // what to draw
 //! ```
@@ -25,10 +25,11 @@ pub struct Shore {
 
 #[wasm_bindgen]
 impl Shore {
-    /// Starts a game. The same seed always plays out the same way.
+    /// Starts a game with `bots` bots sharing the shoreline. The same
+    /// seed and number of bots always play out the same way.
     #[wasm_bindgen(constructor)]
-    pub fn new(seed: u32) -> Self {
-        Self { solo: Solo::new(u64::from(seed)) }
+    pub fn new(seed: u32, bots: u32) -> Self {
+        Self { solo: Solo::with_company(u64::from(seed), bots as usize) }
     }
 
     /// Handles one line of input, exactly as the terminal would, and
@@ -59,8 +60,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn company_shows_up_in_the_scene() {
+        let mut shore = Shore::new(1, 3);
+        let scene: serde_json::Value = serde_json::from_str(&shore.scene()).unwrap();
+        assert_eq!(scene["company"].as_array().unwrap().len(), 3);
+        assert_eq!(scene["company"][0]["name"], "Ash");
+
+        shore.input("wait 10m");
+        let scene: serde_json::Value = serde_json::from_str(&shore.scene()).unwrap();
+        let elsewhere = scene["places"].as_array().unwrap().iter().filter(|place| place["here"] == false);
+        let wandered: usize = elsewhere.map(|place| place["people"].as_array().unwrap().len()).sum();
+        assert!(wandered > 0, "someone should have walked off");
+        assert!(shore.replays_identically());
+    }
+
+    #[test]
     fn input_returns_what_happened_as_json_lines() {
-        let mut shore = Shore::new(1);
+        let mut shore = Shore::new(1, 0);
         let lines: Vec<String> = serde_json::from_str(&shore.input("north")).unwrap();
         assert_eq!(lines[0], "You make your way to Ore Ledge.");
         let nothing: Vec<String> = serde_json::from_str(&shore.input("")).unwrap();
@@ -69,7 +85,7 @@ mod tests {
 
     #[test]
     fn the_scene_follows_the_input() {
-        let mut shore = Shore::new(1);
+        let mut shore = Shore::new(1, 0);
         shore.input("east");
         let scene: serde_json::Value = serde_json::from_str(&shore.scene()).unwrap();
         assert_eq!(scene["you"]["place_name"], "Shingle Beach");

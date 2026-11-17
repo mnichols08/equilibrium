@@ -9,6 +9,7 @@ use eq_nodes::{Node, NodeConfig};
 use eq_skills::Rules;
 use eq_world_graph::{Graph, Passage, PlaceId};
 
+use crate::bots::Leg;
 use crate::types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind, Standing};
 
 /// How long it takes to walk between places.
@@ -272,3 +273,45 @@ pub fn rocky_shoreline() -> (Graph<Place>, PlaceId) {
     }
     (map, camp)
 }
+
+/// A walk round the whole shoreline from camp and back, visiting every
+/// deposit: both ore shelves, the beach, the cave and grotto, the
+/// shallows and reef, then the wrack line and the spit.
+///
+/// The two ways back across the tide are waited for; the ways in are
+/// skipped when flooded.
+pub const CIRCUIT: &[Leg] = &[
+    Leg::go("north"),
+    Leg::go("north"),
+    Leg::go("south"),
+    Leg::go("south"),
+    Leg::go("east"),
+    Leg::go("cave"),
+    Leg::go("down"),
+    Leg::go("up"),
+    Leg::wait_for("out"),
+    Leg::go("east"),
+    Leg::go("east"),
+    Leg::wait_for("west"),
+    Leg::go("west"),
+    Leg::go("west"),
+    Leg::go("south"),
+    Leg::go("south"),
+    Leg::go("north"),
+    Leg::go("north"),
+];
+
+/// How to walk from camp to each of the nine deposits: Ore Ledge, High
+/// Shelf, Shingle Beach, Kelp Shallows, Outer Reef, Tidal Cave, Deep
+/// Grotto, Wrack Line and Stony Spit.
+pub const DEPOSIT_ROUTES: [&[Leg]; 9] = [
+    &[Leg::go("north")],
+    &[Leg::go("north"), Leg::go("north")],
+    &[Leg::go("east")],
+    &[Leg::go("east"), Leg::go("east")],
+    &[Leg::go("east"), Leg::go("east"), Leg::go("east")],
+    &[Leg::go("east"), Leg::go("cave")],
+    &[Leg::go("east"), Leg::go("cave"), Leg::go("down")],
+    &[Leg::go("south")],
+    &[Leg::go("south"), Leg::go("south")],
+];

@@ -14,7 +14,7 @@
   </head>
   <body>
     <pre id="result">E2E RUNNING</pre>
-    <iframe id="page" src="./index.html?seed=1" width="390" height="1400" title="The game"></iframe>
+    <iframe id="page" src="./index.html?seed=1&bots=0" width="390" height="1400" title="The game"></iframe>
     <script type="module">
       const result = document.querySelector('#result')
       const frame = document.querySelector('#page')
@@ -38,12 +38,23 @@
       }
 
       try {
-        const page = await until(() => frame.contentDocument?.querySelector('#game') && frame.contentDocument, 'the page to load')
-        const game = page.querySelector('#game')
-        const notice = () => page.querySelector('#notice').textContent
-        await until(() => !game.hidden || notice().startsWith('The game could not start'), 'the game to start')
-        expect(!game.hidden, `the game to start (notice: ${notice()})`)
+        /** Waits for the game in the frame to start, and returns its document. */
+        async function started() {
+          const page = await until(() => frame.contentDocument?.querySelector('#game') && frame.contentDocument, 'the page to load')
+          const game = page.querySelector('#game')
+          const notice = () => page.querySelector('#notice').textContent
+          await until(() => !game.hidden || notice().startsWith('The game could not start'), 'the game to start')
+          expect(!game.hidden, `the game to start (notice: ${notice()})`)
+          return page
+        }
 
+        let page = await started()
+
+        const type = (line) => {
+          const form = page.querySelector('#typed')
+          form.elements.line.value = line
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+        }
         const here = () => page.querySelector('eq-status h2')?.textContent
         const logText = () => page.querySelector('eq-log ol')?.textContent ?? ''
         const button = (label) => [...page.querySelectorAll('eq-actions button')].find((b) => b.textContent.trim().startsWith(label))
@@ -94,6 +105,19 @@
         await until(() => button('Go cave')?.disabled, 'the cave exit to close at high tide')
         expect(page.querySelector('eq-status .meta').textContent.includes('high tide'), 'the status to show high tide')
         expect(tile('Tidal Cave').classList.contains('blocked'), 'the cave tile to show as flooded')
+        expect(page.querySelectorAll('eq-map .other').length === 0, 'nobody else on the map when playing alone')
+
+        // With company: three bots start beside you, then wander off and work.
+        frame.contentWindow.location.replace('./index.html?seed=1&bots=3')
+        await until(() => frame.contentDocument?.location.search.includes('bots=3') && frame.contentDocument.readyState === 'complete', 'the page to reload with bots')
+        page = await started()
+        await until(() => page.querySelector('eq-status')?.textContent.includes('Also here: Ash, Bryn, Cole.'), 'the status to list your company')
+        expect(tile('Tidewatch Camp').querySelector('.count')?.textContent === '3', 'the camp tile to count three others')
+
+        type('wait 10m')
+        await until(() => logText().includes('leaves for'), 'the log to show someone leaving')
+        const elsewhere = [...page.querySelectorAll('eq-map .tile:not(.here) .other')]
+        expect(elsewhere.length > 0, 'bots to appear on other tiles after ten minutes')
 
         result.textContent = `E2E PASS (${steps.length} checks)`
       } catch (error) {

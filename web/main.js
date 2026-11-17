@@ -3,16 +3,16 @@
 
 import init, { Shore } from './pkg/eq_web.js'
 import './components/eq-components.js'
-import { pageView, startGame } from './app.js'
+import { pageView, settings, startGame } from './app.js'
 
 const game = document.querySelector('#game')
 const notice = document.querySelector('#notice')
 
 try {
   await init()
-  const seed = Number(new URLSearchParams(location.search).get('seed')) || 1
+  const { seed, bots } = settings(new URLSearchParams(location.search))
   const view = pageView(game)
-  const send = startGame(new Shore(seed), view)
+  const send = startGame(new Shore(seed, bots), view)
   view.onCommand(send)
 
   const form = document.querySelector('#typed')

@@ -1,4 +1,5 @@
-//! Prints the scene JSON after playing the lines given as arguments.
+//! Prints the scene JSON after playing the lines given as arguments, with
+//! three bots for company.
 //!
 //! ```sh
 //! cargo run -p eq-web --example scene -- north gather gather
@@ -9,7 +10,7 @@
 use eq_web::Shore;
 
 fn main() {
-    let mut shore = Shore::new(1);
+    let mut shore = Shore::new(1, 3);
     for line in std::env::args().skip(1) {
         shore.input(&line);
     }

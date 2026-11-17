@@ -5,13 +5,18 @@
 //! needs the same loop: read a line, act, let the action's time pass, say
 //! what happened. It lives here so the clients only differ in how they
 //! show it.
+//!
+//! The player can have company: bots that share the shoreline and act
+//! whenever time passes.
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use eq_clock::{Duration, Tick};
 use eq_events::{replay, Events, OutOfOrder, Session};
 
+use crate::bots::{Bots, Plan};
 use crate::parser::{parse, Input};
 use crate::{narrate, Action, CharacterId, Command, Event, Game, Outcome};
 
@@ -24,24 +29,33 @@ pub struct Reply {
     pub quit: bool,
 }
 
+/// Names for the bots that keep a player company, in order.
+const COMPANIONS: [&str; 8] = ["Ash", "Bryn", "Cole", "Dara", "Eli", "Fen", "Gil", "Hale"];
+
 /// A single-player game in progress.
 #[derive(Clone, Debug)]
 pub struct Solo {
     seed: u64,
+    company: usize,
     session: Session<Game>,
+    bots: Bots,
 }
 
 impl Solo {
     /// The player's character.
     pub const YOU: CharacterId = CharacterId::new(0);
 
-    /// Starts a game. The same seed always plays out the same way.
+    /// Starts a game with the shoreline to yourself. The same seed
+    /// always plays out the same way.
     pub fn new(seed: u64) -> Self {
-        Self { seed, session: Session::new(Self::fresh_world(seed)) }
+        Self::with_company(seed, 0)
     }
 
-    fn fresh_world(seed: u64) -> Game {
-        Game::new(seed, &["You"])
+    /// Starts a game with `company` bots sharing the shoreline: mostly
+    /// careful, with a greedy one among every four.
+    pub fn with_company(seed: u64, company: usize) -> Self {
+        let crew = Plan::company(company).into_iter().enumerate().map(|(index, plan)| (companion_id(index), plan));
+        Self { seed, company, session: Session::new(fresh_world(seed, company)), bots: Bots::new(crew) }
     }
 
     /// The world as it stands.
@@ -84,7 +98,7 @@ impl Solo {
     /// Replays the command log from scratch and says whether it rebuilds
     /// exactly this world.
     pub fn replays_identically(&self) -> bool {
-        let (rebuilt, _) = replay(Self::fresh_world(self.seed), self.session.log(), self.now());
+        let (rebuilt, _) = replay(fresh_world(self.seed, self.company), self.session.log(), self.now());
         &rebuilt == self.game()
     }
 
@@ -95,7 +109,7 @@ impl Solo {
         let moved = events.iter().any(|stamped| {
             matches!(stamped.value, Event::Character { who: Self::YOU, outcome: Outcome::Moved { .. } })
         });
-        events.extend(in_order(self.session.advance_to(self.free_at())));
+        events.extend(self.pass_time_until(self.free_at()));
 
         let mut lines = self.tell(&events);
         if moved {
@@ -105,7 +119,7 @@ impl Solo {
     }
 
     fn wait(&mut self, time: Duration) -> Vec<String> {
-        let events = in_order(self.session.advance_to(self.now() + time));
+        let events = self.pass_time_until(self.now() + time);
         let mut lines = alloc::vec![String::from("Time passes.")];
         lines.extend(self.tell(&events));
         lines
@@ -117,10 +131,44 @@ impl Solo {
         busy_until.max(self.now())
     }
 
+    /// Runs the world to `target`, with the company acting as it goes.
+    fn pass_time_until(&mut self, target: Tick) -> Events<Game> {
+        in_order(self.bots.run(&mut self.session, target))
+    }
+
     /// What the player would notice among `events`.
     fn tell(&self, events: &Events<Game>) -> Vec<String> {
-        events.iter().filter_map(|stamped| narrate::event(&stamped.value, self.game(), Self::YOU)).collect()
+        let lines = events.iter().filter_map(|stamped| narrate::event(&stamped.value, self.game(), Self::YOU));
+        fold_repeats(lines)
     }
+}
+
+/// The id of the `index`th companion. The player is always first.
+const fn companion_id(index: usize) -> CharacterId {
+    CharacterId::new(index as u64 + 1)
+}
+
+/// The world a game starts from: the player, then their company.
+fn fresh_world(seed: u64, company: usize) -> Game {
+    let strangers: Vec<String> = (COMPANIONS.len()..company).map(|index| format!("Stranger {}", index + 1)).collect();
+    let names: Vec<&str> = core::iter::once("You")
+        .chain(COMPANIONS.into_iter().take(company))
+        .chain(strangers.iter().map(String::as_str))
+        .collect();
+    Game::new(seed, &names)
+}
+
+/// Folds a run of identical lines into one, so a companion gathering
+/// beside you for ten minutes reads as one line, not a hundred.
+fn fold_repeats(lines: impl Iterator<Item = String>) -> Vec<String> {
+    let mut runs: Vec<(String, usize)> = Vec::new();
+    for line in lines {
+        match runs.last_mut() {
+            Some((last, count)) if *last == line => *count += 1,
+            _ => runs.push((line, 1)),
+        }
+    }
+    runs.into_iter().map(|(line, count)| if count == 1 { line } else { format!("{line} (x{count})") }).collect()
 }
 
 /// `Solo` only ever moves forward from its own clock, so an out-of-order
@@ -137,6 +185,44 @@ mod tests {
         let mut solo = Solo::new(1);
         let said = lines.iter().flat_map(|line| solo.handle(line).lines).collect();
         (solo, said)
+    }
+
+    #[test]
+    fn repeats_are_folded_and_order_is_kept() {
+        let lines = ["a", "b", "b", "b", "a", "a"].map(String::from).into_iter();
+        assert_eq!(fold_repeats(lines), ["a", "b (x3)", "a (x2)"]);
+        assert!(fold_repeats(core::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn company_shares_the_shoreline_and_acts_while_you_wait() {
+        let mut solo = Solo::with_company(1, 3);
+        assert_eq!(solo.game().population(), 4);
+        assert!(solo.look().contains("Also here: Ash, Bryn, Cole."));
+
+        let said = solo.handle("wait 10m").lines;
+        assert!(said.iter().any(|line| line.contains("leaves for")), "{said:?}");
+        assert!(!solo.look().contains("Also here: Ash, Bryn, Cole."));
+        assert!(solo.commands() > 10, "the company should have been busy");
+        let carried: u64 = solo.game().characters().skip(1).map(|(_, bot)| bot.carried_total()).sum();
+        assert!(carried > 0);
+    }
+
+    #[test]
+    fn a_game_with_company_replays_identically() {
+        let mut solo = Solo::with_company(5, 4);
+        for line in ["east", "gather", "wait 20m", "east", "gather", "wait 1h"] {
+            solo.handle(line);
+        }
+        assert!(solo.replays_identically());
+    }
+
+    #[test]
+    fn more_company_than_names_still_gets_named() {
+        let solo = Solo::with_company(1, 10);
+        let names: Vec<&str> = solo.game().characters().map(|(_, character)| character.name()).collect();
+        assert_eq!(names[..3], ["You", "Ash", "Bryn"]);
+        assert_eq!(names[9..], ["Stranger 9", "Stranger 10"]);
     }
 
     #[test]
