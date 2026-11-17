@@ -40,6 +40,8 @@ The world is saved in `realm/` as it goes (`--data DIR` to put it elsewhere): ev
 - `--addr HOST:PORT` to listen somewhere other than `127.0.0.1:4000`.
 - `--tick-ms N` to run world time faster or slower than real time.
 
+The browser can join too. Add the server's address to the page's own: `…/index.html?server=ws://127.0.0.1:4000`. The page then runs no game of its own: it asks for a name and passphrase and draws what the server sends, with the same components. Serve the page from the machine the server is on (`cd web && npm run build && python3 -m http.server --directory dist`); a page loaded over https will generally refuse to talk to a plain `ws://` server elsewhere.
+
 There is no encryption and no accounts beyond name and passphrase yet: run it on your own machine or network.
 
 ### In the browser
@@ -70,7 +72,7 @@ npx serve dist        # or any static file server
 | `web/app.js` | Joins a game to a view. No DOM or wasm, so it is tested with `node --test`. |
 | `web/main.js` | Loads the wasm and the components. |
 
-CI builds the site and plays it in headless Chrome (`web/test/e2e.html`): it presses buttons and map tiles, types a command, waits for the tide, then reloads with bots, watches them wander, hunts down the marked one, fights it and picks up what it drops, checking the page after each.
+CI builds the site and plays it in headless Chrome twice: alone (`web/test/e2e.html`) and as two players on a real server (`web/test/e2e-online.html`). In the first it presses buttons and map tiles, types a command, waits for the tide, then reloads with bots, watches them wander, hunts down the marked one, fights it and picks up what it drops, checking the page after each.
 
 The page holds no rules. It sends the game the same lines you would type in the terminal and draws the scene it gets back. `cargo run -p eq-web --example scene -- north gather` prints that scene.
 

@@ -7,7 +7,8 @@
 //!
 //! The protocol carries lines of text in both directions. The server
 //! holds the rules and does the narrating; a client only reads lines
-//! and shows what comes back.
+//! and shows what comes back. A client that can draw may also ask for
+//! scenes: what its character can see, as data.
 //!
 //! ```
 //! use eq_protocol::{ClientMessage, ServerMessage};
@@ -41,6 +42,10 @@ pub enum ClientMessage {
         /// A passphrase. The first to use a name sets it; after that the
         /// name only answers to the same passphrase.
         key: String,
+        /// Whether the client wants [`ServerMessage::Scene`]s to draw.
+        /// Left out, it is `false`: a terminal only wants lines.
+        #[serde(default)]
+        scenes: bool,
     },
     /// One line typed by the player, such as `north` or `attack bryn`.
     Line {
@@ -73,6 +78,13 @@ pub enum ServerMessage {
         /// The lines.
         lines: Vec<String>,
     },
+    /// What the player's character can see now, for clients that asked
+    /// for scenes. The protocol does not say what is in one: that is
+    /// between the game and whatever draws it.
+    Scene {
+        /// The scene.
+        scene: serde_json::Value,
+    },
 }
 
 /// Why some text was not a message.
@@ -88,9 +100,10 @@ impl std::fmt::Display for NotAMessage {
 impl std::error::Error for NotAMessage {}
 
 impl ClientMessage {
-    /// A hello in this crate's protocol version.
+    /// A hello in this crate's protocol version, from a client that
+    /// only wants lines.
     pub fn hello(name: &str, key: &str) -> Self {
-        Self::Hello { version: VERSION, name: name.into(), key: key.into() }
+        Self::Hello { version: VERSION, name: name.into(), key: key.into(), scenes: false }
     }
 
     /// One typed line.
@@ -150,8 +163,14 @@ mod tests {
     fn the_wire_format_is_plain_and_stable() {
         assert_eq!(
             ClientMessage::hello("Ash", "k").to_json(),
-            r#"{"type":"hello","version":1,"name":"Ash","key":"k"}"#
+            r#"{"type":"hello","version":1,"name":"Ash","key":"k","scenes":false}"#
         );
+        // A client that does not mention scenes gets none.
+        let plain = ClientMessage::from_json(r#"{"type":"hello","version":1,"name":"Ash","key":"k"}"#);
+        assert_eq!(plain, Ok(ClientMessage::hello("Ash", "k")));
+        let scene = ServerMessage::Scene { scene: serde_json::json!({ "clock": "0:00:05" }) };
+        assert_eq!(scene.to_json(), r#"{"type":"scene","scene":{"clock":"0:00:05"}}"#);
+        assert_eq!(ServerMessage::from_json(&scene.to_json()), Ok(scene));
         assert_eq!(ClientMessage::line("look").to_json(), r#"{"type":"line","text":"look"}"#);
     }
 

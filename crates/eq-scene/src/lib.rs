@@ -53,6 +53,8 @@ pub struct You {
     pub can_gather: bool,
     /// Whether something lies on the ground here to pick up.
     pub can_take: bool,
+    /// Whether they are lying down, asleep or settling.
+    pub asleep: bool,
     /// Health, 0 to 100.
     pub health: u32,
     /// Which life this is, counting the first as 1.
@@ -241,6 +243,7 @@ impl Scene {
                 (_, None) => false,
             },
             can_take: game.can_take(viewer),
+            asleep: character.is_lying_down(),
             health: character.health(),
             life: character.life(),
             body: character.death().map(|death| body_view(game, death, here, now)),

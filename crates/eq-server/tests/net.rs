@@ -123,7 +123,7 @@ fn the_door_refuses_old_clients_wrong_keys_and_anything_that_is_not_a_hello() {
     let mut ada = Client::joined(&server, "Ada", "right");
 
     let mut stale = Client::connect(&server);
-    stale.send(&ClientMessage::Hello { version: VERSION + 1, name: "Old".into(), key: "k".into() });
+    stale.send(&ClientMessage::Hello { version: VERSION + 1, name: "Old".into(), key: "k".into(), scenes: false });
     assert!(matches!(stale.next(), Some(ServerMessage::Refused { reason }) if reason.contains("protocol version")));
 
     let mut thief = Client::connect(&server);

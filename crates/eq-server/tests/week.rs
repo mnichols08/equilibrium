@@ -15,7 +15,7 @@ const DAY: u64 = 24 * HOUR;
 /// the beach, one just looks around. Then they all leave.
 fn an_evening(realm: &mut Realm) -> [CharacterId; 3] {
     let players = [("Ada", "north"), ("Ben", "east"), ("Cyd", "south")].map(|(name, way)| {
-        let who = realm.enter(name, name).unwrap().who;
+        let who = realm.enter(name, name, false).unwrap().who;
         // Whoever was left asleep gets up first.
         realm.line(who, "wake");
         (who, way)
@@ -81,7 +81,7 @@ fn a_week_with_a_restart_in_the_middle() {
     assert!(ada.skill(eq_game::SkillKind::Mining).level() > 0);
 
     // They are told where they are when they come back, and can carry on.
-    let back = realm.enter("Ada", "Ada").unwrap();
+    let back = realm.enter("Ada", "Ada", false).unwrap();
     assert!(told(&back.deliveries, players[0]).contains("You are asleep."));
     assert!(told(&realm.line(players[0], "wake"), players[0]).starts_with("You wake after "));
 
