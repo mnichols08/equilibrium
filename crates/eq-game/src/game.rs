@@ -13,8 +13,8 @@ use eq_skills::Proficiency;
 use eq_world_graph::{Graph, Passage, PlaceId};
 
 use crate::content::{
-    self, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, BASE_EFFORT, EFFORT_SPREAD, GATHER_TIME, SKILL_RULES,
-    SKILL_XP_PER_UNIT, TIERS_PER_WHOLE, TRAVEL_TIME, VITALITY_BANDS, YIELD_PERCENT_PER_LEVEL,
+    self, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, BASE_EFFORT, EFFORT_SPREAD, GATHER_TIME, MIN_WORKABLE_STOCK,
+    SKILL_RULES, SKILL_XP_PER_UNIT, TIERS_PER_WHOLE, TRAVEL_TIME, VITALITY_BANDS, YIELD_PERCENT_PER_LEVEL,
 };
 use crate::types::{Attribute, Health, Place, Resource, SkillKind};
 
@@ -54,8 +54,8 @@ pub enum Event {
     },
     /// There is no deposit here.
     NothingToGather,
-    /// The deposit here has no stock left.
-    Exhausted {
+    /// The deposit here has too little stock to be worth working.
+    TooSparse {
         /// What would have been gathered.
         resource: Resource,
     },
@@ -253,8 +253,8 @@ impl Game {
             return;
         };
         let resource = deposit.resource;
-        if deposit.node.stock() == 0 {
-            events.push(Event::Exhausted { resource });
+        if deposit.node.stock() < MIN_WORKABLE_STOCK {
+            events.push(Event::TooSparse { resource });
             return;
         }
 
@@ -289,16 +289,18 @@ impl Game {
         }
     }
 
-    /// Vitality is 100 minus the average strain across the zone's deposits.
+    /// Vitality is 100 minus the average wear across the zone's deposits.
+    /// Wear is zero while a deposit is pristine, so careful use costs the
+    /// zone nothing; only over-harvesting does.
     fn update_vitality(&mut self, events: &mut Vec<Event>) {
-        let (strain, deposits) = self
+        let (wear, deposits) = self
             .map
             .places()
             .filter_map(|(_, place)| place.deposit.as_ref())
-            .fold((0i64, 0i64), |(strain, count), deposit| {
-                (strain + i64::from(deposit.node.strain_percent()), count + 1)
+            .fold((0i64, 0i64), |(wear, count), deposit| {
+                (wear + i64::from(deposit.node.wear_percent()), count + 1)
             });
-        let penalty = if deposits == 0 { 0 } else { strain / deposits };
+        let penalty = if deposits == 0 { 0 } else { wear / deposits };
         let change = self.vitality.set(100 - penalty);
         if let Some((from, to)) = VITALITY_BANDS.crossing(change) {
             events.push(Event::VitalityChanged { from, to });

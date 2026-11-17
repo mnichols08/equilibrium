@@ -37,8 +37,8 @@ pub fn event(event: &Event, game: &Game) -> Option<String> {
         Event::ExitClosed { label } => format!("The way {label} is under water. Wait for the tide."),
         Event::Busy { .. } => "You are still busy.".into(),
         Event::NothingToGather => "There is nothing to gather here.".into(),
-        Event::Exhausted { resource } => {
-            format!("There is no {} left to take. Give it time.", resource.name())
+        Event::TooSparse { resource } => {
+            format!("There is too little {} here to be worth working. Give it time.", resource.name())
         }
         Event::Gathered { resource, amount: 0, .. } => {
             format!("You work at the {} but come away with nothing worth keeping.", resource.name())
@@ -98,12 +98,13 @@ pub fn inspect(game: &Game) -> String {
     let zone = format!("Shoreline vitality: {} of 100 ({}).", game.vitality(), game.health().name());
     match &game.here().deposit {
         Some(deposit) => format!(
-            "{}: {} of {} left, {} ({}% strain).\n{zone}",
+            "{}: {} of {} left, {} ({}% strain, {}% wear).\n{zone}",
             capitalise(deposit.resource.name()),
             deposit.node.stock(),
             deposit.node.capacity(),
             quality_name(deposit.node.quality()),
             deposit.node.strain_percent(),
+            deposit.node.wear_percent(),
         ),
         None => format!("There is no deposit here.\n{zone}"),
     }
@@ -183,14 +184,14 @@ const fn quality_name(quality: Quality) -> &'static str {
 }
 
 const fn abundance(stock: u32, capacity: u32) -> &'static str {
-    if stock == 0 {
-        "gone"
+    if stock < crate::content::MIN_WORKABLE_STOCK {
+        "all but gone"
     } else if stock * 3 >= capacity * 2 {
         "plentiful"
     } else if stock * 3 >= capacity {
         "thinning"
     } else {
-        "nearly gone"
+        "sparse"
     }
 }
 

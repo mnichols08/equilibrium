@@ -6,7 +6,12 @@
 //! and quality sets how much of what you take is worth keeping.
 //!
 //! Take slowly and the node stays pristine. Strip it and it yields a
-//! fifth of what it did, long after the stock has grown back.
+//! fifth of what it did, and grows back at a fifth of the pace.
+//!
+//! Because a worn node regrows slowly, nobody can hold one stripped by
+//! taking each unit as it appears: there is too little to take, the
+//! strain eases faster than it builds, and the node climbs back until
+//! regrowth and wear balance.
 //!
 //! ```
 //! use eq_nodes::{Node, NodeConfig, Quality};
@@ -32,8 +37,13 @@ use eq_meter::{Bands, Meter};
 /// Strain is measured in tenths of a percent, so it can creep slowly.
 const MAX_STRAIN: i64 = 1_000;
 
-const QUALITY: Bands<Quality, 3> =
-    Bands::new(Quality::Pristine, [(250, Quality::Healthy), (500, Quality::Worn), (750, Quality::Depleted)]);
+/// Strain below this leaves a node pristine and counts as no wear at all.
+const PRISTINE_LIMIT: i64 = 250;
+
+const QUALITY: Bands<Quality, 3> = Bands::new(
+    Quality::Pristine,
+    [(PRISTINE_LIMIT, Quality::Healthy), (500, Quality::Worn), (750, Quality::Depleted)],
+);
 
 /// How worn a node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -58,6 +68,16 @@ impl Quality {
             Self::Depleted => 20,
         }
     }
+
+    /// How fast the node regrows, as a percentage of its full pace.
+    pub const fn regrowth_percent(self) -> u32 {
+        match self {
+            Self::Pristine => 100,
+            Self::Healthy => 80,
+            Self::Worn => 50,
+            Self::Depleted => 20,
+        }
+    }
 }
 
 /// How a node behaves. Plain numbers, meant to be tuned.
@@ -65,7 +85,7 @@ impl Quality {
 pub struct NodeConfig {
     /// The most units the node can hold.
     pub capacity: u32,
-    /// Growth points needed to regrow one unit.
+    /// Growth points needed to regrow one unit, at a pristine node's pace.
     pub regrow_cost: u32,
     /// Strain added per unit taken, in tenths of a percent.
     pub strain_per_unit: u32,
@@ -88,7 +108,8 @@ pub struct Node {
     config: NodeConfig,
     stock: u32,
     strain: Meter,
-    regrow_progress: u32,
+    /// In hundredths of a growth point, so wear can slow it smoothly.
+    regrow_progress: u64,
     recovery_progress: u32,
 }
 
@@ -124,12 +145,25 @@ impl Node {
         (self.strain.value() / 10) as u32
     }
 
+    /// How far past pristine the node is, from 0 to 100.
+    ///
+    /// Zero for the whole pristine range: use that leaves a node pristine
+    /// is not over-use.
+    pub const fn wear_percent(&self) -> u32 {
+        let over = self.strain.value() - PRISTINE_LIMIT;
+        if over <= 0 {
+            return 0;
+        }
+        (over * 100 / (MAX_STRAIN - PRISTINE_LIMIT)) as u32
+    }
+
     /// How worn the node is.
     pub fn quality(&self) -> Quality {
         QUALITY.band_of(self.strain.value())
     }
 
-    /// Runs one tick: regrows stock by `growth` points and eases strain.
+    /// Runs one tick: regrows stock by `growth` points, slowed by wear,
+    /// and eases strain.
     ///
     /// `growth` lets the surroundings speed regrowth up or slow it down.
     pub fn tick(&mut self, growth: u32) {
@@ -152,11 +186,14 @@ impl Node {
             self.regrow_progress = 0;
             return;
         }
-        let progress = self.regrow_progress.saturating_add(growth);
-        let room = self.config.capacity - self.stock;
-        let grown = (progress / self.config.regrow_cost).min(room);
-        self.stock += grown;
-        self.regrow_progress = progress - grown * self.config.regrow_cost;
+        let pace = u64::from(self.quality().regrowth_percent());
+        let cost = u64::from(self.config.regrow_cost) * 100;
+        let progress = self.regrow_progress + u64::from(growth) * pace;
+        let room = u64::from(self.config.capacity - self.stock);
+        let grown = (progress / cost).min(room);
+        // `grown` is at most `room`, which came from a u32.
+        self.stock += grown as u32;
+        self.regrow_progress = progress - grown * cost;
     }
 
     fn recover(&mut self) {
@@ -238,15 +275,48 @@ mod tests {
     }
 
     #[test]
-    fn strain_outlasts_the_stock() {
+    fn a_stripped_node_regrows_slowly_until_it_heals() {
+        let mut stripped = Node::new(ORE);
+        stripped.harvest(100);
+        let mut emptied_gently = Node::new(ORE);
+        emptied_gently.harvest(30);
+
+        run(&mut stripped, 100, 2);
+        run(&mut emptied_gently, 100, 2);
+        // Same time, same growth: 2 units against 10.
+        assert_eq!(stripped.stock(), 2);
+        assert_eq!(emptied_gently.stock(), 70 + 10);
+
+        run(&mut stripped, 2_000, 2);
+        assert_eq!((stripped.stock(), stripped.quality()), (100, Quality::Pristine));
+    }
+
+    #[test]
+    fn camping_cannot_hold_a_node_stripped() {
         let mut node = Node::new(ORE);
         node.harvest(100);
-        // Stock is back after 1,000 ticks at growth 2, but the wear is not.
-        run(&mut node, 1_000, 2);
-        assert_eq!(node.stock(), 100);
-        assert_eq!(node.quality(), Quality::Healthy);
-        run(&mut node, 1_000, 2);
-        assert_eq!(node.quality(), Quality::Pristine);
+        assert_eq!(node.quality(), Quality::Depleted);
+
+        // Take every unit the moment it appears, for a long time.
+        for _ in 0..20_000 {
+            node.tick(2);
+            node.harvest(u32::MAX);
+        }
+        assert!(node.quality() <= Quality::Worn, "still {:?}", node.quality());
+    }
+
+    #[test]
+    fn wear_is_zero_while_pristine_and_full_at_the_limit() {
+        let mut node = Node::new(ORE);
+        node.harvest(30);
+        assert_eq!((node.strain_percent(), node.wear_percent()), (24, 0));
+        node.harvest(10);
+        assert_eq!((node.strain_percent(), node.wear_percent()), (32, 9));
+        node.harvest(60);
+        assert_eq!((node.strain_percent(), node.wear_percent()), (80, 73));
+        let mut ruined = Node::new(NodeConfig { strain_per_unit: 10, ..ORE });
+        ruined.harvest(100);
+        assert_eq!(ruined.wear_percent(), 100);
     }
 
     #[test]
@@ -260,10 +330,10 @@ mod tests {
     }
 
     #[test]
-    fn yields_shrink_with_wear() {
-        let percents = [Quality::Pristine, Quality::Healthy, Quality::Worn, Quality::Depleted]
-            .map(Quality::yield_percent);
-        assert_eq!(percents, [100, 80, 50, 20]);
+    fn yield_and_regrowth_shrink_with_wear() {
+        let all = [Quality::Pristine, Quality::Healthy, Quality::Worn, Quality::Depleted];
+        assert_eq!(all.map(Quality::yield_percent), [100, 80, 50, 20]);
+        assert_eq!(all.map(Quality::regrowth_percent), [100, 80, 50, 20]);
     }
 
     #[test]

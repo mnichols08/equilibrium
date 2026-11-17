@@ -23,11 +23,15 @@ pub const BASE_EFFORT: u32 = 10;
 /// A gathering action takes `BASE_EFFORT` plus `0..EFFORT_SPREAD` units.
 pub const EFFORT_SPREAD: u64 = 3;
 
+/// The least stock a deposit needs before it is worth working. Stops
+/// anyone picking a deposit clean one unit at a time.
+pub const MIN_WORKABLE_STOCK: u32 = BASE_EFFORT;
+
 /// Skill experience per unit taken.
-pub const SKILL_XP_PER_UNIT: u64 = 3;
+pub const SKILL_XP_PER_UNIT: u64 = 1;
 
 /// Attribute experience per unit taken, before the tier bonus.
-pub const ATTRIBUTE_XP_PER_UNIT: u64 = 2;
+pub const ATTRIBUTE_XP_PER_UNIT: u64 = 1;
 
 /// Tiers that make up one whole in the tier bonus: `1 + tier / 10`.
 pub const TIERS_PER_WHOLE: u64 = 10;
@@ -35,11 +39,11 @@ pub const TIERS_PER_WHOLE: u64 = 10;
 /// Percentage points of yield per level of the governing attribute.
 pub const YIELD_PERCENT_PER_LEVEL: u64 = 1;
 
-/// How skills grow.
+/// How skills grow: about one full deposit for the first level.
 pub const SKILL_RULES: Rules = Rules { cap: 100, xp_per_level: 100 };
 
-/// How attributes grow.
-pub const ATTRIBUTE_RULES: Rules = Rules { cap: 100, xp_per_level: 100 };
+/// How attributes grow: about two full deposits for the first level.
+pub const ATTRIBUTE_RULES: Rules = Rules { cap: 100, xp_per_level: 250 };
 
 /// The tide: twenty minutes from one low water to the next.
 pub const TIDE: Cycle = Cycle::new(Duration::minutes(20));

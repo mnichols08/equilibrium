@@ -4,9 +4,12 @@
 //! - Leaving it alone lets it recover.
 //! - Mining raises Vigor, and Vigor raises yield.
 //! - A bot playing 10,000 ticks neither breaks the world nor stalls it.
+//! - Careful play holds the zone at peak; greed wears it down and earns less.
+//! - Nobody can hold a deposit stripped by camping on it.
 
 use eq_clock::{Duration, Tick};
 use eq_events::{replay, Session};
+use eq_game::content::MIN_WORKABLE_STOCK;
 use eq_game::{yield_amount, Attribute, Command, Event, Game, Health, Resource, SkillKind};
 use eq_nodes::Quality;
 
@@ -79,15 +82,14 @@ fn leaving_a_stripped_place_alone_lets_it_recover() {
 }
 
 #[test]
-fn wear_outlasts_regrowth() {
+fn a_stripped_place_regrows_slowly() {
     let mut session = Session::new(Game::new(SEED));
     go(&mut session, "north");
     strip(&mut session);
 
-    // The ore is back before the ledge has healed.
-    wait(&mut session, Duration::minutes(17));
+    wait(&mut session, Duration::minutes(10));
     let node = session.world().here().deposit.unwrap().node;
-    assert_eq!(node.stock(), node.capacity());
+    assert!(node.stock() * 2 < node.capacity(), "{} of {}", node.stock(), node.capacity());
     assert!(node.quality() > Quality::Pristine);
 }
 
@@ -95,7 +97,10 @@ fn wear_outlasts_regrowth() {
 fn mining_raises_vigor_and_vigor_raises_yield() {
     let mut session = Session::new(Game::new(SEED));
     go(&mut session, "north");
-    strip(&mut session);
+    for _ in 0..3 {
+        strip(&mut session);
+        wait(&mut session, Duration::minutes(45));
+    }
 
     let hero = session.world().hero();
     assert!(hero.skill(SkillKind::Mining).level() >= 2);
@@ -108,12 +113,33 @@ fn mining_raises_vigor_and_vigor_raises_yield() {
     assert!(strong > weak);
 }
 
+#[test]
+fn camping_on_a_deposit_cannot_hold_it_stripped() {
+    let mut session = Session::new(Game::new(SEED));
+    go(&mut session, "north");
+    strip(&mut session);
+    assert_eq!(quality_here(session.world()), Quality::Depleted);
+
+    // Stand on the ledge and take everything the moment it can be taken.
+    let mut hauls = Vec::new();
+    while session.now() < Tick::new(BOT_TICKS) {
+        match gathered(&act(&mut session, Command::Gather)) {
+            Some(amount) => hauls.push(amount),
+            None => wait(&mut session, Duration::seconds(5)),
+        }
+    }
+
+    assert!(quality_here(session.world()) <= Quality::Worn, "still {:?}", quality_here(session.world()));
+    assert_ne!(session.world().health(), Health::Collapsed);
+    assert!(hauls.iter().all(|&amount| amount > 0), "an empty haul: {hauls:?}");
+}
+
 /// How a bot decides whether to gather from the deposit in front of it.
 type Policy = fn(&Game) -> bool;
 
-/// Takes whatever is there.
+/// Takes whatever can be taken.
 fn greedy(game: &Game) -> bool {
-    game.here().deposit.is_some_and(|deposit| deposit.node.stock() > 0)
+    game.here().deposit.is_some_and(|deposit| deposit.node.stock() >= MIN_WORKABLE_STOCK)
 }
 
 /// Takes only from deposits that are pristine and at least half full.
@@ -186,7 +212,7 @@ fn print_bot_numbers() {
 const BOT_TICKS: u64 = 10_000;
 
 #[test]
-fn a_careful_bot_earns_steadily_and_never_collapses_the_zone() {
+fn a_careful_bot_earns_steadily_and_holds_the_zone_at_peak() {
     let run = run_bot(careful, BOT_TICKS);
     let game = run.session.world();
 
@@ -194,18 +220,19 @@ fn a_careful_bot_earns_steadily_and_never_collapses_the_zone() {
     assert!(*least > 0, "the loop flatlined: {:?}", run.quarters);
     assert!(most < &(least * 2), "the loop is unstable: {:?}", run.quarters);
     assert!(carried(game) < BOT_TICKS, "the loop exploded: {}", carried(game));
-    assert!(run.lowest_vitality > 30, "vitality fell to {}", run.lowest_vitality);
+    assert!(run.lowest_vitality >= 81, "the zone left peak health: vitality fell to {}", run.lowest_vitality);
     assert!(game.hero().skill(SkillKind::Foraging).level() < 100);
 }
 
 #[test]
-fn a_greedy_bot_collapses_the_zone_and_earns_less_for_it() {
+fn a_greedy_bot_wears_the_zone_down_and_earns_less_for_it() {
     let greedy_run = run_bot(greedy, BOT_TICKS);
     let careful_run = run_bot(careful, BOT_TICKS);
 
-    assert!(greedy_run.lowest_vitality <= 30, "vitality only fell to {}", greedy_run.lowest_vitality);
+    assert!(greedy_run.lowest_vitality <= 50, "vitality only fell to {}", greedy_run.lowest_vitality);
+    assert!(greedy_run.quarters.iter().all(|&amount| amount > 0), "greed flatlined: {:?}", greedy_run.quarters);
     let (greedy_total, careful_total) = (carried(greedy_run.session.world()), carried(careful_run.session.world()));
-    assert!(careful_total > greedy_total * 2, "careful {careful_total} vs greedy {greedy_total}");
+    assert!(careful_total * 2 > greedy_total * 3, "careful {careful_total} vs greedy {greedy_total}");
 }
 
 #[test]
