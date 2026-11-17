@@ -1,0 +1,13 @@
+[package]
+name = "eq-nodes"
+description = "Resource nodes that regrow, and wear out when over-harvested."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+eq-meter = { path = "../eq-meter" }
