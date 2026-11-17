@@ -153,6 +153,8 @@ export function pageView(root, options = {}) {
         body: scene.you.body,
         forgotten: scene.you.forgotten,
         asleep: scene.you.asleep,
+        canRite: scene.you.can_rite,
+        riteWaiting: scene.you.rite_waiting,
         online: Boolean(options.online),
       })
       log.lines = lines

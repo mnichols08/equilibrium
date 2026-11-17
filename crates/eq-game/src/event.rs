@@ -8,7 +8,7 @@ use eq_world_graph::PlaceId;
 
 use crate::character::CharacterId;
 use crate::board::{ContractId, Lot, TradeRefusal};
-use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RobRefusal, TendRefusal};
+use crate::combat::{NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::creature::Being;
 use crate::spirit::SpiritTier;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
@@ -201,6 +201,29 @@ pub enum Outcome {
     Faded {
         /// Which life this is, counting the first as 1.
         life: u32,
+    },
+    /// The deposit is warded and is not thriving, so it would not yield.
+    Warded {
+        /// What they hoped to gather.
+        resource: Resource,
+    },
+    /// They could not hold a rite.
+    CannotRite {
+        /// Why not.
+        why: RiteRefusal,
+    },
+    /// They began a rite. It needs a second person to answer it.
+    RiteBegun,
+    /// They answered a rite another had begun, and it is done: the
+    /// deposit is mended and warded.
+    RiteDone {
+        /// Who began it.
+        with: CharacterId,
+    },
+    /// A rite they began was answered and is done.
+    RiteAnswered {
+        /// Who answered.
+        by: CharacterId,
     },
     /// They could not tend a sleeper.
     CannotTend {

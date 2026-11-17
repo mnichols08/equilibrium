@@ -93,6 +93,29 @@ pub const ATROPHY_FLOOR_PERCENT: u32 = 50;
 /// out of a fight.
 pub const DISCONNECT_GRACE: Duration = Duration::seconds(120);
 
+/// How long one's part in a Restoration Rite takes.
+pub const RITE_TIME: Duration = Duration::seconds(30);
+
+/// How long a rite one person has begun waits for a second to answer.
+pub const RITE_WINDOW: Duration = Duration::seconds(90);
+
+/// How much of a deposit's strain a finished rite lifts, as a
+/// percentage of all it could bear. The rite also brings a deposit
+/// less than half full up to half.
+pub const RITE_MENDS_PERCENT: u32 = 50;
+
+/// How hard pressed a deposit must be before a rite can be held over
+/// it. Rites are for what has been stripped, not for topping up.
+pub const RITE_NEEDS_PRESSURE: u32 = 50;
+
+/// How long a finished rite's ward lies on the deposit. While it does,
+/// the deposit yields only when it is pristine and at least half full,
+/// and no new rite can be held there.
+pub const WARD_TIME: Duration = Duration::minutes(15);
+
+/// Corruption a finished rite lifts from the zone.
+pub const RITE_CLEANSES: i64 = 5;
+
 /// How many contracts one person may have on the board at once.
 pub const MOST_CONTRACTS_EACH: usize = 3;
 
@@ -363,7 +386,7 @@ const fn place(
     lair: Option<CreatureKind>,
 ) -> Place {
     let deposit = match resource {
-        Some(resource) => Some(Deposit { resource, node: Node::new(resource.node()) }),
+        Some(resource) => Some(Deposit { resource, node: Node::new(resource.node()), warded_until: eq_clock::Tick::ZERO, rite_begun: None }),
         None => None,
     };
     Place { name, description, safety, deposit, lair, position }

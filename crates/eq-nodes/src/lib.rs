@@ -194,6 +194,17 @@ impl Node {
         Harvest { taken, quality }
     }
 
+    /// Mends the node: `percent` of all possible strain is lifted, and
+    /// a node less than half full is brought up to half. Anything over
+    /// 100 is treated as 100.
+    ///
+    /// Mending stops at half full on purpose. It ends bareness without
+    /// handing out more than a careful harvester would have left.
+    pub fn mend(&mut self, percent: u32) {
+        self.stock = self.stock.max(self.config.capacity / 2);
+        self.strain.adjust(-(MAX_STRAIN * i64::from(percent.min(100)) / 100));
+    }
+
     fn regrow(&mut self, growth: u32) {
         if self.stock >= self.config.capacity {
             self.regrow_progress = 0;
@@ -221,6 +232,18 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mending_lifts_strain_and_ends_bareness_but_gives_no_more_than_half() {
+        let config = NodeConfig { capacity: 100, regrow_cost: 10, strain_per_unit: 10, recovery_every: 5 };
+        let mut node = Node::new(config);
+        node.harvest(100);
+        assert_eq!((node.stock(), node.strain_percent()), (0, 100));
+        node.mend(50);
+        assert_eq!((node.stock(), node.strain_percent(), node.bareness_percent()), (50, 50, 0));
+        node.mend(500);
+        assert_eq!((node.stock(), node.strain_percent(), node.quality()), (50, 0, Quality::Pristine));
+    }
 
     const ORE: NodeConfig =
         NodeConfig { capacity: 100, regrow_cost: 20, strain_per_unit: 8, recovery_every: 2 };

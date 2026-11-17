@@ -11,11 +11,12 @@ use alloc::string::String;
 
 use crate::board::{Board, ContractId, Lot, TradeRefusal};
 use crate::character::{Character, CharacterId, Death, Rebirth};
-use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RobRefusal, TendRefusal};
+use crate::combat::{may_attack, may_rob, Blow, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::command::{Action, Command};
 use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 use crate::content::{
-    self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, MOST_VIGIL, TEND_TIME, VIGIL_PER_TENDING, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
+    self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, MOST_VIGIL, RITE_CLEANSES, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
+    VIGIL_PER_TENDING, WARD_TIME, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
     CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, EFFORT_SPREAD,
     FADED_CARRYOVER_PERCENT, GATHER_TIME,
     HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
@@ -325,6 +326,10 @@ impl Game {
             Outcome::Struck { target, .. } => {
                 audience.extend(here.into_iter().flat_map(|place| self.witnesses(place, who)).filter(|other| other != target));
             }
+            // The one who began the rite hears of it as their own `RiteAnswered`.
+            Outcome::RiteDone { with } => {
+                audience.extend(here.into_iter().flat_map(|place| self.witnesses(place, who)).filter(|other| other != with));
+            }
             Outcome::Gathered { .. }
             | Outcome::Joined
             | Outcome::StandingChanged { to: Standing::Marked, .. }
@@ -332,6 +337,7 @@ impl Game {
             | Outcome::LayDown { .. }
             | Outcome::Stole { .. }
             | Outcome::Returned
+            | Outcome::RiteBegun
             | Outcome::Tended { .. }
             | Outcome::Posted { .. }
             | Outcome::Accepted { .. }
@@ -397,6 +403,7 @@ impl Game {
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
             Action::Name(target) => self.name(index, *target, now, outcomes, events),
+            Action::Rite => self.rite(index, now, outcomes, events),
             Action::Tend(target) => self.tend(index, *target, now, outcomes),
             Action::Post { give, want } => self.post(index, *give, *want, now, outcomes),
             Action::Accept(id) => self.accept(index, *id, now, outcomes, events),
@@ -489,6 +496,43 @@ impl Game {
         if redeemed {
             let life = self.begin_life(index, now, REBIRTH_CARRYOVER_PERCENT, true);
             outcomes.push(Outcome::Redeemed { by: None, life });
+        }
+    }
+
+    /// Takes part in a Restoration Rite. The first to do so begins it;
+    /// a second, in time, completes it: the deposit is mended, a ward
+    /// is laid on it, and some of the zone's corruption lifts.
+    fn rite(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let character = &mut self.characters[index];
+        let place = character.place();
+        let marked = character.standing() == Standing::Marked;
+        let refusal = match self.zone.map().place(place).and_then(|place| place.deposit) {
+            None => Some(RiteRefusal::NothingToMend),
+            Some(_) if marked => Some(RiteRefusal::Marked),
+            Some(deposit) if deposit.is_warded(now) => Some(RiteRefusal::Warded),
+            Some(deposit) if !deposit.needs_rite(now) => Some(RiteRefusal::NoNeed),
+            Some(_) => None,
+        };
+        if let Some(why) = refusal {
+            return outcomes.push(Outcome::CannotRite { why });
+        }
+        character.busy_until = now + RITE_TIME;
+        let Some(deposit) = self.zone.map_mut().place_mut(place).and_then(|place| place.deposit.as_mut()) else { return };
+        let Some(beginner) = deposit.rite_open(now).filter(|beginner| *beginner != who) else {
+            deposit.rite_begun = Some((who, now));
+            return outcomes.push(Outcome::RiteBegun);
+        };
+        let before = deposit.node.quality();
+        deposit.node.mend(RITE_MENDS_PERCENT);
+        deposit.warded_until = now + WARD_TIME;
+        deposit.rite_begun = None;
+        let (resource, after) = (deposit.resource, deposit.node.quality());
+        self.zone.cleanse(RITE_CLEANSES);
+        outcomes.push(Outcome::RiteDone { with: beginner });
+        events.push(Event::Character { who: beginner, outcome: Outcome::RiteAnswered { by: who } });
+        if after != before {
+            events.push(Event::DepositChanged { place, resource, from: before, to: after });
         }
     }
 
@@ -1082,6 +1126,11 @@ impl Game {
             outcomes.push(Outcome::TooSparse { resource });
             return;
         }
+        // A ward lets a deposit be worked only while it is thriving.
+        if deposit.is_warded(now) && !deposit.is_thriving() {
+            outcomes.push(Outcome::Warded { resource });
+            return;
+        }
 
         // EFFORT_SPREAD is tiny, so the cast cannot truncate.
         let effort = BASE_EFFORT + self.rng.below(EFFORT_SPREAD) as u32;
@@ -1165,7 +1214,9 @@ impl World for Game {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Resource, SkillKind};
+    use crate::content::RITE_WINDOW;
+    use crate::haul::pressure_percent;
+    use crate::types::{Deposit, Resource, SkillKind};
     use eq_world_graph::PlaceId;
 
     const ASH: CharacterId = CharacterId::new(0);
@@ -2361,5 +2412,105 @@ mod tests {
 
         game.apply(&Command::wake(ASH), Tick::new(now), &mut events);
         assert_eq!(game.character(ASH).unwrap().vigil(), Duration::ZERO);
+    }
+
+    /// Ash, Bryn and Cole on the Ore Ledge, which Cole has just stripped.
+    /// Returns the world and the tick at which all three are free.
+    fn a_stripped_ledge() -> (Game, u64) {
+        const COLE: CharacterId = CharacterId::new(2);
+        let mut game = Game::new(1, &["Ash", "Bryn", "Cole"]);
+        let mut events = Vec::new();
+        for who in [ASH, BRYN, COLE] {
+            game.apply(&Command::go(who, "north"), Tick::new(0), &mut events);
+        }
+        let mut now = 30;
+        while pressure_percent(&game.map().place(LEDGE).unwrap().deposit.unwrap().node) < 90 {
+            game.apply(&Command::gather(COLE), Tick::new(now), &mut events);
+            now += GATHER_TIME.as_ticks();
+        }
+        (game, now)
+    }
+
+    fn ledge(game: &Game) -> Deposit {
+        game.map().place(LEDGE).unwrap().deposit.unwrap()
+    }
+
+    #[test]
+    fn two_voices_mend_a_stripped_deposit_and_ward_it() {
+        let (mut game, now) = a_stripped_ledge();
+        let before = ledge(&game);
+        let mut events = Vec::new();
+
+        game.apply(&Command::rite(ASH), Tick::new(now), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::RiteBegun));
+        assert_eq!(ledge(&game).node, before.node, "one voice mends nothing");
+        // The same voice twice is still one voice.
+        game.apply(&Command::rite(ASH), Tick::new(now + RITE_TIME.as_ticks()), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::RiteBegun));
+
+        events.clear();
+        game.apply(&Command::rite(BRYN), Tick::new(now + 40), &mut events);
+        assert_eq!(events[0], Event::Character { who: BRYN, outcome: Outcome::RiteDone { with: ASH } });
+        assert_eq!(events[1], Event::Character { who: ASH, outcome: Outcome::RiteAnswered { by: BRYN } });
+        let after = ledge(&game);
+        assert_eq!(after.node.stock(), after.node.capacity() / 2, "brought up to half, no further");
+        assert!(after.node.strain_percent() + 50 <= before.node.strain_percent().max(50));
+        assert!(after.is_warded(Tick::new(now + 40)));
+        assert_eq!(after.warded_until, Tick::new(now + 40) + WARD_TIME);
+    }
+
+    #[test]
+    fn a_ward_lets_a_deposit_be_worked_only_while_it_thrives() {
+        let (mut game, now) = a_stripped_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::rite(ASH), Tick::new(now), &mut events);
+        game.apply(&Command::rite(BRYN), Tick::new(now), &mut events);
+        let free = now + RITE_TIME.as_ticks();
+
+        // Mended but still worn: it will not yield, to anyone.
+        assert!(!ledge(&game).is_thriving());
+        game.apply(&Command::gather(ASH), Tick::new(free), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::Warded { resource: Resource::Ore }));
+        game.apply(&Command::rite(ASH), Tick::new(free), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotRite { why: RiteRefusal::Warded }));
+
+        // When the ward has run its time the deposit can be worked again.
+        let lifted = free + WARD_TIME.as_ticks();
+        ticks(&mut game, free + 1, lifted);
+        game.apply(&Command::gather(ASH), Tick::new(lifted), &mut events);
+        assert!(matches!(outcome(&events), Some(Outcome::Gathered { .. }) | Some(Outcome::AttributeRose { .. }) | Some(Outcome::SkillRose { .. })));
+    }
+
+    #[test]
+    fn a_rite_is_not_for_the_marked_nor_for_ground_that_is_well_nor_for_camp() {
+        const COLE: CharacterId = CharacterId::new(2);
+        let (mut game, now) = a_stripped_ledge();
+        let refused = |events: &[Event]| match outcome(events) {
+            Some(Outcome::CannotRite { why }) => Some(*why),
+            _ => None,
+        };
+        let mut events = Vec::new();
+        assert_eq!(game.character(COLE).unwrap().standing(), Standing::Marked);
+        game.apply(&Command::rite(COLE), Tick::new(now), &mut events);
+        assert_eq!(refused(&events), Some(RiteRefusal::Marked));
+
+        game.apply(&Command::go(ASH, "north"), Tick::new(now), &mut events);
+        game.apply(&Command::rite(ASH), Tick::new(now + 30), &mut events);
+        assert_eq!(refused(&events), Some(RiteRefusal::NoNeed), "the High Shelf is untouched");
+        game.apply(&Command::go(BRYN, "south"), Tick::new(now), &mut events);
+        game.apply(&Command::rite(BRYN), Tick::new(now + 30), &mut events);
+        assert_eq!(refused(&events), Some(RiteRefusal::NothingToMend));
+    }
+
+    #[test]
+    fn a_rite_left_unanswered_lapses() {
+        let (mut game, now) = a_stripped_ledge();
+        let mut events = Vec::new();
+        game.apply(&Command::rite(ASH), Tick::new(now), &mut events);
+        let late = now + RITE_WINDOW.as_ticks() + 1;
+        game.apply(&Command::rite(BRYN), Tick::new(late), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::RiteBegun), "too late to answer: Bryn begins anew");
+        game.apply(&Command::rite(ASH), Tick::new(late + 5), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::RiteAnswered { by: ASH }), "Ash answers the new one");
     }
 }
