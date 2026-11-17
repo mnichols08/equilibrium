@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 use eq_clock::{Duration, Tick};
 use eq_events::{Events, OutOfOrder, Session};
 use eq_nodes::Quality;
+use eq_world_graph::PlaceId;
 
 use crate::content::{CIRCUIT, DEPOSIT_ROUTES, FULL_REST, MIN_WORKABLE_STOCK};
 use crate::{Character, CharacterId, Command, Death, Event, Game, Outcome, Safety, Standing};
@@ -285,15 +286,30 @@ impl Bots {
     }
 
     /// Walks the next leg of the bot's plan, or stands idle if it has
-    /// nowhere to go.
+    /// nowhere to go. Plans are written for the first land of all;
+    /// anywhere else a bot finds its own way round.
     fn walk(&mut self, index: usize, session: &mut Session<Game>, events: &mut Events<Game>, now: Tick) -> Result<(), OutOfOrder> {
         let bot = &mut self.bots[index];
+        if let Some(errand) = Errand::of(session.world(), bot, now) {
+            match errand {
+                Errand::Arrived { stays: true } => bot.free_at = now + IDLE,
+                Errand::Arrived { stays: false } => {
+                    bot.step += 1;
+                    bot.free_at = now + PAUSE;
+                }
+                Errand::Blocked => bot.free_at = now + TIDE_WAIT,
+                Errand::Go(exit) => {
+                    events.extend(session.submit(now, Command::go(bot.who, &exit))?);
+                    bot.free_at = busy_until(session, bot.who, now).max(now + PAUSE);
+                }
+            }
+            return Ok(());
+        }
         let Some(leg) = bot.plan.leg(bot.step) else {
             bot.free_at = now + IDLE;
             return Ok(());
         };
-        let exit = way_on(session.world(), bot.who, leg.exit, bot.step);
-        let tried = session.submit(now, Command::go(bot.who, &exit))?;
+        let tried = session.submit(now, Command::go(bot.who, leg.exit))?;
         let closed = tried.iter().any(|stamped| {
             matches!(stamped.value, Event::Character { outcome: Outcome::ExitClosed { .. }, .. })
         });
@@ -309,21 +325,48 @@ impl Bots {
     }
 }
 
-/// The exit a bot takes for a leg of its plan. Plans are written for
-/// the land a bot began in; one reborn elsewhere finds its legs lead
-/// nowhere, and wanders its new land instead, a different way each step.
-fn way_on(game: &Game, who: CharacterId, planned: &str, step: usize) -> alloc::string::String {
-    let Some(here) = game.character(who).map(Character::place) else { return planned.into() };
-    let land = game.zone_at(here);
-    // Plans are written for the first land of all, and on it they are kept to.
-    let planned_for_here = game.zones().first().is_some_and(|first| first.contains(here));
-    if planned_for_here || game.map().exit(here, planned).is_some() {
-        return planned.into();
-    }
-    let ways: Vec<_> = game.map().exits(here).iter().filter(|exit| land.contains(exit.to)).collect();
-    match ways.get(step % ways.len().max(1)) {
-        Some(exit) => exit.label.clone(),
-        None => planned.into(),
+/// What a bot away from the first land does when it has nothing better
+/// to do than walk. It has no written route there, so it works one out:
+/// a roamer goes round every place worth working, a camper picks one
+/// and stays, and either goes home to the haven when worn out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Errand {
+    /// It is where it was going. A camper stays; a roamer moves on.
+    Arrived {
+        /// Whether this is where it stops.
+        stays: bool,
+    },
+    /// The only way there is under water for now.
+    Blocked,
+    /// Take this exit.
+    Go(alloc::string::String),
+}
+
+impl Errand {
+    /// The bot's errand, or `None` on the first land, where it has a
+    /// plan to keep to.
+    fn of(game: &Game, bot: &Bot, now: Tick) -> Option<Self> {
+        let me = game.character(bot.who)?;
+        let (here, land) = (me.place(), game.zone_at(me.place()));
+        if game.zones().first().is_some_and(|first| first.contains(here)) {
+            return None;
+        }
+        // Somewhere worth working that is nothing's lair.
+        let worth = |place: PlaceId| game.map().place(place).is_some_and(|data| data.deposit.is_some() && data.lair.is_none());
+        let rounds: Vec<PlaceId> = land.place_ids().filter(|&place| worth(place)).collect();
+        let camps = bot.plan.circuit.is_empty();
+        // Each camper has its own spot; a roamer's moves on with its steps.
+        let turn = if camps { bot.who.get() as usize } else { bot.step };
+        let worn_out = me.rested() == 0;
+        let goal = if worn_out || rounds.is_empty() { land.anchor() } else { rounds[turn % rounds.len()] };
+        if here == goal {
+            return Some(Self::Arrived { stays: camps || rounds.is_empty() });
+        }
+        // Not through water, and not through anything's lair.
+        let safe = |exit: &eq_world_graph::Exit| {
+            exit.passage.is_open(now) && (exit.to == goal || game.map().place(exit.to).is_some_and(|data| data.lair.is_none()))
+        };
+        Some(game.map().first_step(here, goal, safe).map_or(Self::Blocked, |exit| Self::Go(exit.label.clone())))
     }
 }
 
@@ -589,6 +632,39 @@ mod tests {
 
     fn session(names: &[&str]) -> Session<Game> {
         Session::new(Game::new(1, names))
+    }
+
+    #[test]
+    fn bots_find_their_own_way_round_a_land_nobody_wrote_a_route_for() {
+        // Two founders, each alone in a land made from the seed.
+        let mut session = Session::new(Game::new_world(7, 2, &[]));
+        session.submit(Tick::ZERO, Command::join(ASH, "Ash")).unwrap();
+        session.submit(Tick::ZERO, Command::join(BRYN, "Bryn")).unwrap();
+        let mut bots = Bots::new([(ASH, Plan::roam(Policy::Careful)), (BRYN, Plan::camp(Policy::Careful, DEPOSIT_ROUTES[3]))]);
+        bots.run(&mut session, Tick::new(10_000)).unwrap();
+
+        let game = session.world();
+        for who in [ASH, BRYN] {
+            let bot = game.character(who).unwrap();
+            assert_eq!(bot.life(), 1, "{} should have kept clear of the lair and the pass", bot.name());
+            assert!(game.zone_at(bot.home()).contains(bot.place()), "and stayed in their own land");
+            assert!(bot.carried_total() > 500, "{} gathered {}", bot.name(), bot.carried_total());
+        }
+        // The roamer went round; the camper found one place and kept to it.
+        let kinds = |who: CharacterId| crate::Resource::ALL.iter().filter(|&&resource| game.character(who).unwrap().carried(resource) > 0).count();
+        assert!(kinds(ASH) >= 2, "a roamer brings back more than one thing");
+        assert_eq!(kinds(BRYN), 1, "a camper brings back one");
+    }
+
+    #[test]
+    fn a_worn_out_bot_in_a_strange_land_goes_home_to_sleep() {
+        let mut session = Session::new(Game::new_world(7, 1, &[]));
+        session.submit(Tick::ZERO, Command::join(ASH, "Ash")).unwrap();
+        let mut bots = Bots::new([(ASH, Plan::roam(Policy::Careful))]);
+        bots.run(&mut session, Tick::new(A_LONG_DAY)).unwrap();
+        let ash = session.world().character(ASH).unwrap();
+        assert!(ash.is_asleep(session.now()), "Ash should be asleep by now");
+        assert_eq!(ash.place(), ash.home());
     }
 
     #[test]
