@@ -27,8 +27,8 @@ fn audience_matches_who_the_narrator_speaks_to() {
     let mut script = Rng::from_seed(5);
     let mut checked = 0;
 
-    // Twelve characters wander, gather, fight and loot at random for two
-    // world-hours.
+    // Twelve characters wander, gather, fight, loot, sleep, wake and rob
+    // at random for two world-hours.
     for tick in 1..=7_200 {
         let mut events = Vec::new();
         game.tick(Tick::new(tick), &mut events);
@@ -36,11 +36,15 @@ fn audience_matches_who_the_narrator_speaks_to() {
         checked += events.len();
 
         let who = CharacterId::new(script.below(NAMES.len() as u64));
-        let command = match script.below(10) {
-            0..=4 => Command::gather(who),
-            5..=7 => Command::go(who, EXITS[script.below(EXITS.len() as u64) as usize]),
-            8 => Command::attack(who, CharacterId::new(script.below(NAMES.len() as u64))),
-            _ => Command::take(who),
+        let someone = CharacterId::new(script.below(NAMES.len() as u64));
+        let command = match script.below(20) {
+            0..=7 => Command::gather(who),
+            8..=12 => Command::go(who, EXITS[script.below(EXITS.len() as u64) as usize]),
+            13..=14 => Command::attack(who, someone),
+            15 => Command::take(who),
+            16 => Command::rest(who),
+            17..=18 => Command::wake(who),
+            _ => Command::rob(who, someone),
         };
         let mut events = Vec::new();
         game.apply(&command, Tick::new(tick), &mut events);

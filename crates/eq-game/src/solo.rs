@@ -87,6 +87,11 @@ impl Solo {
                 None => alloc::vec![format!("There is nobody called \"{name}\" here.")],
             },
             Input::Wait(time) => self.wait(time),
+            Input::Sleep(time) => self.sleep(time),
+            Input::Rob(name) => match self.someone_here_called(&name) {
+                Some(target) => self.act(Action::Rob(target)),
+                None => alloc::vec![format!("There is nobody called \"{name}\" here.")],
+            },
             Input::Look => alloc::vec![self.look()],
             Input::Inspect => alloc::vec![narrate::inspect(self.game(), Self::YOU)],
             Input::Stats => alloc::vec![narrate::stats(self.game(), Self::YOU)],
@@ -135,6 +140,22 @@ impl Solo {
         let events = self.pass_time_until(self.now() + time);
         let mut lines = alloc::vec![String::from("Time passes.")];
         lines.extend(self.tell(&events));
+        lines
+    }
+
+    /// Lies down, sleeps for `time` and wakes, unless something wakes the
+    /// player first.
+    fn sleep(&mut self, time: Duration) -> Vec<String> {
+        let mut lines = self.act(Action::Rest);
+        let lying_down = |solo: &Self| solo.game().character(Self::YOU).is_some_and(|you| you.is_lying_down());
+        if !lying_down(self) {
+            return lines;
+        }
+        let events = self.pass_time_until(self.now() + time);
+        lines.extend(self.tell(&events));
+        if lying_down(self) {
+            lines.extend(self.act(Action::Wake));
+        }
         lines
     }
 
@@ -248,6 +269,42 @@ mod tests {
         let took = solo.handle("take").lines;
         assert!(took[0].starts_with("You take "), "{took:?}");
         assert!(solo.replays_identically());
+    }
+
+    #[test]
+    fn sleeping_is_one_line_in_and_a_rested_waking_out() {
+        let mut solo = Solo::new(1);
+        solo.handle("wait 10h");
+        let rested = |solo: &Solo| solo.game().character(Solo::YOU).unwrap().rested();
+        assert!(rested(&solo) < 40);
+
+        let said = solo.handle("sleep").lines;
+        assert_eq!(said, ["You settle down to sleep.", "You wake after 8 hours, well rested."]);
+        assert_eq!(rested(&solo), 100);
+        assert_eq!(solo.now(), Tick::new(10 * 3_600 + 30 + 8 * 3_600));
+        assert!(solo.handle("stats").lines[0].contains("Rested       100"));
+        assert!(solo.replays_identically());
+    }
+
+    #[test]
+    fn sleeping_in_the_wilds_beside_a_greedy_companion_costs_you_your_pack() {
+        let mut solo = Solo::with_company(1, 3);
+        solo.handle("north");
+        solo.handle("gather");
+        let said = solo.handle("sleep 6h").lines;
+        assert!(said.iter().any(|line| line.contains("Your pack is lighter")), "{said:?}");
+        assert_eq!(solo.game().character(Solo::YOU).unwrap().carried_total(), 0);
+    }
+
+    #[test]
+    fn sleeping_at_camp_is_safe() {
+        let mut solo = Solo::with_company(1, 3);
+        solo.handle("north");
+        solo.handle("gather");
+        solo.handle("south");
+        let carried = solo.game().character(Solo::YOU).unwrap().carried_total();
+        solo.handle("sleep 6h");
+        assert_eq!(solo.game().character(Solo::YOU).unwrap().carried_total(), carried);
     }
 
     #[test]

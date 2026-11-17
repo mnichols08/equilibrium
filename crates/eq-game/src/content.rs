@@ -56,6 +56,40 @@ pub const YIELD_LOST_AT_FULL_TAINT: u32 = 75;
 /// combat exists; until then the mark is only recorded and shown.
 pub const STANDING_BANDS: Bands<Standing, 1> = Bands::new(Standing::Clean, [(50, Standing::Marked)]);
 
+/// How fast a wasted skill or attribute comes back, up to its old peak,
+/// as a percentage of the normal pace. Wide on purpose: a returning
+/// player should be weak for an evening, not set back a month.
+pub const MUSCLE_MEMORY_PERCENT: u32 = 400;
+
+/// How long it takes to settle down before sleep begins. Being struck in
+/// that time leaves you standing.
+pub const SETTLE_TIME: Duration = Duration::seconds(30);
+
+/// How long a character can be awake before the rested bonus is spent.
+pub const RESTED_LASTS: Duration = Duration::hours(15);
+
+/// How long asleep it takes to be fully rested from nothing.
+pub const FULL_REST: Duration = Duration::hours(8);
+
+/// The extra skill and attribute experience a fully rested character
+/// earns, as a percentage. It shrinks evenly as the rest wears off.
+pub const RESTED_BONUS_PERCENT: u64 = 50;
+
+/// How long anyone can sleep before the body starts to waste.
+pub const FORGIVING_STRETCH: Duration = Duration::days(3);
+
+/// Past the forgiving stretch, how long asleep costs one level of every
+/// body skill and attribute.
+pub const ATROPHY_EVERY: Duration = Duration::hours(6);
+
+/// Atrophy stops at this share of each peak, as a percentage. The body
+/// wastes to a floor, never to nothing.
+pub const ATROPHY_FLOOR_PERCENT: u32 = 50;
+
+/// Taint for going through the pack of a sleeper the land has not
+/// marked. Enough to be marked for it at once.
+pub const TAINT_FOR_ROBBING: i64 = 50;
+
 /// The most health a character can have.
 pub const MAX_HEALTH: i64 = 100;
 
@@ -100,10 +134,11 @@ pub const HEALTH_ON_RISING: i64 = 25;
 pub const TAKE_TIME: Duration = Duration::seconds(5);
 
 /// How skills grow: about a hundred units gathered for the first level.
-pub const SKILL_RULES: Rules = Rules { cap: 100, xp_per_level: 100 };
+pub const SKILL_RULES: Rules = Rules { cap: 100, xp_per_level: 100, relearning_percent: MUSCLE_MEMORY_PERCENT };
 
 /// How attributes grow: about two hundred and fifty units for the first level.
-pub const ATTRIBUTE_RULES: Rules = Rules { cap: 100, xp_per_level: 250 };
+pub const ATTRIBUTE_RULES: Rules =
+    Rules { cap: 100, xp_per_level: 250, relearning_percent: MUSCLE_MEMORY_PERCENT };
 
 /// The tide: twenty minutes from one low water to the next.
 pub const TIDE: Cycle = Cycle::new(Duration::minutes(20));

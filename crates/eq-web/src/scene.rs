@@ -55,6 +55,8 @@ pub struct You {
     pub health: u32,
     /// Whether they have lost a fight and not yet got up.
     pub down: bool,
+    /// How rested they are, 0 to 100. The rested learn faster.
+    pub rested: u32,
     /// Taint, 0 to 100.
     pub taint: u32,
     /// Whether the land has marked them.
@@ -132,8 +134,12 @@ pub struct PersonView {
     pub marked: bool,
     /// Whether they are down.
     pub down: bool,
+    /// Whether they are asleep.
+    pub asleep: bool,
     /// Whether the viewer may attack them right now.
     pub can_attack: bool,
+    /// Whether the viewer may go through their pack right now.
+    pub can_rob: bool,
 }
 
 /// A way between two places, drawn once whichever way it is walked.
@@ -177,6 +183,7 @@ impl Scene {
             can_take: has_spoils(place),
             health: character.health(),
             down: character.is_down(),
+            rested: character.rested(),
             taint: character.taint(),
             marked: character.standing() == Standing::Marked,
             skills: SkillKind::ALL
@@ -197,8 +204,8 @@ impl Scene {
             vitality: game.vitality(),
             health: game.health().name(),
             you,
-            company: people(game, viewer, here).into_iter().filter(|person| !person.you).collect(),
-            places: places(game, viewer, here),
+            company: people(game, viewer, here, now).into_iter().filter(|person| !person.you).collect(),
+            places: places(game, viewer, here, now),
             links: links(game, now),
             exits: exits(game, here, now),
         })
@@ -224,7 +231,7 @@ fn clock(now: Tick) -> String {
     full.split(' ').next().unwrap_or_default().to_owned()
 }
 
-fn places(game: &Game, viewer: CharacterId, here: PlaceId) -> Vec<PlaceView> {
+fn places(game: &Game, viewer: CharacterId, here: PlaceId, now: Tick) -> Vec<PlaceView> {
     game.map()
         .places()
         .map(|(id, place)| PlaceView {
@@ -235,7 +242,7 @@ fn places(game: &Game, viewer: CharacterId, here: PlaceId) -> Vec<PlaceView> {
             safety: place.safety.name(),
             here: id == here,
             deposit: place.deposit.as_ref().map(deposit_view),
-            people: people(game, viewer, id),
+            people: people(game, viewer, id, now),
             spoils: has_spoils(place),
         })
         .collect()
@@ -260,7 +267,7 @@ const fn quality_name(quality: Quality) -> &'static str {
     }
 }
 
-fn people(game: &Game, viewer: CharacterId, place: PlaceId) -> Vec<PersonView> {
+fn people(game: &Game, viewer: CharacterId, place: PlaceId, now: Tick) -> Vec<PersonView> {
     game.occupants(place)
         .iter()
         .filter_map(|&id| Some((id, game.character(id)?)))
@@ -269,7 +276,9 @@ fn people(game: &Game, viewer: CharacterId, place: PlaceId) -> Vec<PersonView> {
             you: id == viewer,
             marked: character.standing() == Standing::Marked,
             down: character.is_down(),
+            asleep: character.is_asleep(now),
             can_attack: game.can_attack(viewer, id).is_ok(),
+            can_rob: game.can_rob(viewer, id, now).is_ok(),
         })
         .collect()
 }
@@ -324,7 +333,16 @@ mod tests {
 
         let here: Vec<&PlaceView> = scene.places.iter().filter(|place| place.here).collect();
         assert_eq!(here.len(), 1);
-        let you = PersonView { name: "You".into(), you: true, marked: false, down: false, can_attack: false };
+        let you = PersonView {
+            name: "You".into(),
+            you: true,
+            marked: false,
+            down: false,
+            asleep: false,
+            can_attack: false,
+            can_rob: false,
+        };
+        assert_eq!(scene.you.rested, 100);
         assert_eq!(here[0].people, [you]);
         assert_eq!((scene.you.health, scene.you.down, scene.you.can_take), (100, false, false));
         assert!(scene.places.iter().all(|place| !place.spoils));

@@ -40,6 +40,7 @@ mod haul;
 pub mod narrate;
 mod occupancy;
 pub mod parser;
+pub mod rest;
 mod solo;
 mod types;
 mod zone;

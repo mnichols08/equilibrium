@@ -1,13 +1,13 @@
 <!--
   Where you are and how you and the shoreline are doing.
-  @prop {{ name: string, marked: boolean, down: boolean }[]} company - Everyone else standing where you are.
-  @prop {{ place_name: string, description: string, health: number, down: boolean, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
+  @prop {{ name: string, marked: boolean, down: boolean, asleep: boolean }[]} company - Everyone else standing where you are.
+  @prop {{ place_name: string, description: string, health: number, down: boolean, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
 -->
 <script>
-  const emptyYou = { place_name: '', description: '', health: 100, down: false, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
+  const emptyYou = { place_name: '', description: '', health: 100, down: false, rested: 100, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
   const trained = [...you.skills, ...you.attributes].filter((entry) => entry.level > 0)
   const carrying = you.pack.map((item) => `${item.amount} ${item.name}`).join(', ')
-  const note = (person) => (person.down ? ' (down)' : person.marked ? ' (marked)' : '')
+  const note = (person) => (person.down ? ' (down)' : person.asleep ? ' (asleep)' : person.marked ? ' (marked)' : '')
   const alsoHere = company.map((person) => `${person.name}${note(person)}`).join(', ')
 </script>
 <style>
@@ -32,6 +32,9 @@
   </p>
   <p>
     <label>Health <meter min="0" max="100" low="30" high="60" optimum="100" value={you.health}></meter> {you.health}{you.down ? " — you are down" : ""}</label>
+  </p>
+  <p>
+    <label>Rested <meter min="0" max="100" low="25" high="50" optimum="100" value={you.rested}></meter> {you.rested}</label>
   </p>
   <p zb-if={you.taint > 0} class:marked={you.marked}>
     Taint {you.taint}{you.marked ? " — the land has marked you" : ""}

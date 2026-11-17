@@ -107,6 +107,14 @@
         expect(tile('Tidal Cave').classList.contains('blocked'), 'the cave tile to show as flooded')
         expect(page.querySelectorAll('eq-map .other').length === 0, 'nobody else on the map when playing alone')
 
+        // Sleep: a long day wears the rest off, and a night puts it back.
+        const rested = () => Number(page.querySelector('eq-status meter[low="25"]')?.value)
+        type('wait 10h')
+        await until(() => rested() < 40, 'ten hours awake to wear the rest off')
+        press(button('Sleep'))
+        await until(() => logText().includes('You wake after 8 hours, well rested.'), 'a night of sleep to be logged')
+        expect(rested() === 100, 'to be fully rested after a night')
+
         // With company: three bots start beside you, then wander off and work.
         frame.contentWindow.location.replace('./index.html?seed=1&bots=3')
         await until(() => frame.contentDocument?.location.search.includes('bots=3') && frame.contentDocument.readyState === 'complete', 'the page to reload with bots')

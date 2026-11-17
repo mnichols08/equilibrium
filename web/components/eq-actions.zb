@@ -2,6 +2,7 @@
   What you can do right now: walk out by an exit, gather, pick things up, challenge someone, or let time pass.
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
   @prop {{ name: string }[]} targets - Everyone here you may attack right now.
+  @prop {{ name: string }[]} sleepers - Everyone asleep here whose pack you may go through.
   @prop {boolean} down - Whether you are down; if so only waiting is possible.
   @fires command - A button was pressed; `detail` is the line to send to the game, such as "north" or "wait 10m".
 -->
@@ -27,11 +28,17 @@
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   small { display: block; opacity: 0.8; }
 </style>
-<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} down={false}>
-  <div zb-if={targets.length > 0} role="group" aria-label="Challenge">
+<eq-actions exits={[]} can-gather={false} can-take={false} targets={[]} sleepers={[]} down={false}>
+  <div zb-if={targets.length + sleepers.length > 0} role="group" aria-label="Others here">
     <zb-each items={targets} as="target" key={target.name}>
       <button type="button" class="danger" disabled={down} onclick={() => emit('command', `attack ${target.name}`)}>
         Attack {target.name}
+      </button>
+    </zb-each>
+    <zb-each items={sleepers} as="sleeper" key={sleeper.name}>
+      <button type="button" class="danger" disabled={down} onclick={() => emit('command', `rob ${sleeper.name}`)}>
+        Rob {sleeper.name}
+        <small>asleep</small>
       </button>
     </zb-each>
   </div>
@@ -47,6 +54,7 @@
     <button type="button" class="primary" disabled={!canGather || down} onclick={() => emit('command', 'gather')}>Gather</button>
     <button zb-if={canTake} type="button" class="primary" disabled={down} onclick={() => emit('command', 'take')}>Take what's here</button>
     <button type="button" onclick={() => emit('command', 'inspect')}>Inspect</button>
+    <button type="button" disabled={down} onclick={() => emit('command', 'sleep 8h')}>Sleep 8 hours</button>
     <zb-each items={WAITS} as="wait" key={wait.line}>
       <button type="button" onclick={() => emit('command', wait.line)}>{wait.text}</button>
     </zb-each>
