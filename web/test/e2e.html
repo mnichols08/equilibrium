@@ -1,0 +1,104 @@
+<!doctype html>
+<!--
+  Plays the built site in a real browser and writes "E2E PASS" or
+  "E2E FAIL: why" into the page. CI loads this with headless Chrome and
+  reads the result out of the DOM.
+
+  It proves the whole chain: the wasm loads, the components draw the
+  scene, and pressing things on the page reaches the game and comes back.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Equilibrium end-to-end test</title>
+  </head>
+  <body>
+    <pre id="result">E2E RUNNING</pre>
+    <iframe id="page" src="./index.html?seed=1" width="390" height="1400" title="The game"></iframe>
+    <script type="module">
+      const result = document.querySelector('#result')
+      const frame = document.querySelector('#page')
+      const steps = []
+
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+      /** Waits until `check` returns something truthy, and returns it. */
+      async function until(check, what) {
+        for (let attempt = 0; attempt < 400; attempt++) {
+          const value = check()
+          if (value) return value
+          await sleep(25)
+        }
+        throw new Error(`timed out waiting for ${what}`)
+      }
+
+      function expect(condition, what) {
+        if (!condition) throw new Error(`expected ${what}`)
+        steps.push(what)
+      }
+
+      try {
+        const page = await until(() => frame.contentDocument?.querySelector('#game') && frame.contentDocument, 'the page to load')
+        const game = page.querySelector('#game')
+        const notice = () => page.querySelector('#notice').textContent
+        await until(() => !game.hidden || notice().startsWith('The game could not start'), 'the game to start')
+        expect(!game.hidden, `the game to start (notice: ${notice()})`)
+
+        const here = () => page.querySelector('eq-status h2')?.textContent
+        const logText = () => page.querySelector('eq-log ol')?.textContent ?? ''
+        const button = (label) => [...page.querySelectorAll('eq-actions button')].find((b) => b.textContent.trim().startsWith(label))
+        const tile = (name) => [...page.querySelectorAll('eq-map .tile')].find((t) => t.getAttribute('aria-label').startsWith(name))
+        const press = (element) => element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+        // The first frame.
+        await until(() => here() === 'Tidewatch Camp', 'the status to show the camp')
+        expect(page.querySelectorAll('eq-map .tile').length === 10, 'ten places on the map')
+        expect(page.querySelectorAll('eq-map .path').length === 9, 'nine paths on the map')
+        expect(page.querySelectorAll('eq-map .tile.here').length === 1, 'exactly one tile marked as where you are')
+        expect(button('Gather').disabled, 'Gather to be disabled at camp')
+        expect(logText().includes('Tidewatch Camp [haven]'), 'the log to open with the camp')
+
+        // A button reaches the game and the page redraws.
+        press(button('Go north'))
+        await until(() => here() === 'Ore Ledge', 'the Go north button to walk to Ore Ledge')
+        expect(tile('Ore Ledge').classList.contains('here'), 'the map to move you to Ore Ledge')
+        expect(!button('Gather').disabled, 'Gather to be enabled on the ledge')
+
+        press(button('Gather'))
+        await until(() => /You gather \d+ heavy ore\./.test(logText()), 'a haul of ore in the log')
+        expect(page.querySelector('eq-status').textContent.includes('heavy ore'), 'the pack to show the ore')
+
+        // A map tile does the same as a button.
+        expect(tile('High Shelf').classList.contains('reachable'), 'High Shelf to be reachable from the ledge')
+        press(tile('High Shelf'))
+        await until(() => here() === 'High Shelf', 'pressing the High Shelf tile to walk there')
+
+        // A tile that is not next to you does nothing.
+        press(tile('Stony Spit'))
+        await sleep(100)
+        expect(here() === 'High Shelf', 'a far-off tile to do nothing')
+
+        // A typed command works like the terminal.
+        const form = page.querySelector('#typed')
+        form.elements.line.value = 'stats'
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+        await until(() => logText().includes('Skills'), 'the typed stats command to answer')
+        expect(form.elements.line.value === '', 'the text box to clear after sending')
+
+        // The tide closes the cave mouth.
+        for (const line of ['south', 'south', 'east', 'wait 10m']) {
+          form.elements.line.value = line
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+        }
+        await until(() => here() === 'Shingle Beach', 'the walk to the beach')
+        await until(() => button('Go cave')?.disabled, 'the cave exit to close at high tide')
+        expect(page.querySelector('eq-status .meta').textContent.includes('high tide'), 'the status to show high tide')
+        expect(tile('Tidal Cave').classList.contains('blocked'), 'the cave tile to show as flooded')
+
+        result.textContent = `E2E PASS (${steps.length} checks)`
+      } catch (error) {
+        result.textContent = `E2E FAIL: ${error.message}\nPassed before that:\n- ${steps.join('\n- ')}`
+      }
+    </script>
+  </body>
+</html>

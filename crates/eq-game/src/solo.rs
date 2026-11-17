@@ -6,7 +6,6 @@
 //! what happened. It lives here so the clients only differ in how they
 //! show it.
 
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -107,7 +106,7 @@ impl Solo {
 
     fn wait(&mut self, time: Duration) -> Vec<String> {
         let events = in_order(self.session.advance_to(self.now() + time));
-        let mut lines = alloc::vec![format!("Time passes.")];
+        let mut lines = alloc::vec![String::from("Time passes.")];
         lines.extend(self.tell(&events));
         lines
     }
