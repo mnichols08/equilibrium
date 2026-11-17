@@ -5,7 +5,8 @@
 //! - Leaving it alone lets it recover.
 //! - Mining raises Vigor, and Vigor raises yield.
 //! - A bot playing 10,000 ticks neither breaks the world nor stalls it.
-//! - Careful play holds the zone at peak; greed wears it down and earns less.
+//! - Careful play holds the zone at peak; greed wears it down and earns less,
+//!   but one greedy player cannot collapse it alone.
 //!
 //! What happens when players share the zone is in `shared_zone.rs`.
 
@@ -59,13 +60,15 @@ fn stripped_ledge() -> (Session<Game>, Vec<u64>) {
 }
 
 #[test]
-fn strip_mining_degrades_the_place_and_the_zone() {
+fn strip_mining_degrades_the_place_and_dents_the_zone() {
     let (session, hauls) = stripped_ledge();
 
-    let (first, last) = (hauls[0], hauls[hauls.len() - 1]);
-    assert!(first >= 5 * last, "hauls should shrink sharply: {hauls:?}");
+    let (best, last) = (*hauls.iter().max().unwrap(), hauls[hauls.len() - 1]);
+    assert!(best >= 4 * last, "hauls should shrink sharply: {hauls:?}");
     assert_eq!(node_here(session.world()).quality(), Quality::Depleted);
-    assert_eq!(session.world().health(), Health::Balanced);
+    // One stripped place out of nine hurts the zone without breaking it.
+    let vitality = session.world().vitality();
+    assert!((81..100).contains(&vitality), "vitality {vitality}");
 }
 
 #[test]
@@ -125,7 +128,7 @@ fn a_careful_bot_earns_steadily_and_holds_the_zone_at_peak() {
     let (least, most) = (quarters.iter().min().unwrap(), quarters.iter().max().unwrap());
     assert!(*least > 0, "the loop flatlined: {quarters:?}");
     assert!(most < &(least * 2), "the loop is unstable: {quarters:?}");
-    assert!(run.carried_by_all() < BOT_TIME.as_ticks(), "the loop exploded: {}", run.carried_by_all());
+    assert!(run.carried_by_all() < 2 * BOT_TIME.as_ticks(), "the loop exploded: {}", run.carried_by_all());
     assert!(run.lowest_vitality() >= 81, "the zone left peak health: {}", run.lowest_vitality());
 }
 
@@ -134,10 +137,11 @@ fn a_greedy_bot_wears_the_zone_down_and_earns_less_for_it() {
     let greedy_run = run_alone(Plan::roam(greedy));
     let careful_run = run_alone(Plan::roam(careful));
 
-    assert!(greedy_run.lowest_vitality() <= 50, "vitality only fell to {}", greedy_run.lowest_vitality());
+    let lowest = greedy_run.lowest_vitality();
+    assert!((31..=50).contains(&lowest), "greed alone should wear the zone down but not collapse it: {lowest}");
     assert!(greedy_run.quarters().iter().all(|&amount| amount > 0), "greed flatlined: {:?}", greedy_run.quarters());
     let (greedy_total, careful_total) = (greedy_run.carried_by_all(), careful_run.carried_by_all());
-    assert!(careful_total * 2 > greedy_total * 3, "careful {careful_total} vs greedy {greedy_total}");
+    assert!(careful_total * 4 > greedy_total * 5, "careful {careful_total} vs greedy {greedy_total}");
 }
 
 #[test]

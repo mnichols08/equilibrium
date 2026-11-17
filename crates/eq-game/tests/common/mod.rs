@@ -15,12 +15,61 @@ pub const SAMPLE_EVERY: Duration = Duration::seconds(100);
 /// How long a bot stands idle when there is nothing it wants to do.
 const IDLE: Duration = Duration::seconds(5);
 
-/// How long a bot waits for the tide when it is shut in the cave.
+/// How long a bot waits before trying a flooded way back again.
 const TIDE_WAIT: Duration = Duration::minutes(1);
 
-/// The roaming circuit: camp → ledge → camp → beach → cave → beach →
-/// shallows → beach → camp.
-pub const CIRCUIT: &[&str] = &["north", "south", "east", "cave", "out", "east", "west", "west"];
+/// One step of a route: an exit to take, and whether to wait for it if
+/// the tide has closed it (the only way back from somewhere) or skip it.
+#[derive(Clone, Copy)]
+pub struct Leg {
+    pub exit: &'static str,
+    pub wait_if_closed: bool,
+}
+
+pub const fn go(exit: &'static str) -> Leg {
+    Leg { exit, wait_if_closed: false }
+}
+
+pub const fn wait_for(exit: &'static str) -> Leg {
+    Leg { exit, wait_if_closed: true }
+}
+
+/// The roaming circuit, visiting every deposit and returning to camp:
+/// both ore shelves, the beach, the cave and grotto, the shallows and
+/// reef, then the wrack line and the spit.
+pub const CIRCUIT: &[Leg] = &[
+    go("north"),
+    go("north"),
+    go("south"),
+    go("south"),
+    go("east"),
+    go("cave"),
+    go("down"),
+    go("up"),
+    wait_for("out"),
+    go("east"),
+    go("east"),
+    wait_for("west"),
+    go("west"),
+    go("west"),
+    go("south"),
+    go("south"),
+    go("north"),
+    go("north"),
+];
+
+/// How to walk from camp to each of the nine deposits.
+pub const DEPOSITS: [&[Leg]; 9] = [
+    &[go("north")],
+    &[go("north"), go("north")],
+    &[go("east")],
+    &[go("east"), go("east")],
+    &[go("east"), go("east"), go("east")],
+    &[go("east"), go("cave")],
+    &[go("east"), go("cave"), go("down")],
+    &[go("south")],
+    &[go("south"), go("south")],
+];
 
 /// Decides whether a bot gathers from the deposit in front of it.
 pub type Policy = fn(&Game, CharacterId) -> bool;
@@ -44,9 +93,9 @@ fn deposit(game: &Game, who: CharacterId) -> Option<eq_nodes::Node> {
 pub struct Plan {
     pub policy: Policy,
     /// Exits walked once, to get into position.
-    pub approach: &'static [&'static str],
+    pub approach: &'static [Leg],
     /// Exits walked round and round afterwards. Empty means stay put.
-    pub circuit: &'static [&'static str],
+    pub circuit: &'static [Leg],
 }
 
 impl Plan {
@@ -56,13 +105,13 @@ impl Plan {
     }
 
     /// Walks to one place and stays, gathering whenever `policy` allows.
-    pub const fn camp(policy: Policy, approach: &'static [&'static str]) -> Self {
+    pub const fn camp(policy: Policy, approach: &'static [Leg]) -> Self {
         Self { policy, approach, circuit: &[] }
     }
 
-    fn next_exit(&self, step: usize) -> Option<&'static str> {
+    fn next_leg(&self, step: usize) -> Option<Leg> {
         match self.approach.get(step) {
-            Some(label) => Some(label),
+            Some(leg) => Some(*leg),
             None if self.circuit.is_empty() => None,
             None => Some(self.circuit[(step - self.approach.len()) % self.circuit.len()]),
         }
@@ -174,16 +223,16 @@ impl Crowd {
             self.bots[index].free_at = self.busy_until(who).max(now + IDLE);
             return;
         }
-        let Some(label) = plan.next_exit(step) else {
+        let Some(leg) = plan.next_leg(step) else {
             self.bots[index].free_at = now + IDLE;
             return;
         };
-        let events = self.submit(now, Command::go(who, label));
-        let shut_in = label == "out" && outcomes(&events).any(|outcome| matches!(outcome, Outcome::ExitClosed { .. }));
-        if shut_in {
+        let events = self.submit(now, Command::go(who, leg.exit));
+        let closed = outcomes(&events).any(|outcome| matches!(outcome, Outcome::ExitClosed { .. }));
+        if closed && leg.wait_if_closed {
             self.bots[index].free_at = now + TIDE_WAIT;
         } else {
-            // A step that led nowhere (the cave is flooded) is skipped.
+            // A step that led nowhere (somewhere flooded) is skipped.
             self.bots[index].step += 1;
             self.bots[index].free_at = self.busy_until(who).max(now + Duration::seconds(1));
         }
