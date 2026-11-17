@@ -49,6 +49,9 @@ pub struct Zone {
     pub(crate) name: Option<String>,
     /// What its founder called their house, which those they invite share.
     pub(crate) house: Option<String>,
+    /// Where its house stands, once its founder has raised it. The
+    /// land's own people cannot be struck or robbed there.
+    pub(crate) hall: Option<PlaceId>,
     /// Names its founder has invited, lower-cased. Whoever joins the
     /// world under one of them arrives here.
     pub(crate) invited: Vec<String>,
@@ -69,6 +72,7 @@ impl Zone {
             founder,
             name: None,
             house: None,
+            hall: None,
             invited: Vec::new(),
         }
     }
@@ -122,6 +126,11 @@ impl Zone {
     /// What the founder called the land, once they have.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// Where the land's house stands, once it has been raised.
+    pub const fn hall(&self) -> Option<PlaceId> {
+        self.hall
     }
 
     /// What the founder called their house, once they have.

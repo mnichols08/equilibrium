@@ -312,6 +312,43 @@ impl Game {
         }
     }
 
+    /// A founder raises their land's house where they stand: once, in
+    /// their own land, out of what they carry.
+    fn raise(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let here = self.characters[index].place();
+        let checked = self.founded_by(index).and_then(|zone| {
+            let land = &self.zones[zone];
+            let fit = self.map.place(here).is_some_and(|place| place.safety != Safety::Haven && place.lair.is_none());
+            if land.hall().is_some() {
+                Err(FoundRefusal::HouseStands)
+            } else if !land.contains(here) || !fit {
+                Err(FoundRefusal::CannotStandHere)
+            } else if content::HOUSE_COST.iter().any(|(resource, amount)| self.characters[index].carried(*resource) < *amount) {
+                Err(FoundRefusal::CannotAfford)
+            } else {
+                Ok(zone)
+            }
+        });
+        match checked {
+            Ok(zone) => {
+                let founder = &mut self.characters[index];
+                for (resource, amount) in content::HOUSE_COST {
+                    founder.spend(resource, amount);
+                }
+                founder.busy_until = now + content::RAISE_TIME;
+                self.zones[zone].hall = Some(here);
+                outcomes.push(Outcome::HouseRaised);
+            }
+            Err(why) => outcomes.push(Outcome::CannotFound { why }),
+        }
+    }
+
+    /// Whether `character` is under their own roof: in the house of the
+    /// land they belong to, where nobody can strike or rob them.
+    pub fn is_sheltered(&self, character: &Character) -> bool {
+        self.zones[self.land_of(character)].hall() == Some(character.place())
+    }
+
     /// The land a character belongs to: the one their lives begin in.
     fn land_of(&self, character: &Character) -> usize {
         self.zone_index(character.home())
@@ -540,6 +577,9 @@ impl Game {
         if aggressor.place() != victim.place() || victim.is_spirit() {
             return Err(Refusal::NotHere);
         }
+        if self.is_sheltered(victim) {
+            return Err(Refusal::Haven);
+        }
         let safety = self.place_of(attacker).map_or(Safety::Haven, |place| place.safety);
         // War opens the wilderness: an enemy needs no mark to be struck.
         if safety != Safety::Haven && self.pact_between(aggressor, victim) == Some(Pact::War) {
@@ -561,6 +601,9 @@ impl Game {
         }
         if !victim.is_asleep(now) {
             return Err(RobRefusal::Awake);
+        }
+        if self.is_sheltered(victim) {
+            return Err(RobRefusal::Haven);
         }
         let safety = self.place_of(robber).map_or(Safety::Haven, |place| place.safety);
         may_rob(safety)?;
@@ -701,6 +744,7 @@ impl Game {
             Action::NameLand(name) => self.name_founding(index, name, false, outcomes),
             Action::NameHouse(name) => self.name_founding(index, name, true, outcomes),
             Action::Invite(name) => self.invite(index, name, outcomes),
+            Action::Raise => self.raise(index, now, outcomes),
             Action::Deal { with, dealing } => self.deal(index, with, *dealing, outcomes, events),
             Action::Bury(target) => self.bury(index, *target, now, outcomes, events),
             Action::Rite => self.rite(index, now, outcomes, events),
@@ -3414,6 +3458,54 @@ mod tests {
         // One of them died in Bryn's land. Ash's land, far away, feels it too.
         let felt = |game: &Game, land: PlaceId| game.zone_at(land).corruption();
         assert_eq!((felt(&war, brynsland), felt(&war, ashland)), (CORRUPTION_PER_DEATH, CORRUPTION_PER_DEATH));
+    }
+
+    #[test]
+    fn a_founder_raises_a_house_and_the_lands_people_are_safe_under_its_roof() {
+        let mut game = founders_met();
+        let (ashland, brynsland) = (game.character(ASH).unwrap().home(), game.character(BRYN).unwrap().home());
+        let wilds = |game: &Game, land: PlaceId| {
+            let fit = |place: &PlaceId| game.map().place(*place).is_some_and(|data| data.safety == Safety::Buffer && data.lair.is_none());
+            game.zone_at(land).place_ids().find(fit).unwrap()
+        };
+        let site = wilds(&game, brynsland);
+        let raise = |game: &mut Game, who: CharacterId| {
+            let mut events = Vec::new();
+            game.apply(&Command::raise(who), Tick::new(20), &mut events);
+            outcome(&events).cloned()
+        };
+        let cannot = |why| Some(Outcome::CannotFound { why });
+
+        set_down(&mut game, COLE, site);
+        assert_eq!(raise(&mut game, COLE), cannot(FoundRefusal::NotFounder));
+        set_down(&mut game, BRYN, brynsland);
+        assert_eq!(raise(&mut game, BRYN), cannot(FoundRefusal::CannotStandHere), "camp is a haven already");
+        let abroad = wilds(&game, ashland);
+        set_down(&mut game, BRYN, abroad);
+        assert_eq!(raise(&mut game, BRYN), cannot(FoundRefusal::CannotStandHere), "not in someone else's land");
+        set_down(&mut game, BRYN, site);
+        assert_eq!(raise(&mut game, BRYN), cannot(FoundRefusal::CannotAfford));
+        for (resource, amount) in crate::content::HOUSE_COST {
+            game.characters[1].stow(resource, amount + 1);
+        }
+        assert_eq!(raise(&mut game, BRYN), Some(Outcome::HouseRaised));
+        assert_eq!(game.zone_at(brynsland).hall(), Some(site));
+        assert_eq!(game.character(BRYN).unwrap().carried_total(), 2, "the house took what it costs");
+        game.characters[1].busy_until = Tick::ZERO;
+        assert_eq!(raise(&mut game, BRYN), cannot(FoundRefusal::HouseStands));
+
+        // War, and Ash in Bryn's land. Cole is asleep under his own roof.
+        deal(&mut game, ASH, "Bryn", Dealing::War);
+        set_down(&mut game, ASH, site);
+        let mut events = Vec::new();
+        game.characters[2].stow(Resource::Kelp, 5);
+        game.apply(&Command::rest(COLE), Tick::new(30), &mut events);
+        let asleep = Tick::new(30) + SETTLE_TIME;
+        assert_eq!(game.can_attack(ASH, COLE), Err(Refusal::Haven));
+        assert_eq!(game.can_rob(ASH, COLE, asleep), Err(RobRefusal::Haven));
+        // It is no roof of Ash's: she is as open here as anywhere at war.
+        assert_eq!(game.can_attack(COLE, ASH), Ok(()));
+        assert!(crate::narrate::place(&game, COLE, asleep).contains("nobody can strike or rob you"));
     }
 
     #[test]

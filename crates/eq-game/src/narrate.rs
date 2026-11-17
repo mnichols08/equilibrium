@@ -41,6 +41,9 @@ Commands:
   name <name>          at camp, speak a forgotten spirit's name to redeem it
   call <name>          as a founder, name your land (for good)
   house <name>         as a founder, name your house (for good)
+  raise                as a founder, raise your house where you stand
+                       (40 driftwood, 20 ore): your land's people cannot
+                       be struck or robbed under its roof
   invite <name>        as a founder, invite someone: whoever joins under
                        that name arrives in your land
   ally <land>          as a founder on the Meeting Ground, offer another
@@ -147,6 +150,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Joined => format!("You walk out of the tide at {}, new to the shoreline.", place_name(game, home_of(game, viewer))),
         Outcome::Founded => "Nobody has stood here before you. This land is yours to name (call <name>), and your house with it (house <name>). Those you invite (invite <name>) will arrive here.".into(),
         Outcome::CannotFound { why } => cannot_found(*why),
+        Outcome::HouseRaised => "You raise your house here, out of what you carried. From now on nobody can strike or rob your land's people under its roof.".into(),
         Outcome::CannotDeal { why } => cannot_deal(*why).into(),
         Outcome::Offered { land, dealing } => format!(
             "You offer {} {}. It waits on their founder saying the same of you, here on the Meeting Ground.",
@@ -465,6 +469,11 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
             let whose = if founder == viewer { "you".into() } else { format!("{}{house}", name_of(game, founder)) };
             lines.push(format!("{land}, founded by {whose}."));
         }
+    }
+    if zone.hall() == Some(character.place()) {
+        let whose = zone.house().map_or_else(|| "this land".into(), |house| format!("House {house}"));
+        let roof = if game.is_sheltered(character) { " Under its roof nobody can strike or rob you." } else { "" };
+        lines.push(format!("The house of {whose} stands here.{roof}"));
     }
     if character.place() == zone.anchor() && !zone.shrine().is_empty() {
         let names: Vec<&str> = zone.shrine().iter().map(|epitaph| epitaph.name.as_str()).collect();
@@ -822,6 +831,11 @@ fn cannot_found(why: FoundRefusal) -> String {
         FoundRefusal::AlreadyNamed => "It has its name already. Names are for good.".into(),
         FoundRefusal::AlreadyHere => "Someone of that name is already in the world.".into(),
         FoundRefusal::TooManyInvites => "You have as many invitations waiting as a founder may.".into(),
+        FoundRefusal::CannotStandHere => {
+            "A house is raised in your own land, somewhere that is not a haven already and is nothing's lair.".into()
+        }
+        FoundRefusal::HouseStands => "Your land has its house already.".into(),
+        FoundRefusal::CannotAfford => "A house takes 40 driftwood and 20 ore, and you are not carrying that.".into(),
         FoundRefusal::Name(Problem::TooShort) => "That name is too short.".into(),
         FoundRefusal::Name(Problem::TooLong) => "That name is too long.".into(),
         FoundRefusal::Name(Problem::BadCharacter(bad)) => {

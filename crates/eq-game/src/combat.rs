@@ -60,6 +60,13 @@ pub enum FoundRefusal {
     AlreadyHere,
     /// They have as many invitations waiting as a founder may.
     TooManyInvites,
+    /// A house is raised in the founder's own land, somewhere that is
+    /// neither a haven already nor something's lair.
+    CannotStandHere,
+    /// The land has its house already.
+    HouseStands,
+    /// They are not carrying what a house takes.
+    CannotAfford,
 }
 
 /// Why a Restoration Rite could not be held.

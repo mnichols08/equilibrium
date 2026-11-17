@@ -274,6 +274,12 @@ pub const REBIRTH_CARRYOVER_PERCENT: u32 = 0;
 /// before it lives again.
 pub const AFTERLIFE_LEVEL: u32 = 10;
 
+/// What raising a land's house takes from its founder's pack.
+pub const HOUSE_COST: [(Resource, u64); 2] = [(Resource::Driftwood, 40), (Resource::Ore, 20)];
+
+/// How long raising a house takes.
+pub const RAISE_TIME: Duration = Duration::minutes(5);
+
 /// The health of a shade: what a spirit can fight for practice where
 /// the living do not work. Another takes its place as it falls.
 pub const SHADE_HEALTH: u32 = 40;

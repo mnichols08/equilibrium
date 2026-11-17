@@ -48,6 +48,9 @@ pub enum Action {
     /// As a founder, invite someone by name. Whoever joins the world
     /// under that name arrives in your land, as one of your house.
     Invite(String),
+    /// As a founder, raise your land's house where you stand. Your
+    /// land's people cannot be struck or robbed there.
+    Raise,
     /// As a founder standing on the Meeting Ground, deal with another
     /// land: offer an alliance, declare war, or ask for a truce. The
     /// land is named by its own name or its founder's.
@@ -167,6 +170,11 @@ impl Command {
     /// `who`, a founder, names their house.
     pub fn name_house(who: CharacterId, name: &str) -> Self {
         Self { who, action: Action::NameHouse(name.into()) }
+    }
+
+    /// `who`, a founder, raises their land's house where they stand.
+    pub const fn raise(who: CharacterId) -> Self {
+        Self { who, action: Action::Raise }
     }
 
     /// `who`, a founder, deals with the land called `with`.
