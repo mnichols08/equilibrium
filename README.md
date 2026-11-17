@@ -34,6 +34,20 @@ One character on the Rocky Shoreline: a camp and nine places to gather, two of t
 
 Every crate except `eq-cli` is `no_std` and builds for wasm. The crates above `eq-game` are usable without the game.
 
+## Scale
+
+Measured on one core with `cargo test --release -p eq-game --test scale -- --ignored --nocapture`:
+
+- An idle world runs about 12 million ticks per second: over 100 world-days per second.
+- Replaying a crowd's command log runs at about 6 million commands per second, the same for 100 characters as for 5,000.
+- `Game::audience(event)` names who should be told about an event from an index of who is where, so the cost of an event grows with the crowd around it and not with the whole world.
+
+Not built yet, and needed before a real server:
+
+- Saving: the command log and world state cannot be written to disk, and the log grows without limit. Needs snapshots.
+- One zone only. `Zone` is its own type so that a world of many zones is the next step, not a rewrite.
+- Characters cannot leave the world; ids are positions in a list.
+
 ## Ground rules
 
 - Pure functions over plain data. No I/O, wall clock or global RNG in the core.

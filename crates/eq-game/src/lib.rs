@@ -8,21 +8,39 @@
 //! over-harvesting is tainted for it: their own yields fall and the land
 //! marks them.
 //!
+//! How the crate is laid out:
+//!
 //! - [`content`]: the map and every tuning number.
-//! - [`Game`]: the rules, as an [`eq_events::World`].
-//! - [`parser`]: text to commands.
-//! - [`narrate`]: events and state to text.
+//! - [`Command`] and [`Event`]: what goes in and what comes out.
+//! - [`Game`]: the rules, as an [`eq_events::World`]. It holds a [`Zone`]
+//!   (map, deposits, vitality) and the [`Character`]s in it.
+//! - [`Haul`]: the sums behind a harvest.
+//! - [`parser`]: text to intent.
+//! - [`narrate`]: events and state to text, for one viewer.
+//!
+//! [`Game::audience`] says who should be told about an event.
 //!
 //! The crate does no I/O. `eq-cli` wraps it in a terminal.
 #![no_std]
 
 extern crate alloc;
 
+mod character;
+mod command;
 pub mod content;
+mod event;
 mod game;
+mod haul;
 pub mod narrate;
+mod occupancy;
 pub mod parser;
 mod types;
+mod zone;
 
-pub use game::{pressure_percent, Action, Character, CharacterId, Command, Event, Game, Haul, Outcome};
+pub use character::{Character, CharacterId};
+pub use command::{Action, Command};
+pub use event::{Event, Outcome};
+pub use game::Game;
+pub use haul::{pressure_percent, Haul};
 pub use types::{Attribute, Deposit, Health, Place, Resource, Safety, SkillKind, Standing};
+pub use zone::Zone;

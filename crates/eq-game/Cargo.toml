@@ -19,3 +19,6 @@ eq-rng = { path = "../eq-rng" }
 eq-skills = { path = "../eq-skills" }
 eq-curve = { path = "../eq-curve" }
 eq-world-graph = { path = "../eq-world-graph" }
+
+[dev-dependencies]
+eq-rng = { path = "../eq-rng" }
