@@ -393,23 +393,13 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
     game.can_take(bot.who).then(|| Command::take(bot.who))
 }
 
-/// A spirit's next step through the afterlife: practise here if the
-/// place can be worked, or else make for the first place in this land
-/// that can.
+/// A spirit's next step through the afterlife: practise where it
+/// stands. Where the living work, that is the work; anywhere else
+/// there is a shade to fight.
 pub(crate) fn afterlife(game: &Game, who: CharacterId) -> Option<Command> {
-    let me = game.character(who)?;
-    let workable = |place: eq_world_graph::PlaceId| game.map().place(place).is_some_and(|data| data.deposit.is_some());
-    if workable(me.place()) {
-        return Some(Command::gather(who));
-    }
-    // Water is nothing to a spirit, so every exit will do.
-    // This land first; another only if nothing here can be worked.
-    let near = game.zone_at(me.place()).place_ids();
-    let far = game.zones().iter().flat_map(crate::zone::Zone::place_ids);
-    near.chain(far)
-        .filter(|&place| workable(place))
-        .find_map(|place| game.map().first_step(me.place(), place, |_| true))
-        .map(|exit| Command::go(who, &exit.label))
+    let here = game.character(who)?.place();
+    let workable = game.map().place(here).is_some_and(|data| data.deposit.is_some());
+    Some(if workable { Command::gather(who) } else { Command::spar(who) })
 }
 
 /// A careful bot mends what it would not work. It answers a rite

@@ -36,18 +36,20 @@ impl Resource {
     }
 }
 
-/// A skill trained by gathering.
+/// A skill trained by use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SkillKind {
     /// Breaking rock.
     Mining,
     /// Collecting what grows and washes up.
     Foraging,
+    /// Landing a blow where it counts.
+    Fighting,
 }
 
 impl SkillKind {
     /// Every skill, in display order.
-    pub const ALL: [Self; 2] = [Self::Mining, Self::Foraging];
+    pub const ALL: [Self; 3] = [Self::Mining, Self::Foraging, Self::Fighting];
 
     /// Position in [`SkillKind::ALL`].
     pub const fn index(self) -> usize {
@@ -59,6 +61,7 @@ impl SkillKind {
         match self {
             Self::Mining => "mining",
             Self::Foraging => "foraging",
+            Self::Fighting => "fighting",
         }
     }
 }

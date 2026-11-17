@@ -274,6 +274,18 @@ pub const REBIRTH_CARRYOVER_PERCENT: u32 = 0;
 /// before it lives again.
 pub const AFTERLIFE_LEVEL: u32 = 10;
 
+/// The health of a shade: what a spirit can fight for practice where
+/// the living do not work. Another takes its place as it falls.
+pub const SHADE_HEALTH: u32 = 40;
+
+/// What one blow is worth toward fighting, to the living and to
+/// spirits alike. Set so that fighting shades takes a spirit about as
+/// long to reach [`AFTERLIFE_LEVEL`] as gathering does.
+pub const FIGHTING_XP_PER_BLOW: u64 = 3;
+
+/// How many levels of fighting add one percent to a blow.
+pub const FIGHTING_PER_PERCENT_DAMAGE: u64 = 2;
+
 /// What one draw is worth toward the skill a spirit practises: as
 /// much as one good haul is worth to the living.
 pub const AFTERLIFE_XP_PER_DRAW: u64 = 10;

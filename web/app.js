@@ -147,6 +147,7 @@ export function pageView(root, options = {}) {
         exits: scene.exits,
         canGather: scene.you.can_gather,
         canTake: scene.you.can_take,
+        canSpar: scene.you.can_spar,
         targets: scene.company.filter((person) => person.can_attack),
         sleepers: scene.company.filter((person) => person.can_rob),
         foes: scene.places.find((place) => place.here)?.creatures ?? [],

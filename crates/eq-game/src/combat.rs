@@ -10,6 +10,7 @@
 //! - In contested places, anybody.
 
 use crate::content::{
+    FIGHTING_PER_PERCENT_DAMAGE,
     BASE_DAMAGE, DAMAGE_LOST_AT_FULL_TAINT, DAMAGE_PERCENT_PER_VIGOR, MOST_DAMAGE_RESISTED, RESILIENCE_PER_PERCENT_RESISTED,
 };
 use crate::types::{Safety, Standing};
@@ -137,6 +138,8 @@ pub struct Blow {
     pub roll: u32,
     /// The attacker's Vigor.
     pub vigor: u32,
+    /// The attacker's fighting skill.
+    pub fighting: u32,
     /// The attacker's taint, from 0 to 100. The land's mark weakens the arm.
     pub taint: u32,
     /// The defender's Resilience.
@@ -146,7 +149,7 @@ pub struct Blow {
 impl Blow {
     /// The health this blow takes:
     ///
-    /// `(base + roll) × (1 + vigor / 100) × (1 − resisted) × (1 − taint loss)`
+    /// `(base + roll) × (1 + vigor / 100) × (1 + fighting / 200) × (1 − resisted) × (1 − taint loss)`
     ///
     /// rounded down, but never less than 1.
     pub fn damage(&self) -> u32 {
@@ -155,10 +158,11 @@ impl Blow {
         let weakened = self.taint.min(100) * DAMAGE_LOST_AT_FULL_TAINT / 100;
         let parts = u64::from(BASE_DAMAGE + self.roll)
             * (WHOLE + u64::from(self.vigor * DAMAGE_PERCENT_PER_VIGOR))
+            * (WHOLE * FIGHTING_PER_PERCENT_DAMAGE + u64::from(self.fighting))
             * (WHOLE - u64::from(resisted))
             * (WHOLE - u64::from(weakened));
         // A base blow is small and levels stop at 100, so this fits easily.
-        ((parts / WHOLE.pow(3)) as u32).max(1)
+        ((parts / (WHOLE.pow(4) * FIGHTING_PER_PERCENT_DAMAGE)) as u32).max(1)
     }
 }
 
@@ -167,7 +171,7 @@ mod tests {
     use super::*;
 
     const fn blow(vigor: u32, taint: u32, resilience: u32) -> Blow {
-        Blow { roll: 0, vigor, taint, resilience }
+        Blow { roll: 0, vigor, fighting: 0, taint, resilience }
     }
 
     #[test]
@@ -193,7 +197,8 @@ mod tests {
         assert_eq!(blow(50, 0, 0).damage(), 18);
         assert_eq!(blow(0, 0, 50).damage(), 9);
         assert_eq!(blow(0, 100, 0).damage(), 6);
-        assert_eq!(Blow { roll: 6, vigor: 0, taint: 0, resilience: 0 }.damage(), 18);
+        assert_eq!(Blow { roll: 6, vigor: 0, fighting: 0, taint: 0, resilience: 0 }.damage(), 18);
+        assert_eq!(Blow { fighting: 50, ..blow(0, 0, 0) }.damage(), 15, "a quarter more at fighting 50");
     }
 
     #[test]

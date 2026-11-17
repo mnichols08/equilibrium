@@ -34,6 +34,8 @@ Commands:
   bury <name>          lay someone's body in the ground where it lies
   gather               as a spirit, practise where the living would work:
                        reach level 10 in a skill there and you live again
+  attack shade         as a spirit, fight a shade where the living do not
+                       work: it never strikes back, and it counts the same
   seek                 as a forgotten spirit, search here for a memory
   name <name>          at camp, speak a forgotten spirit's name to redeem it
   call <name>          as a founder, name your land (for good)
@@ -172,6 +174,11 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Died { by: Cause::Creature(being), place, passing, .. } => {
             died(game, &capitalise(&being_name(game, *being, viewer)), *place, *passing)
         }
+        Outcome::Sparred { damage, left: 0 } => {
+            format!("You strike the shade for {damage} and it comes apart like smoke. Another gathers where it stood.")
+        }
+        Outcome::Sparred { damage, left } => format!("You strike the shade for {damage}. It does not strike back ({left} health)."),
+        Outcome::NoShade => "There is no shade here. Shades drift where the living do not work, and only a spirit can see them.".into(),
         Outcome::NoSuchCreature => "There is nothing like that here to fight.".into(),
         Outcome::HitCreature { being, damage: 0, .. } => format!(
             "Your blow glances off {}. You are not strong enough to hurt it yet.",

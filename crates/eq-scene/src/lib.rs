@@ -73,6 +73,9 @@ pub struct You {
     /// Their redemption, if they slept too long and are a forgotten
     /// spirit, or have not been born yet.
     pub forgotten: Option<ForgottenView>,
+    /// Whether there is a shade here for them to fight: they are a
+    /// waking spirit, and the living do not work this place.
+    pub can_spar: bool,
     /// How far a spirit has come in the afterlife. Any spirit has one.
     pub afterlife: Option<AfterlifeView>,
     /// The names of the dead whose bodies lie here and could be buried.
@@ -280,6 +283,7 @@ impl Scene {
             health: character.health(),
             life: character.life(),
             body: character.death().map(|death| body_view(game, death, here, now)),
+            can_spar: character.is_spirit() && !character.is_dormant() && place.deposit.is_none(),
             afterlife: character
                 .is_spirit()
                 .then(|| AfterlifeView { level: character.best_practised(), needed: AFTERLIFE_LEVEL }),
@@ -540,11 +544,12 @@ mod tests {
         assert_eq!(body.place, here.id);
         assert_eq!((body.can_return, body.held_for, body.lost_in), (false, 0, CORPSE_TIME.as_ticks()));
         assert_eq!(spirit.you.afterlife, Some(AfterlifeView { level: 0, needed: 10 }));
+        assert!(spirit.you.can_spar && !spirit.you.can_gather && !killer.you.can_spar, "camp has shades, for spirits");
         assert!(spirit.you.can_bury.is_empty(), "spirits bury nobody");
 
         game.apply(&Command::go(bryn, "north"), died, &mut events);
         let back = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap();
-        assert!(back.you.can_gather, "the ledge is somewhere to practise");
+        assert!(back.you.can_gather && !back.you.can_spar, "the ledge is somewhere to practise the work");
         assert!(back.you.body.unwrap().can_return);
 
         // Buried, there is no body to go back to, and nothing left to take.

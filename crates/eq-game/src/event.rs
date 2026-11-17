@@ -121,6 +121,17 @@ pub enum Outcome {
         /// The level at which they live again.
         needed: u32,
     },
+    /// As a spirit, they struck a shade.
+    Sparred {
+        /// The damage done.
+        damage: u32,
+        /// The shade's health afterwards. At 0 it is gone and another
+        /// has taken its place.
+        left: u32,
+    },
+    /// There is no shade here: the living work this place, or the one
+    /// asking is alive.
+    NoShade,
     /// As a spirit, they drew ectoplasm from the place they are in.
     Drew {
         /// How much they drew.
