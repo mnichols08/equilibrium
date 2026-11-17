@@ -14,7 +14,7 @@ use crate::combat::{may_attack, may_rob, Blow, FoundRefusal, NameRefusal, Refusa
 use crate::command::{Action, Command};
 use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
 use crate::content::{
-    self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, BURY_TIME, MOST_VIGIL, RITE_CLEANSES, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
+    self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, BURY_TIME, MOST_VIGIL, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
     VIGIL_PER_TENDING, WARD_TIME, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
     CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, AFTERLIFE_LEVEL, AFTERLIFE_XP_PER_DRAW, FIGHTING_XP_PER_BLOW, EFFORT_SPREAD,
     FADED_CARRYOVER_PERCENT, GATHER_TIME,
@@ -658,7 +658,8 @@ impl Game {
         }
         let safety = self.place_of(attacker).map_or(Safety::Haven, |place| place.safety);
         // War opens the wilderness: an enemy needs no mark to be struck.
-        if safety != Safety::Haven && self.pact_between(aggressor, victim) == Some(Pact::War) {
+        // So does a price on someone's head.
+        if safety != Safety::Haven && (self.pact_between(aggressor, victim) == Some(Pact::War) || self.is_hunted(target)) {
             return Ok(());
         }
         may_attack(safety, victim.standing())
@@ -996,8 +997,6 @@ impl Game {
         deposit.warded_until = now + WARD_TIME;
         deposit.rite_begun = None;
         let (resource, after) = (deposit.resource, deposit.node.quality());
-        let zone = self.zone_index(place);
-        self.zones[zone].cleanse(RITE_CLEANSES);
         outcomes.push(Outcome::RiteDone { with: beginner });
         events.push(Event::Character { who: beginner, outcome: Outcome::RiteAnswered { by: who } });
         if after != before {
@@ -1061,7 +1060,16 @@ impl Game {
             None => Err(TradeRefusal::NoSuchContract),
             Some(_) if on == who => Err(TradeRefusal::OnYourself),
             Some(_) if reward.amount == 0 => Err(TradeRefusal::Empty),
-            Some(_) => Ok(()),
+            // A newcomer's head costs more than it is worth.
+            Some(target) => {
+                let least =
+                    if self.characters[target].is_newcomer() { content::LEAST_BOUNTY_ON_NEWCOMER } else { content::LEAST_BOUNTY };
+                if reward.amount < least {
+                    Err(TradeRefusal::TooLittle(least))
+                } else {
+                    Ok(())
+                }
+            }
         });
         if let Err(why) = allowed {
             return outcomes.push(Outcome::CannotTrade { why });
@@ -1076,15 +1084,27 @@ impl Game {
         events.push(Event::Character { who: on, outcome: Outcome::Hunted { reward } });
     }
 
+    /// Whether there is a price on `who`'s head at any board.
+    pub fn is_hunted(&self, who: CharacterId) -> bool {
+        self.zones.iter().any(|zone| zone.board().bounties().iter().any(|bounty| bounty.on == who))
+    }
+
     /// Pays whoever killed `victim` every bounty on their head, at
-    /// whichever boards hold them.
-    fn pay_bounties(&mut self, victim: CharacterId, by: Cause, events: &mut Vec<Event>) {
+    /// whichever boards hold them. Taking a price for a newcomer the
+    /// land had no quarrel with (`innocent`) marks the one who took it.
+    fn pay_bounties(&mut self, victim: CharacterId, by: Cause, innocent: bool, events: &mut Vec<Event>) {
         let Cause::Character(killer) = by else { return };
+        let mut paid = false;
         for zone in &mut self.zones {
             let at = zone.anchor();
             for reward in zone.board.pay_bounties(victim, killer) {
+                paid = true;
                 events.push(Event::Character { who: killer, outcome: Outcome::BountyEarned { on: victim, reward, at } });
             }
+        }
+        if let (true, true, Some(hunter)) = (paid, innocent, self.index_of(killer)) {
+            let marked = self.characters[hunter].shift_taint(TAINT_FOR_ROBBING);
+            events.extend(marked.map(|outcome| Event::Character { who: killer, outcome }));
         }
     }
 
@@ -1319,6 +1339,7 @@ impl Game {
         let lost_at = now + CORPSE_TIME;
 
         let character = &mut self.characters[index];
+        let innocent = character.is_newcomer() && character.standing() == Standing::Clean;
         let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false, buried: false, disturbed: false });
         self.relics.extend(Relic::new(who, body, dropped, now));
         // Only a tethered spirit stays by its body.
@@ -1341,7 +1362,7 @@ impl Game {
             }
         }
         self.dead.push(who);
-        self.pay_bounties(who, by, events);
+        self.pay_bounties(who, by, innocent, events);
         events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
     }
@@ -1783,7 +1804,7 @@ impl World for Game {
 mod tests {
     use super::*;
     use crate::balance::Mood;
-    use crate::content::{BALANCE_EVERY, LEAN_PER_DEALING, RITE_WINDOW, STORM_EVERY};
+    use crate::content::{BALANCE_EVERY, LEAN_PER_DEALING, LEAST_BOUNTY, LEAST_BOUNTY_ON_NEWCOMER, RITE_WINDOW, STORM_EVERY};
     use crate::haul::pressure_percent;
     use crate::types::{Deposit, Resource, SkillKind};
     use eq_world_graph::PlaceId;
@@ -2123,6 +2144,10 @@ mod tests {
         let ore = game.character(BRYN).unwrap().carried(Resource::Ore);
         let reward = Lot { resource: Resource::Ore, amount: 20 };
         assert!(ore >= 30, "Bryn should have something to post with: {ore}");
+        // Ash is no newcomer, so an ordinary price will do.
+        while game.character(ASH).unwrap().is_newcomer() {
+            game.characters[0].train(Resource::Ore, 12, &mut Vec::new());
+        }
         let mut events = Vec::new();
 
         // Not out here: bounties go up at the board. So Bryn walks home,
@@ -2133,7 +2158,7 @@ mod tests {
         let at_camp = now + TRAVEL_TIME.as_ticks();
         game.apply(&Command::bounty(BRYN, BRYN, reward), Tick::new(at_camp), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::OnYourself }));
-        game.apply(&Command::bounty(BRYN, ASH, Lot { resource: Resource::Tideglass, amount: 1 }), Tick::new(at_camp), &mut events);
+        game.apply(&Command::bounty(BRYN, ASH, Lot { resource: Resource::Tideglass, amount: 50 }), Tick::new(at_camp), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::CannotPay }));
         events.clear();
         game.apply(&Command::bounty(BRYN, ASH, reward), Tick::new(at_camp), &mut events);
@@ -2167,6 +2192,64 @@ mod tests {
         assert_eq!(board.owed_to(BRYN)[Resource::Ore.index()], 20);
         assert!(board.bounties().is_empty());
         let _ = then;
+    }
+
+    #[test]
+    fn a_price_makes_its_target_fair_game_and_a_newcomers_head_costs_more_and_marks_the_taker() {
+        let mut game = Game::new(1, &["Ash", "Bryn", "Cole"]);
+        const COLE: CharacterId = CharacterId::new(2);
+        game.characters[2].stow(Resource::Ore, 200);
+        let mut events = Vec::new();
+        let ore = |amount| Lot { resource: Resource::Ore, amount };
+
+        // Bryn has done nothing and is new to the world: a price there has to be steep.
+        assert!(game.character(BRYN).unwrap().is_newcomer());
+        game.apply(&Command::bounty(COLE, BRYN, ore(99)), Tick::new(0), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::TooLittle(LEAST_BOUNTY_ON_NEWCOMER) }));
+        game.apply(&Command::bounty(COLE, BRYN, ore(100)), Tick::new(0), &mut events);
+        assert!(game.is_hunted(BRYN) && !game.is_hunted(ASH));
+
+        // Out in the wilderness, clean Bryn could not be touched. Now anyone may try.
+        for who in [ASH, BRYN] {
+            game.apply(&Command::go(who, "north"), Tick::new(0), &mut events);
+        }
+        assert_eq!(game.can_attack(ASH, BRYN), Ok(()));
+        assert_eq!(game.can_attack(BRYN, ASH), Err(Refusal::Unmarked), "the price is on one head only");
+
+        // Ash, who is the stronger, takes it, and the land marks Ash for it.
+        hardened(&mut game, ASH, 40);
+        let (fight, _) = fight_to_the_end(&mut game, 30);
+        assert!(game.character(BRYN).unwrap().is_spirit(), "Ash should have won");
+        assert!(fight.contains(&Event::Character { who: ASH, outcome: Outcome::BountyEarned { on: BRYN, reward: ore(100), at: CAMP } }));
+        assert_eq!(game.character(ASH).unwrap().standing(), Standing::Marked);
+        assert!(!game.is_hunted(BRYN), "paid, and done with");
+    }
+
+    #[test]
+    fn someone_who_has_made_their_way_can_be_hunted_for_less_and_without_shame() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        // Bryn has worked the ledge to a mark. Time passes and the mark fades.
+        let mut events = ticks(&mut game, now, now + 3_000);
+        assert_eq!(game.character(BRYN).unwrap().standing(), Standing::Clean);
+        while game.character(BRYN).unwrap().is_newcomer() {
+            game.characters[1].train(Resource::Ore, 12, &mut Vec::new());
+        }
+        game.characters[0].stow(Resource::Kelp, 50);
+        let then = now + 3_001;
+        game.apply(&Command::go(ASH, "south"), Tick::new(then), &mut events);
+        let kelp = |amount| Lot { resource: Resource::Kelp, amount };
+        let at_camp = then + TRAVEL_TIME.as_ticks();
+        game.apply(&Command::bounty(ASH, BRYN, kelp(9)), Tick::new(at_camp), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotTrade { why: TradeRefusal::TooLittle(LEAST_BOUNTY) }));
+        game.apply(&Command::bounty(ASH, BRYN, kelp(10)), Tick::new(at_camp), &mut events);
+        assert!(game.is_hunted(BRYN));
+        let free = game.character(ASH).unwrap().busy_until().get();
+        game.apply(&Command::go(ASH, "north"), Tick::new(free), &mut events);
+        assert_eq!(game.can_attack(ASH, BRYN), Ok(()));
+        fight_to_the_end(&mut game, free + TRAVEL_TIME.as_ticks());
+        if game.character(BRYN).unwrap().is_spirit() {
+            assert_eq!(game.character(ASH).unwrap().standing(), Standing::Clean, "no mark for hunting the seasoned");
+        }
     }
 
     #[test]

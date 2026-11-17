@@ -332,11 +332,11 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         ),
         Outcome::CannotTrade { why } => cannot_trade(game, viewer, *why),
         Outcome::BountyPosted { on, reward } => format!(
-            "You put {} on {}'s head. The board holds it for whoever kills them.",
+            "You put {} on {}'s head. The board holds it for whoever kills them, and until someone does they can be struck anywhere but a haven.",
             lot(*reward),
             name_of(game, *on),
         ),
-        Outcome::Hunted { reward } => format!("Word reaches you: there is a price on your head. {} to whoever kills you.", lot(*reward)),
+        Outcome::Hunted { reward } => format!("Word reaches you: there is a price on your head. {} to whoever kills you, and anyone may try, anywhere but a haven.", lot(*reward)),
         Outcome::BountyEarned { on, reward, at } => format!(
             "There was a price on {}'s head, and it is yours: {} waits for you at the board at {}.",
             name_of(game, *on),
@@ -852,7 +852,12 @@ pub fn board(game: &Game, viewer: CharacterId) -> String {
         .iter()
         .map(|bounty| {
             let marked = game.character(bounty.on).is_some_and(|on| on.standing() == Standing::Marked);
-            let note = if marked { ", marked: fair game anywhere but a haven" } else { "" };
+            let newcomer = game.character(bounty.on).is_some_and(crate::Character::is_newcomer);
+            let note = match (marked, newcomer) {
+                (true, _) => ", marked",
+                (false, true) => ", a newcomer: the land will mark whoever takes this",
+                (false, false) => "",
+            };
             format!("  {} for the death of {}{note}", lot(bounty.reward), name_of(game, bounty.on))
         })
         .collect();
@@ -914,6 +919,7 @@ fn cannot_trade(game: &Game, viewer: CharacterId, why: TradeRefusal) -> String {
         TradeRefusal::Empty => "A contract has to offer something and ask something.".into(),
         TradeRefusal::NothingOwed => "The board holds nothing for you.".into(),
         TradeRefusal::OnYourself => "Nobody puts a price on their own head.".into(),
+        TradeRefusal::TooLittle(least) => format!("A price on that head has to be at least {least}. Newcomers cost more than they are worth."),
     }
 }
 

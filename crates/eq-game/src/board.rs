@@ -67,6 +67,8 @@ pub enum TradeRefusal {
     NothingOwed,
     /// Nobody puts a price on their own head.
     OnYourself,
+    /// A bounty has to pay at least this much, and more on a newcomer.
+    TooLittle(u64),
 }
 
 /// A price on someone's head. The board holds the reward for whoever

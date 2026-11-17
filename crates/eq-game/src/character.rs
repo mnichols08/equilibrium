@@ -11,7 +11,7 @@ use eq_world_graph::PlaceId;
 
 use crate::content::{
     AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES, HEALTH_ON_RETURN,
-    AFTERLIFE_LEVEL, FIGHTING_XP_PER_BLOW, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
+    AFTERLIFE_LEVEL, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::event::Outcome;
@@ -386,6 +386,12 @@ impl Character {
         if let Some(death) = &mut self.death {
             death.buried = true;
         }
+    }
+
+    /// Whether the character is new to the world: in their first life,
+    /// with no skill yet at the level a spirit must reach to live again.
+    pub fn is_newcomer(&self) -> bool {
+        self.life == 1 && self.skills.iter().all(|skill| skill.level() < NEWCOMER_BELOW_LEVEL)
     }
 
     /// Notes that someone else took what lay beside the body.

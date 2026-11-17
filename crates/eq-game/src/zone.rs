@@ -153,11 +153,6 @@ impl Zone {
         self.corruption.adjust(corruption);
     }
 
-    /// Lifts `corruption` from the zone, as a rite does.
-    pub(crate) fn cleanse(&mut self, corruption: i64) {
-        self.corruption.adjust(-corruption);
-    }
-
     /// Runs one tick of the zone's ecology on its part of `map`.
     ///
     /// `growth_percent` is how much of their usual regrowth the world

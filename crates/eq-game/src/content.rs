@@ -126,8 +126,6 @@ pub const RITE_NEEDS_PRESSURE: u32 = 50;
 /// and no new rite can be held there.
 pub const WARD_TIME: Duration = Duration::minutes(15);
 
-/// Corruption a finished rite lifts from the zone.
-pub const RITE_CLEANSES: i64 = 5;
 
 /// How many contracts one person may have on the board at once.
 pub const MOST_CONTRACTS_EACH: usize = 3;
@@ -273,6 +271,17 @@ pub const REBIRTH_CARRYOVER_PERCENT: u32 = 0;
 /// The level a spirit must reach in any one skill in the afterlife
 /// before it lives again.
 pub const AFTERLIFE_LEVEL: u32 = 10;
+
+/// The least a bounty may pay, in units of whatever it pays in.
+pub const LEAST_BOUNTY: u64 = 10;
+
+/// The least a bounty on a newcomer may pay. It is meant to be more
+/// than a newcomer is worth: possible, and not worth it.
+pub const LEAST_BOUNTY_ON_NEWCOMER: u64 = 100;
+
+/// A character in their first life with no skill at this level yet is
+/// a newcomer.
+pub const NEWCOMER_BELOW_LEVEL: u32 = 10;
 
 /// How often the pacts between lands push the balance of the world.
 pub const BALANCE_EVERY: Duration = Duration::minutes(10);
