@@ -13,7 +13,7 @@ use eq_world_graph::{Passage, PlaceId};
 
 use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, TIDE};
 use crate::game::{pressure_percent, CharacterId, Event, Game, Outcome};
-use crate::types::{Attribute, Health, Resource, SkillKind};
+use crate::types::{Attribute, Health, Resource, SkillKind, Standing};
 
 /// The command list.
 pub const HELP: &str = "\
@@ -71,6 +71,10 @@ fn own(outcome: &Outcome, game: &Game) -> String {
         Outcome::AttributeRose { attribute, level } => {
             format!("You feel your {} grow to {level}.", attribute.name())
         }
+        Outcome::StandingChanged { to: Standing::Marked, .. } => {
+            "The land has marked you for what you have taken. Until it fades, your hauls are thin and anyone may challenge you in the wilds.".into()
+        }
+        Outcome::StandingChanged { to: Standing::Clean, .. } => "The land's mark on you has faded.".into(),
     }
 }
 
@@ -88,6 +92,9 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, here: PlaceId) ->
         }
         Outcome::Gathered { resource, .. } if actor.place() == here => {
             Some(format!("{name} gathers {}.", resource.name()))
+        }
+        Outcome::StandingChanged { to: Standing::Marked, .. } if actor.place() == here => {
+            Some(format!("The land marks {name}."))
         }
         _ => None,
     }
@@ -109,10 +116,13 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
             quality_name(deposit.node.quality()),
         ));
     }
-    let others: Vec<&str> = game
+    let others: Vec<String> = game
         .characters()
         .filter(|&(id, other)| id != viewer && other.place() == character.place())
-        .map(|(_, other)| other.name())
+        .map(|(_, other)| match other.standing() {
+            Standing::Clean => other.name().into(),
+            Standing::Marked => format!("{} (marked)", other.name()),
+        })
         .collect();
     if !others.is_empty() {
         lines.push(format!("Also here: {}.", others.join(", ")));
@@ -163,6 +173,11 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
     for attribute in Attribute::ALL {
         lines.push(format!("  {:<11}{:>3}", attribute.name(), character.attribute(attribute).level()));
     }
+    let standing = match character.standing() {
+        Standing::Clean => "clean",
+        Standing::Marked => "marked",
+    };
+    lines.push(format!("Taint        {:>3}  ({standing})", character.taint()));
     lines.join("\n")
 }
 

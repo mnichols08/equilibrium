@@ -7,15 +7,16 @@
 //!   same total whatever its size, so more heads means less each.
 //! - A careful crowd holds peak health and takes several times what a
 //!   greedy crowd does.
-//! - One greedy player among careful ones takes most of it. Greed pays the
-//!   one who defects and costs everyone else: a real commons problem.
+//! - Over-harvesting taints whoever does it, cutting their own yields. One
+//!   greedy player among careful ones now earns far less than they would
+//!   by staying careful, but still drags the others down with them.
 
 mod common;
 
 use common::{careful, greedy, Crowd, Plan, Policy, DEPOSITS, SEED};
 use eq_clock::Duration;
 use eq_events::replay;
-use eq_game::{Game, Health};
+use eq_game::{Game, Health, Standing};
 
 const RUN: Duration = Duration::seconds(10_000);
 
@@ -113,7 +114,7 @@ fn the_zone_feeds_a_fixed_total_so_more_heads_means_less_each() {
 }
 
 #[test]
-fn one_greedy_player_among_careful_ones_takes_most_and_ruins_the_rest() {
+fn one_greedy_player_among_careful_ones_loses_by_it_and_still_ruins_the_rest() {
     let fair = roamers(careful, 4);
     let fair_share = fair.carried_by_all() / 4;
 
@@ -121,10 +122,22 @@ fn one_greedy_player_among_careful_ones_takes_most_and_ruins_the_rest() {
     let defector = crowd.carried(0);
     let best_of_the_rest = (1..4).map(|index| crowd.carried(index)).max().unwrap();
 
-    assert!(defector > fair_share, "defecting should pay: {defector} vs a fair share of {fair_share}");
+    // Taint: the defector would have done far better by staying careful.
+    assert!(defector * 2 < fair_share, "defecting should not pay: {defector} vs a fair share of {fair_share}");
+    // But nothing yet stops them, so the careful still pay for it.
     assert!(best_of_the_rest * 3 < fair_share, "the careful should suffer: {best_of_the_rest} vs {fair_share}");
     assert!(crowd.carried_by_all() < fair.carried_by_all(), "the group as a whole should end up poorer");
     assert!(crowd.lowest_vitality() < 81, "the zone should lose peak health");
+}
+
+#[test]
+fn the_land_marks_the_greedy_and_leaves_the_careful_clean() {
+    let crowd = mixed(1);
+    let standings: Vec<(u32, Standing)> =
+        crowd.game().characters().map(|(_, character)| (character.taint(), character.standing())).collect();
+
+    assert_eq!(standings[0].1, Standing::Marked, "the greedy one: {standings:?}");
+    assert!(standings[1..].iter().all(|&(taint, _)| taint == 0), "the careful ones: {standings:?}");
 }
 
 #[test]
