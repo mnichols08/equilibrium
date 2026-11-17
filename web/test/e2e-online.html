@@ -1,0 +1,124 @@
+<!doctype html>
+<!--
+  Plays the built site against a real server in a real browser, as two
+  players at once, and writes "E2E PASS" or "E2E FAIL: why" into the page.
+
+  It needs a server at ws://127.0.0.1:4000 with fast ticks:
+    equilibrium-server --tick-ms 20 --data <a fresh directory>
+
+  It proves that the same components draw a shared world: no game runs in
+  the page, only what the server sends.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Equilibrium online end-to-end test</title>
+  </head>
+  <body>
+    <pre id="result">E2E RUNNING</pre>
+    <!-- Keeps the page "loading" until the test is done. See tools/serve.js. -->
+    <iframe src="/hold" hidden title="Holds the page open"></iframe>
+    <iframe id="ada" src="./index.html?server=ws://127.0.0.1:4000" width="390" height="900" title="Ada's game"></iframe>
+    <iframe id="ben" src="./index.html?server=ws://127.0.0.1:4000" width="390" height="900" title="Ben's game"></iframe>
+    <script type="module">
+      const result = document.querySelector('#result')
+      const steps = []
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+      async function until(check, what) {
+        for (let attempt = 0; attempt < 600; attempt++) {
+          const value = check()
+          if (value) return value
+          await sleep(25)
+        }
+        throw new Error(`timed out waiting for ${what}`)
+      }
+
+      function expect(condition, what) {
+        if (!condition) throw new Error(`expected ${what}`)
+        steps.push(what)
+      }
+
+      /** One player's page: joins as `name` and returns ways to look at and press it. */
+      async function player(id, name, key) {
+        const frame = document.querySelector(id)
+        const page = await until(() => frame.contentDocument?.querySelector('#join:not([hidden])') && frame.contentDocument, `${name}'s join form`)
+        const join = page.querySelector('#join')
+        const enter = (withKey) => {
+          join.elements.name.value = name
+          join.elements.key.value = withKey
+          join.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+        }
+        enter(key)
+        return {
+          page,
+          enter,
+          notice: () => page.querySelector('#notice').textContent,
+          playing: () => !page.querySelector('#game').hidden,
+          here: () => page.querySelector('eq-status h2')?.textContent,
+          status: () => page.querySelector('eq-status')?.textContent ?? '',
+          log: () => page.querySelector('eq-log ol')?.textContent ?? '',
+          button: (label) => [...page.querySelectorAll('eq-actions button')].find((b) => b.textContent.trim().startsWith(label)),
+          press: (element) => element.dispatchEvent(new MouseEvent('click', { bubbles: true })),
+        }
+      }
+
+      try {
+        const ada = await player('#ada', 'Ada', 'first')
+        await until(() => ada.playing(), 'Ada to be let in')
+        expect(ada.here() === 'Tidewatch Camp', 'Ada to start at camp')
+        expect(ada.log().includes('Welcome, Ada.'), 'Ada to be welcomed as new')
+        expect(!ada.button('Wait'), 'no Wait buttons on a server, where time passes by itself')
+
+        // A second player arrives and each sees the other.
+        const ben = await player('#ben', 'Ben', 'second')
+        await until(() => ben.playing(), 'Ben to be let in')
+        await until(() => ada.log().includes('Ben walks out of the tide'), 'Ada to see Ben arrive')
+        await until(() => ben.status().includes('Also here: Ada'), "Ben's status to list Ada")
+
+        // Ada walks north. She is shown the ledge; Ben sees her go.
+        ada.press(ada.button('Go north'))
+        await until(() => ada.here() === 'Ore Ledge', 'Ada to reach Ore Ledge')
+        await until(() => ben.log().includes('Ada leaves for Ore Ledge.'), 'Ben to see Ada leave')
+        await until(() => !ben.status().includes('Also here'), "Ben's status to stop listing Ada")
+        expect(ben.here() === 'Tidewatch Camp', 'Ben not to have moved')
+
+        // World time runs by itself: once the walk is done she can work.
+        await until(() => {
+          if (!/You gather \d+ heavy ore\./.test(ada.log())) ada.press(ada.button('Gather'))
+          return /You gather \d+ heavy ore\./.test(ada.log())
+        }, 'Ada to gather ore once she has arrived')
+        await until(() => ada.status().includes('heavy ore'), "Ada's pack to show the ore")
+
+        // Sleep lasts until you wake.
+        ben.press(ben.button('Sleep'))
+        await until(() => ben.button('Wake up'), 'a Wake up button once Ben lies down')
+        expect(!ben.button('Sleep'), 'no Sleep button while lying down')
+        ben.press(ben.button('Wake up'))
+        await until(() => ben.button('Sleep'), 'the Sleep button to come back')
+
+        // The door: a wrong passphrase for a taken name is refused, and the form comes back.
+        document.querySelector('#ben').contentWindow.location.reload()
+        await until(() => document.querySelector('#ben').contentDocument?.readyState === 'complete' && !document.querySelector('#ben').contentDocument.querySelector('#join')?.hidden, 'the join form after a reload')
+        const remembered = document.querySelector('#ben').contentDocument.querySelector('#join').elements.name.value
+        // (Both frames share one browser, so it is whoever joined last.)
+        expect(remembered === 'Ben', `the name last played under to be remembered (got "${remembered}")`)
+        const thief = await player('#ben', 'Ada', 'guess')
+        await until(() => thief.notice().includes('not their passphrase'), 'a wrong passphrase to be refused')
+        expect(!thief.playing(), 'the game to stay hidden after a refusal')
+
+        // The right one takes the seat back, as a returning player, where she was.
+        ada.page.defaultView.location.reload()
+        await until(() => document.querySelector('#ada').contentDocument?.readyState === 'complete' && !document.querySelector('#ada').contentDocument.querySelector('#join')?.hidden, "Ada's join form after a reload")
+        const again = await player('#ada', 'Ada', 'first')
+        await until(() => again.playing(), 'Ada to be let back in')
+        expect(again.here() === 'Ore Ledge', 'Ada to be where she left herself')
+        expect(again.log().includes('Welcome back, Ada.'), 'Ada to be welcomed back')
+        result.textContent = `E2E PASS (${steps.length} checks)`
+      } catch (error) {
+        result.textContent = `E2E FAIL: ${error.message}\nPassed before that:\n- ${steps.join('\n- ')}`
+      }
+      await fetch('/release')
+    </script>
+  </body>
+</html>

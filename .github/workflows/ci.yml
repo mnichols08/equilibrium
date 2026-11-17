@@ -65,6 +65,19 @@ jobs:
           awk '/<pre id="result">/ {show = 1} show {print} /<\/pre>/ {exit}' e2e.out
           grep -q 'E2E PASS' e2e.out
 
+      - name: Play a shared world in a real browser
+        run: |
+          cargo build -p eq-server --release
+          cp web/test/e2e-online.html web/dist/e2e-online.html
+          ./target/release/equilibrium-server --tick-ms 20 --data "$RUNNER_TEMP/realm" --bots 4 &
+          node web/tools/serve.js web/dist 8081 &
+          sleep 2
+          google-chrome --headless=new --no-sandbox --disable-gpu \
+            --dump-dom http://localhost:8081/e2e-online.html > e2e-online.out 2>/dev/null
+          rm web/dist/e2e-online.html
+          awk '/<pre id="result">/ {show = 1} show {print} /<\/pre>/ {exit}' e2e-online.out
+          grep -q 'E2E PASS' e2e-online.out
+
       - uses: actions/upload-artifact@v4
         with:
           name: site

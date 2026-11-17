@@ -64,7 +64,8 @@ pub fn play(login: &Login, input: impl BufRead + Send + 'static, mut out: impl W
                 writeln!(out, "{reason}")?;
                 return Ok(());
             }
-            None => {}
+            // A terminal asks for no scenes, and would not know what to do with one.
+            Some(ServerMessage::Scene { .. }) | None => {}
         }
         out.flush()?;
 

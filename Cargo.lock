@@ -139,6 +139,19 @@ name = "eq-rng"
 version = "0.1.0"
 
 [[package]]
+name = "eq-scene"
+version = "0.1.0"
+dependencies = [
+ "eq-clock",
+ "eq-events",
+ "eq-game",
+ "eq-nodes",
+ "eq-world-graph",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "eq-server"
 version = "0.1.0"
 dependencies = [
@@ -146,6 +159,7 @@ dependencies = [
  "eq-events",
  "eq-game",
  "eq-protocol",
+ "eq-scene",
  "eq-store",
  "futures-util",
  "serde",
@@ -175,12 +189,8 @@ dependencies = [
 name = "eq-web"
 version = "0.1.0"
 dependencies = [
- "eq-clock",
- "eq-events",
  "eq-game",
- "eq-nodes",
- "eq-world-graph",
- "serde",
+ "eq-scene",
  "serde_json",
  "wasm-bindgen",
 ]

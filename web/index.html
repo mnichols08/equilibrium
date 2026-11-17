@@ -27,6 +27,12 @@
       #typed input { flex: 1; font: inherit; padding: 0.55rem; border: 1px solid var(--eq-edge); border-radius: 0.5rem; min-width: 0; }
       #typed button { font: inherit; padding: 0.55rem 0.9rem; border: 1px solid var(--eq-edge); border-radius: 0.5rem; background: #f6f2e7; }
       #notice.error { color: #a3262a; }
+      #join { display: grid; gap: 0.6rem; max-width: 22rem; }
+      #join[hidden] { display: none; }
+      #join p { margin: 0; }
+      #join label { display: grid; gap: 0.2rem; }
+      #join input { font: inherit; padding: 0.55rem; border: 1px solid var(--eq-edge); border-radius: 0.5rem; }
+      #join button { font: inherit; padding: 0.6rem 0.9rem; border: 0; border-radius: 0.5rem; background: var(--eq-you); color: #fff; }
       .key { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem 0.9rem; font-size: 0.85rem; color: var(--eq-muted); }
       .key span { display: inline-block; width: 0.8rem; height: 0.8rem; border: 1px solid var(--eq-edge); border-radius: 0.2rem; vertical-align: -0.1rem; }
     </style>
@@ -39,6 +45,14 @@
       </header>
 
       <p id="notice" role="status">Loading the shoreline…</p>
+
+      <form id="join" hidden autocomplete="off">
+        <p>This shoreline is shared. Your character stays in it when you leave, asleep where you left them.</p>
+        <label>Name <input name="name" required minlength="3" maxlength="16" pattern="[A-Za-z]+" title="3 to 16 letters" autocapitalize="words" /></label>
+        <label>Passphrase <input name="key" type="password" required autocomplete="off" /></label>
+        <button type="submit">Walk out of the tide</button>
+        <p class="tagline">The first to use a name sets its passphrase. After that the name only answers to it.</p>
+      </form>
 
       <section id="game" hidden>
         <eq-map></eq-map>

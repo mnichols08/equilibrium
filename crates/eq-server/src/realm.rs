@@ -16,6 +16,7 @@ use eq_game::bots::{Bots, Plan};
 use eq_game::content::DISCONNECT_GRACE;
 use eq_game::seat::{interpret, Request};
 use eq_game::{narrate, Action, CharacterId, Command, Event, Game, Outcome};
+use eq_scene::Scene;
 use eq_store::{LogFile, StoreError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,6 +31,11 @@ const BOT_NAMES: [&str; 24] = [
 /// which nobody acts are not in the command log, so without this a
 /// restart would wind the clock back to the last command.
 const CLOCK_SAVED_EVERY: u64 = 60;
+
+/// How often a player who asked for scenes is sent a fresh one even
+/// though nothing was said to them: the clock and the tide move, and
+/// others come and go out of earshot.
+const SCENE_EVERY: u64 = 5;
 
 /// The shortest and longest a character's name can be.
 const NAME_LENGTH: std::ops::RangeInclusive<usize> = 3..=16;
@@ -122,13 +128,15 @@ pub struct Entered {
     pub deliveries: Vec<Delivery>,
 }
 
-/// Lines for one connected player.
+/// Something for one connected player.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Delivery {
     /// Whose player to tell.
     pub to: CharacterId,
-    /// What to tell them, in order.
+    /// What to tell them, in order. May be empty if only the scene changed.
     pub lines: Vec<String>,
+    /// What they can see now, if their client asked for scenes.
+    pub scene: Option<serde_json::Value>,
 }
 
 /// One world, saved as it goes, and the players connected to it.
@@ -145,6 +153,8 @@ pub struct Realm {
     keys_path: Option<PathBuf>,
     clock_path: Option<PathBuf>,
     online: BTreeSet<CharacterId>,
+    /// The connected players whose clients draw scenes.
+    watching: BTreeSet<CharacterId>,
     /// Players who dropped away, and when each will lie down.
     leaving: Vec<(CharacterId, Tick)>,
     bots: Bots,
@@ -213,6 +223,7 @@ impl Realm {
             keys_path,
             clock_path: None,
             online: BTreeSet::new(),
+            watching: BTreeSet::new(),
             leaving: Vec::new(),
             bots: Bots::new(crew),
         }
@@ -248,7 +259,9 @@ impl Realm {
 
     /// Lets a player in. A new name makes a new character and sets its
     /// passphrase; a known name must come with the same passphrase.
-    pub fn enter(&mut self, name: &str, key: &str) -> Result<Entered, Refusal> {
+    /// With `scenes`, everything they are told comes with what they can
+    /// see, for a client that draws.
+    pub fn enter(&mut self, name: &str, key: &str, scenes: bool) -> Result<Entered, Refusal> {
         let name = name.trim();
         if !NAME_LENGTH.contains(&name.len()) || !name.chars().all(|letter| letter.is_ascii_alphabetic()) {
             return Err(Refusal::BadName);
@@ -270,15 +283,21 @@ impl Realm {
             }
         };
         self.online.insert(who);
+        if scenes {
+            self.watching.insert(who);
+        } else {
+            self.watching.remove(&who);
+        }
         self.leaving.retain(|(leaver, _)| *leaver != who);
 
-        let mut deliveries = self.deliveries(&events);
+        let mut deliveries = self.told(&events);
         let mut greeting = vec![narrate::place(self.game(), who, self.now())];
         let character = self.game().character(who);
         if character.is_some_and(|character| character.is_lying_down() || character.is_dormant()) {
             greeting.push("You are asleep. Type \"wake\" to get up.".into());
         }
         push_lines(&mut deliveries, who, greeting);
+        self.attach_scenes(&mut deliveries);
         let name = character.map_or(name, |character| character.name()).to_owned();
         Ok(Entered { who, name, new, deliveries })
     }
@@ -286,6 +305,7 @@ impl Realm {
     /// Notes that `who`'s player has dropped away. The character stays
     /// on their feet for a short grace, then lies down where they stand.
     pub fn leave(&mut self, who: CharacterId) {
+        self.watching.remove(&who);
         if self.online.remove(&who) {
             self.leaving.push((who, self.now() + DISCONNECT_GRACE));
         }
@@ -293,7 +313,7 @@ impl Realm {
 
     /// Handles one line typed by `who`'s player.
     pub fn line(&mut self, who: CharacterId, text: &str) -> Vec<Delivery> {
-        let lines = |lines: Vec<String>| vec![Delivery { to: who, lines }];
+        let lines = |lines: Vec<String>| vec![Delivery { to: who, lines, scene: None }];
         match interpret(self.game(), who, self.now(), text) {
             Request::Act(action) => self.act(who, action),
             // Whatever span was asked for, sleep here lasts until they wake.
@@ -314,7 +334,14 @@ impl Realm {
         if self.now().get().is_multiple_of(CLOCK_SAVED_EVERY) {
             self.save_clock();
         }
-        self.deliveries(&events)
+        let mut deliveries = self.told(&events);
+        if self.now().get().is_multiple_of(SCENE_EVERY) {
+            for &watcher in &self.watching {
+                push_lines(&mut deliveries, watcher, Vec::new());
+            }
+        }
+        self.attach_scenes(&mut deliveries);
+        deliveries
     }
 
     /// Has `who` act now, and tells everyone who would notice.
@@ -323,10 +350,13 @@ impl Realm {
         let moved = events.iter().any(|stamped| {
             matches!(&stamped.value, Event::Character { who: mover, outcome: Outcome::Moved { .. } } if *mover == who)
         });
-        let mut deliveries = self.deliveries(&events);
+        let mut deliveries = self.told(&events);
         if moved {
             push_lines(&mut deliveries, who, vec![narrate::place(self.game(), who, self.now())]);
         }
+        // Whoever acted sees the result even if nothing was said of it.
+        push_lines(&mut deliveries, who, Vec::new());
+        self.attach_scenes(&mut deliveries);
         deliveries
     }
 
@@ -381,8 +411,16 @@ impl Realm {
         }
     }
 
+    /// Gives every delivery to a player who draws the scene as it now is.
+    fn attach_scenes(&self, deliveries: &mut [Delivery]) {
+        for delivery in deliveries.iter_mut().filter(|delivery| self.watching.contains(&delivery.to)) {
+            delivery.scene = Scene::of(self.game(), delivery.to, self.now())
+                .map(|scene| serde_json::to_value(scene).expect("a scene holds only plain data"));
+        }
+    }
+
     /// What each connected player would notice among `events`, in order.
-    fn deliveries(&self, events: &Events<Game>) -> Vec<Delivery> {
+    fn told(&self, events: &Events<Game>) -> Vec<Delivery> {
         let mut deliveries = Vec::new();
         for stamped in events {
             for viewer in self.game().audience(&stamped.value) {
@@ -415,7 +453,7 @@ fn digest(handle: &str, key: &str) -> String {
 fn push_lines(deliveries: &mut Vec<Delivery>, to: CharacterId, lines: Vec<String>) {
     match deliveries.iter_mut().find(|delivery| delivery.to == to) {
         Some(delivery) => delivery.lines.extend(lines),
-        None => deliveries.push(Delivery { to, lines }),
+        None => deliveries.push(Delivery { to, lines, scene: None }),
     }
 }
 

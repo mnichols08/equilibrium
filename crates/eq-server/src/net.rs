@@ -36,9 +36,13 @@ impl Shared {
     /// Sends each delivery to its player, if they are connected.
     fn route(&self, deliveries: Vec<Delivery>) {
         for delivery in deliveries {
-            if let Some(seat) = self.seats.get(&delivery.to) {
-                // A closed outbox means the connection is already going away.
+            let Some(seat) = self.seats.get(&delivery.to) else { continue };
+            // A closed outbox means the connection is already going away.
+            if !delivery.lines.is_empty() {
                 let _ = seat.outbox.send(ServerMessage::Lines { lines: delivery.lines });
+            }
+            if let Some(scene) = delivery.scene {
+                let _ = seat.outbox.send(ServerMessage::Scene { scene });
             }
         }
     }
@@ -156,14 +160,14 @@ async fn serve(stream: TcpStream, shared: Arc<Mutex<Shared>>) {
 
 /// Lets a connection in, if its first message was a fair hello.
 fn admit(shared: &Mutex<Shared>, hello: Option<ClientMessage>, outbox: UnboundedSender<ServerMessage>) -> Result<(CharacterId, u64), String> {
-    let Some(ClientMessage::Hello { version, name, key }) = hello else {
+    let Some(ClientMessage::Hello { version, name, key, scenes }) = hello else {
         return Err("The first message must be a hello.".into());
     };
     if version != VERSION {
         return Err(format!("This server speaks protocol version {VERSION}; you sent {version}. Update your client."));
     }
     let mut shared = lock(shared);
-    let entered = shared.realm.enter(&name, &key).map_err(|refusal| refusal.reason().to_owned())?;
+    let entered = shared.realm.enter(&name, &key, scenes).map_err(|refusal| refusal.reason().to_owned())?;
     let connection = shared.next_connection;
     shared.next_connection += 1;
     let _ = outbox.send(ServerMessage::Welcome { version: VERSION, name: entered.name, new: entered.new });
