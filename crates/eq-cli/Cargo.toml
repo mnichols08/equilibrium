@@ -15,3 +15,9 @@ workspace = true
 
 [dependencies]
 eq-game = { path = "../eq-game" }
+eq-protocol = { path = "../eq-protocol" }
+tungstenite = "0.26"
+
+[dev-dependencies]
+eq-server = { path = "../eq-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }

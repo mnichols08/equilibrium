@@ -2,7 +2,11 @@
 //!
 //! ```text
 //! equilibrium [--seed N] [--bots N] [--verify]
+//! equilibrium --connect ws://HOST:PORT --name NAME --key PASSPHRASE
 //! ```
+//!
+//! The first form plays alone. The second plays on a server, where the
+//! world is shared and goes on without you (`eq-server`).
 //!
 //! `--bots N` puts N bots on the shoreline with you. `--verify` replays the session's command log when you quit and checks
 //! that it rebuilds exactly the same world.
@@ -15,7 +19,11 @@ use std::process::ExitCode;
 
 use eq_game::{narrate, Solo};
 
-const USAGE: &str = "usage: equilibrium [--seed N] [--bots N] [--verify]";
+mod online;
+
+use online::Login;
+
+const USAGE: &str = "usage: equilibrium [--seed N] [--bots N] [--verify]\n       equilibrium --connect ws://HOST:PORT --name NAME --key PASSPHRASE";
 
 const INTRO: &str = "\
 EQUILIBRIUM
@@ -27,6 +35,8 @@ struct Options {
     seed: u64,
     bots: usize,
     verify: bool,
+    /// Where to play, if not alone.
+    login: Option<Login>,
 }
 
 /// The number that must follow `flag`.
@@ -36,16 +46,25 @@ fn number<T: std::str::FromStr>(flag: &str, value: Option<String>) -> Result<T, 
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
-    let mut options = Options { seed: 1, bots: 0, verify: false };
+    let mut options = Options { seed: 1, bots: 0, verify: false, login: None };
+    let (mut url, mut name, mut key) = (None, None, None);
     let mut args = args.skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--verify" => options.verify = true,
             "--seed" => options.seed = number(&arg, args.next())?,
             "--bots" => options.bots = number(&arg, args.next())?,
+            "--connect" => url = Some(args.next().ok_or("--connect needs an address")?),
+            "--name" => name = Some(args.next().ok_or("--name needs a name")?),
+            "--key" => key = Some(args.next().ok_or("--key needs a passphrase")?),
             other => return Err(format!("unknown option \"{other}\"")),
         }
     }
+    options.login = match (url, name, key) {
+        (Some(url), Some(name), Some(key)) => Some(Login { url, name, key }),
+        (None, None, None) => None,
+        _ => return Err("--connect, --name and --key go together".into()),
+    };
     Ok(options)
 }
 
@@ -106,7 +125,11 @@ fn main() -> ExitCode {
     let stdin = io::stdin();
     let echo = !stdin.is_terminal();
     let mut out = io::stdout().lock();
-    match run(&options, stdin.lock(), &mut out, echo) {
+    let played = match &options.login {
+        Some(login) => online::play(login, io::BufReader::new(stdin), &mut out).map(|()| true),
+        None => run(&options, stdin.lock(), &mut out, echo),
+    };
+    match played {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) if error.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
@@ -129,7 +152,7 @@ mod tests {
 
     #[test]
     fn a_session_reads_as_a_transcript() {
-        let (text, passed) = transcript(&Options { seed: 1, bots: 0, verify: false }, "north\ngather\nquit\nlook\n");
+        let (text, passed) = transcript(&Options { seed: 1, bots: 0, verify: false, login: None }, "north\ngather\nquit\nlook\n");
         assert!(passed);
         assert!(text.starts_with("EQUILIBRIUM"));
         assert!(text.contains("Tidewatch Camp [haven]"));
@@ -140,14 +163,14 @@ mod tests {
 
     #[test]
     fn verify_reports_the_replay_check() {
-        let (text, passed) = transcript(&Options { seed: 3, bots: 0, verify: true }, "east\ngather\nwait 5m\n");
+        let (text, passed) = transcript(&Options { seed: 3, bots: 0, verify: true, login: None }, "east\ngather\nwait 5m\n");
         assert!(passed);
         assert!(text.contains("Replay check passed: 2 commands over 335 ticks rebuilt the same world."));
     }
 
     #[test]
     fn bots_share_the_shoreline_and_the_replay_still_matches() {
-        let (text, passed) = transcript(&Options { seed: 1, bots: 3, verify: true }, "look\nwait 10m\n");
+        let (text, passed) = transcript(&Options { seed: 1, bots: 3, verify: true, login: None }, "look\nwait 10m\n");
         assert!(passed);
         assert!(text.contains("Also here: Ash, Bryn, Cole."));
         assert!(text.contains("leaves for"));
@@ -163,12 +186,72 @@ mod tests {
         let args = |list: &[&str]| parse_args(list.iter().map(|arg| arg.to_string()));
         assert_eq!(
             args(&["eq", "--seed", "42", "--bots", "3", "--verify"]),
-            Ok(Options { seed: 42, bots: 3, verify: true })
+            Ok(Options { seed: 42, bots: 3, verify: true, login: None })
         );
-        assert_eq!(args(&["eq"]), Ok(Options { seed: 1, bots: 0, verify: false }));
+        assert_eq!(args(&["eq"]), Ok(Options { seed: 1, bots: 0, verify: false, login: None }));
         assert!(args(&["eq", "--bots", "-1"]).is_err());
         assert!(args(&["eq", "--seed"]).is_err());
         assert!(args(&["eq", "--seed", "x"]).is_err());
         assert!(args(&["eq", "--fast"]).is_err());
+    }
+
+    #[test]
+    fn playing_on_a_server_needs_an_address_a_name_and_a_key_together() {
+        let args = |list: &[&str]| parse_args(list.iter().map(|arg| arg.to_string()));
+        let login = Login { url: "ws://h:1".into(), name: "Ada".into(), key: "k".into() };
+        let options = args(&["eq", "--connect", "ws://h:1", "--name", "Ada", "--key", "k"]).unwrap();
+        assert_eq!(options.login, Some(login));
+        assert_eq!(args(&["eq", "--connect", "ws://h:1"]).unwrap_err(), "--connect, --name and --key go together");
+        assert_eq!(args(&["eq", "--name"]).unwrap_err(), "--name needs a name");
+    }
+
+    /// A server on a free port with fast ticks, on its own thread.
+    fn server() -> (String, tokio::sync::oneshot::Sender<()>, std::thread::JoinHandle<()>) {
+        use eq_server::{net::Server, Config, Realm};
+        let realm = Realm::open(&Config { seed: 1, bots: 0, data: None }).unwrap();
+        let (ready, address) = std::sync::mpsc::channel();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+            runtime.block_on(async {
+                let server = Server::bind(realm, "127.0.0.1:0", std::time::Duration::from_millis(2)).await.unwrap();
+                ready.send(server.address()).unwrap();
+                server.run(async { let _ = stopped.await; }).await;
+            });
+        });
+        (format!("ws://{}", address.recv().unwrap()), stop, thread)
+    }
+
+    fn online(url: &str, name: &str, key: &str, input: &'static str) -> String {
+        let login = Login { url: url.into(), name: name.into(), key: key.into() };
+        let mut out = Vec::new();
+        online::play(&login, input.as_bytes(), &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn a_session_on_a_server_reads_as_a_transcript_and_the_character_is_there_next_time() {
+        let (url, stop, thread) = server();
+        let first = online(&url, "Ada", "pass", "north\nlook\n");
+        assert!(first.starts_with("Welcome, Ada.\n"), "{first}");
+        assert!(first.contains("You walk out of the tide at Tidewatch Camp"), "{first}");
+        assert!(first.contains("You make your way to Ore Ledge."), "{first}");
+        assert!(first.ends_with("will lie down to sleep in two minutes.\n"), "{first}");
+
+        let second = online(&url, "Ada", "pass", "look\n");
+        assert!(second.starts_with("Welcome back, Ada.\n"), "{second}");
+        assert!(second.contains("Ore Ledge [wilderness]"), "{second}");
+
+        let refused = online(&url, "Ada", "guess", "look\n");
+        assert!(refused.contains("that is not their passphrase"), "{refused}");
+        let _ = stop.send(());
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_server_that_is_not_there_is_reported_plainly() {
+        let login = Login { url: "ws://127.0.0.1:1".into(), name: "Ada".into(), key: "k".into() };
+        let error = online::play(&login, "".as_bytes(), Vec::new()).unwrap_err();
+        assert!(error.to_string().starts_with("could not reach ws://127.0.0.1:1"), "{error}");
     }
 }

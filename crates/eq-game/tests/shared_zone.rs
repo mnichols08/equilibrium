@@ -225,3 +225,27 @@ fn print_crowd_numbers() {
         println!("collapsed zone after {minutes} min of rest: vitality {}", crowd.game().vitality());
     }
 }
+
+/// An open problem, recorded so that whatever rule solves it has to
+/// change this test.
+///
+/// Wardens stop one defector among four (above). They do not stop a few
+/// among many who do not mind dying: three greedy bots among twenty,
+/// eight of them wardens, collapse the shoreline within the hour and
+/// hold it there. Killing a defector wipes their mark and costs them
+/// ten minutes; in a collapsed zone hauls are too thin to earn a new
+/// mark quickly, so they are back at the deposits unmarked. Two trial
+/// fixes (a mark that does not fade while the zone is collapsed; the
+/// land holding the spirit of anyone who dies marked in a collapsed
+/// zone) each left it collapsed for most of a week.
+#[test]
+fn a_few_defectors_who_do_not_mind_dying_hold_a_crowded_zone_collapsed() {
+    let warden = Plan::roam(Policy::Careful).as_warden();
+    let careful = Plan::roam(Policy::Careful);
+    let mut plans = vec![Plan::roam(Policy::Greedy); 3];
+    plans.extend([warden; 8]);
+    plans.extend([careful; 9]);
+    let crowd = run(&plans);
+    let collapsed = collapsed_samples(&crowd);
+    assert!(collapsed * 10 >= crowd.samples.len() * 6, "collapsed for only {collapsed} of {} samples", crowd.samples.len());
+}

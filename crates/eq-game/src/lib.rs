@@ -42,9 +42,12 @@ pub mod narrate;
 mod occupancy;
 pub mod parser;
 pub mod rest;
+pub mod seat;
 mod solo;
 pub mod spirit;
 mod types;
+#[cfg(feature = "serde")]
+mod wire;
 mod zone;
 
 pub use character::{Character, CharacterId, Death, Forgotten};

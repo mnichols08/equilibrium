@@ -123,6 +123,24 @@ impl Plan {
         CAST.into_iter().cycle().take(size).collect()
     }
 
+    /// A cast for a shared world that has to last: all careful, half of
+    /// them wardens who will answer a player who is not.
+    ///
+    /// There are no greedy bots in it on purpose. Bots do not mind
+    /// dying, so a few greedy ones hold a zone collapsed however often
+    /// the wardens kill them (see `eq-server/tests/week.rs`).
+    pub fn settlement(size: usize) -> Vec<Self> {
+        const CAST: [Plan; 6] = [
+            Plan::roam(Policy::Careful).as_warden(),
+            Plan::camp(Policy::Careful, DEPOSIT_ROUTES[3]),
+            Plan::roam(Policy::Careful),
+            Plan::camp(Policy::Careful, DEPOSIT_ROUTES[8]),
+            Plan::roam(Policy::Careful).as_warden(),
+            Plan::camp(Policy::Careful, DEPOSIT_ROUTES[0]),
+        ];
+        CAST.into_iter().cycle().take(size).collect()
+    }
+
     fn leg(&self, step: usize) -> Option<Leg> {
         match self.approach.get(step) {
             Some(leg) => Some(*leg),

@@ -103,6 +103,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
 /// What the viewer is told about their own action.
 fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
     match outcome {
+        Outcome::Joined => format!("You walk out of the tide at {}, new to the shoreline.", place_name(game, game.anchor())),
         Outcome::Moved { to, .. } => format!("You make your way to {}.", place_name(game, *to)),
         Outcome::NoSuchExit { label } => format!("You can't go \"{label}\" from here."),
         Outcome::ExitClosed { label } => format!("The way {label} is under water. Wait for the tide."),
@@ -246,6 +247,7 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         return None;
     }
     match outcome {
+        Outcome::Joined if actor.place() == here => Some(format!("{name} walks out of the tide, new to the shoreline.")),
         Outcome::Moved { from, to } if *to == here => {
             Some(format!("{name} arrives from {}.", place_name(game, *from)))
         }

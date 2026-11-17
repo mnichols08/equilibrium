@@ -87,6 +87,12 @@ pub const ATROPHY_EVERY: Duration = Duration::hours(6);
 /// wastes to a floor, never to nothing.
 pub const ATROPHY_FLOOR_PERCENT: u32 = 50;
 
+/// How long a character whose player has dropped away stays on their
+/// feet before they slump down to sleep where they stand. Long enough
+/// to ride out a lost connection; short enough that leaving is no way
+/// out of a fight.
+pub const DISCONNECT_GRACE: Duration = Duration::seconds(120);
+
 /// How long anyone can sleep before the body dies where it lies.
 pub const LONG_SLEEP: Duration = Duration::days(14);
 

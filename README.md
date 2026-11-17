@@ -24,6 +24,24 @@ Being up wears off your rested bonus, and the rested learn faster. `sleep` puts 
 - `--bots N` puts N bots on the shoreline with you: mostly careful, with a greedy one among every four.
 - `--verify` replays your command log when you quit and checks it rebuilds the same world.
 
+### With other people
+
+```
+cargo run -p eq-server -- --bots 12
+cargo run -p eq-cli -- --connect ws://127.0.0.1:4000 --name Mikey --key "a passphrase"
+```
+
+The server holds one world and keeps it going whether anyone is connected or not: one tick a second, real time. Each player sees only what their character would notice. The first to use a name sets its passphrase; after that the name only answers to it.
+
+Your character does not leave when you do. Close the connection and they stay on their feet for two minutes, then lie down to sleep where they stand, so where you stop for the night matters. `wait` does nothing here, and `sleep` lasts until you `wake`.
+
+The world is saved in `realm/` as it goes (`--data DIR` to put it elsewhere): every command, in order. Stop the server with Ctrl-C and the next start replays them and carries on from the same tick. `--seed` and `--bots` only matter the first time. The server's bots are all careful, half of them wardens.
+
+- `--addr HOST:PORT` to listen somewhere other than `127.0.0.1:4000`.
+- `--tick-ms N` to run world time faster or slower than real time.
+
+There is no encryption and no accounts beyond name and passphrase yet: run it on your own machine or network.
+
 ### In the browser
 
 A basic top-down view: the same game compiled to WebAssembly, drawn by four [Zubra](https://github.com/journey-to-code-org/zubra) components.

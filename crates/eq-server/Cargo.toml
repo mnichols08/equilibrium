@@ -1,0 +1,30 @@
+[package]
+name = "eq-server"
+description = "The Equilibrium server: one world, many players, over WebSockets."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "equilibrium-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+eq-clock = { path = "../eq-clock" }
+eq-events = { path = "../eq-events" }
+eq-game = { path = "../eq-game", features = ["serde"] }
+eq-protocol = { path = "../eq-protocol" }
+eq-store = { path = "../eq-store" }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+tokio-tungstenite = "0.26"
+
+[dev-dependencies]
+tungstenite = "0.26"

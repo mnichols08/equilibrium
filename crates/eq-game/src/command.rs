@@ -7,7 +7,11 @@ use crate::creature::CreatureId;
 
 /// Something a character can do.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action {
+    /// Come into the world under this name. The command must be for the
+    /// next free id ([`Game::next_id`](crate::Game::next_id)).
+    Join(String),
     /// Leave by the exit with this label.
     Go(String),
     /// Gather from the deposit here.
@@ -36,6 +40,7 @@ pub enum Action {
 
 /// An action and the character asked to take it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Command {
     /// Who acts.
     pub who: CharacterId,
@@ -44,6 +49,12 @@ pub struct Command {
 }
 
 impl Command {
+    /// A newcomer called `name` comes into the world as `who`, which
+    /// must be the world's next free id.
+    pub fn join(who: CharacterId, name: &str) -> Self {
+        Self { who, action: Action::Join(name.into()) }
+    }
+
     /// `who` leaves by the exit labelled `label`.
     pub fn go(who: CharacterId, label: &str) -> Self {
         Self { who, action: Action::Go(label.into()) }
