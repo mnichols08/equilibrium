@@ -24,6 +24,9 @@ eq_ids::define_id!(
     CharacterId
 );
 
+#[cfg(feature = "serde")]
+crate::wire::as_number!(CharacterId);
+
 /// A death: where the body lies and how long the spirit has to get back
 /// to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

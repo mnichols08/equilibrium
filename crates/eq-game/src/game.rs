@@ -114,6 +114,22 @@ impl Game {
         self.characters.iter().enumerate().map(|(index, character)| (id_at(index), character))
     }
 
+    /// The id the next character to join will have.
+    pub fn next_id(&self) -> CharacterId {
+        id_at(self.characters.len())
+    }
+
+    /// Brings a newcomer into the world at the anchor, if the command
+    /// was for the next free id.
+    fn join(&mut self, who: CharacterId, name: &str, events: &mut Vec<Event>) {
+        if who != self.next_id() {
+            return events.push(Event::UnknownCharacter { who });
+        }
+        self.characters.push(Character::new(name, self.anchor));
+        self.occupancy.enter(self.anchor, who);
+        events.push(Event::Character { who, outcome: Outcome::Joined });
+    }
+
     /// How many characters the world holds.
     pub fn population(&self) -> usize {
         self.characters.len()
@@ -281,6 +297,7 @@ impl Game {
                 audience.extend(here.into_iter().flat_map(|place| self.witnesses(place, who)).filter(|other| other != target));
             }
             Outcome::Gathered { .. }
+            | Outcome::Joined
             | Outcome::StandingChanged { to: Standing::Marked, .. }
             | Outcome::Took { .. }
             | Outcome::LayDown { .. }
@@ -348,7 +365,7 @@ impl Game {
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
             Action::Name(target) => self.name(index, *target, now, outcomes, events),
-            Action::Wake | Action::Return | Action::Relinquish | Action::Seek => {}
+            Action::Wake | Action::Return | Action::Relinquish | Action::Seek | Action::Join(_) => {}
         }
     }
 
@@ -994,6 +1011,9 @@ impl World for Game {
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
         let who = command.who;
+        if let Action::Join(name) = &command.action {
+            return self.join(who, name, events);
+        }
         let Some(index) = self.index_of(who) else {
             events.push(Event::UnknownCharacter { who });
             return;
@@ -2047,5 +2067,32 @@ mod tests {
         game.apply(&Command::wake(ASH), Tick::new(now + Duration::days(10).as_ticks()), &mut events);
         assert!(woke(&events).unwrap().2 > 0, "the body should have wasted");
         assert!(game.character(ASH).unwrap().attribute(Attribute::Attunement).level() > 0);
+    }
+
+    #[test]
+    fn newcomers_join_at_the_anchor_in_order_and_are_seen_arriving() {
+        let mut game = Game::new(1, &[]);
+        assert_eq!((game.population(), game.next_id()), (0, ASH));
+        let mut events = Vec::new();
+        game.apply(&Command::join(ASH, "Ash"), Tick::new(5), &mut events);
+        game.apply(&Command::join(BRYN, "Bryn"), Tick::new(9), &mut events);
+        assert_eq!(events[1], Event::Character { who: BRYN, outcome: Outcome::Joined });
+        assert_eq!(game.audience(&events[1]), [ASH, BRYN]);
+        assert_eq!(game.occupants(game.anchor()), [ASH, BRYN]);
+        assert_eq!(game.character(BRYN).unwrap().name(), "Bryn");
+
+        // Only the next free id can join; anything else changes nothing.
+        let before = game.clone();
+        game.apply(&Command::join(ASH, "Cole"), Tick::new(10), &mut events);
+        game.apply(&Command::join(CharacterId::new(7), "Cole"), Tick::new(10), &mut events);
+        assert_eq!(game, before);
+        assert_eq!(outcome_or_unknown(&events), Some(CharacterId::new(7)));
+    }
+
+    fn outcome_or_unknown(events: &[Event]) -> Option<CharacterId> {
+        match events.last() {
+            Some(Event::UnknownCharacter { who }) => Some(*who),
+            _ => None,
+        }
     }
 }

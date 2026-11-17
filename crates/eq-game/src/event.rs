@@ -15,6 +15,8 @@ use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Stand
 /// What came of one character's action.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
+    /// They came into the world.
+    Joined,
     /// They walked from one place to another.
     Moved {
         /// Where they left.

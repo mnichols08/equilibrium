@@ -17,7 +17,7 @@ use eq_clock::{Duration, Tick};
 use eq_events::{replay, Events, OutOfOrder, Session};
 
 use crate::bots::{Bots, Plan};
-use crate::parser::{parse, Input};
+use crate::seat::{interpret, Request};
 use crate::{narrate, Action, CharacterId, Command, Event, Game, Outcome};
 
 /// What came back from one line of input.
@@ -80,31 +80,12 @@ impl Solo {
 
     /// Handles one line of input.
     pub fn handle(&mut self, line: &str) -> Reply {
-        let lines = match parse(line) {
-            Input::Do(action) => self.act(action),
-            Input::Attack(name) => match (self.someone_here_called(&name), self.creature_here_called(&name)) {
-                (Some(target), _) => self.act(Action::Attack(target)),
-                (None, Some(creature)) => self.act(Action::Fight(creature)),
-                (None, None) => alloc::vec![format!("There is nobody called \"{name}\" here.")],
-            },
-            Input::Wait(time) => self.wait(time),
-            Input::Sleep(time) => self.sleep(time),
-            Input::Rob(name) => match self.someone_here_called(&name) {
-                Some(target) => self.act(Action::Rob(target)),
-                None => alloc::vec![format!("There is nobody called \"{name}\" here.")],
-            },
-            Input::Name(name) => match self.anyone_called(&name) {
-                Some(target) => self.act(Action::Name(target)),
-                None => alloc::vec![format!("You know of nobody called \"{name}\".")],
-            },
-            Input::Look => alloc::vec![self.look()],
-            Input::Inspect => alloc::vec![narrate::inspect(self.game(), Self::YOU)],
-            Input::Stats => alloc::vec![narrate::stats(self.game(), Self::YOU)],
-            Input::Pack => alloc::vec![narrate::pack(self.game(), Self::YOU)],
-            Input::Help => alloc::vec![narrate::HELP.into()],
-            Input::Unknown(reason) => alloc::vec![reason],
-            Input::Empty => Vec::new(),
-            Input::Quit => return Reply { lines: Vec::new(), quit: true },
+        let lines = match interpret(self.game(), Self::YOU, self.now(), line) {
+            Request::Act(action) => self.act(action),
+            Request::Wait(time) => self.wait(time),
+            Request::Sleep(time) => self.sleep(time),
+            Request::Say(lines) => lines,
+            Request::Quit => return Reply { lines: Vec::new(), quit: true },
         };
         Reply { lines, quit: false }
     }
@@ -114,31 +95,6 @@ impl Solo {
     pub fn replays_identically(&self) -> bool {
         let (rebuilt, _) = replay(fresh_world(self.seed, self.company), self.session.log(), self.now());
         &rebuilt == self.game()
-    }
-
-    /// The character standing with the player whose name is `name`,
-    /// whatever its capitals.
-    fn someone_here_called(&self, name: &str) -> Option<CharacterId> {
-        let here = self.game().character(Self::YOU)?.place();
-        self.game().occupants(here).iter().copied().find(|&id| {
-            id != Self::YOU && self.game().character(id).is_some_and(|other| other.name().eq_ignore_ascii_case(name))
-        })
-    }
-
-    /// The creature standing with the player that answers to `word`:
-    /// "lurker", "guard" or "body".
-    fn creature_here_called(&self, word: &str) -> Option<crate::CreatureId> {
-        let here = self.game().character(Self::YOU)?.place();
-        let answers = |kind: crate::CreatureKind| kind.word() == word || (kind == crate::CreatureKind::BodyGuard && word == "body");
-        self.game().creatures_at(here).find(|creature| answers(creature.being.kind)).map(|creature| creature.id)
-    }
-
-    /// Anyone in the world but the player whose name is `name`, seen or not.
-    fn anyone_called(&self, name: &str) -> Option<CharacterId> {
-        self.game()
-            .characters()
-            .find(|(id, other)| *id != Self::YOU && other.name().eq_ignore_ascii_case(name))
-            .map(|(id, _)| id)
     }
 
     /// Has the player's character act, then lets the action's time pass.

@@ -20,6 +20,9 @@ eq_ids::define_id!(
     CreatureId
 );
 
+#[cfg(feature = "serde")]
+crate::wire::as_number!(CreatureId);
+
 /// What sort of creature something is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CreatureKind {

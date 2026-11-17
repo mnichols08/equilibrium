@@ -19,6 +19,11 @@ eq-rng = { path = "../eq-rng" }
 eq-skills = { path = "../eq-skills" }
 eq-curve = { path = "../eq-curve" }
 eq-world-graph = { path = "../eq-world-graph" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+
+[features]
+# Lets commands be saved and sent: `Command` and `Action` read and write with serde.
+serde = ["dep:serde"]
 
 [dev-dependencies]
 eq-rng = { path = "../eq-rng" }
