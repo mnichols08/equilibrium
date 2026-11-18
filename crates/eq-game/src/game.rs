@@ -534,6 +534,12 @@ impl Game {
         self.pacts.between(self.zone_index(a), self.zone_index(b))
     }
 
+    /// Whether the land with its haven at `from` has made the one at
+    /// `to` this offer and still waits for an answer.
+    pub fn has_offered(&self, from: PlaceId, to: PlaceId, dealing: Dealing) -> bool {
+        self.pacts.has_offered(self.zone_index(from), self.zone_index(to), dealing)
+    }
+
     /// The founded land known as `name`: by its own name, or by its
     /// founder's.
     fn land_called(&self, name: &str) -> Option<usize> {
@@ -4141,8 +4147,9 @@ mod tests {
         deal(&mut game, BRYN, "Ash", Dealing::Ally);
         assert_eq!(game.balance().lean(), -LEAN_PER_DEALING, "an alliance is felt at once");
 
-        // One alliance and no war: a step toward stillness every ten minutes.
-        let events = ticks(&mut game, 11, 6_000);
+        // One alliance and no war: a step toward stillness every hour.
+        let ten = BALANCE_EVERY.as_ticks() * 10;
+        let events = ticks(&mut game, 11, ten);
         assert_eq!((game.balance().lean(), game.balance().mood()), (-20, Mood::Dry));
         let dried = Event::MoodChanged { from: Mood::Even, to: Mood::Dry };
         assert!(events.contains(&dried));
@@ -4153,7 +4160,7 @@ mod tests {
             let mut game = game.clone();
             game.balance.tip(lean - game.balance.lean());
             strip(&mut game, home);
-            ticks(&mut game, 6_001, 6_300);
+            ticks(&mut game, ten + 1, ten + 300);
             stock_in(&game, home)
         };
         let (even, dry, parched) = (regrown(&game, 0), regrown(&game, -20), regrown(&game, -60));
@@ -4166,15 +4173,17 @@ mod tests {
         let mut game = founders_met();
         let home = game.character(ASH).unwrap().home();
         let mut untroubled = game.clone();
-        ticks(&mut untroubled, 11, STORM_EVERY.as_ticks() * 6);
+        let ten = BALANCE_EVERY.as_ticks() * 10;
+        let stormy = ten + STORM_EVERY.as_ticks() * 2;
+        ticks(&mut untroubled, 11, stormy);
         deal(&mut game, ASH, "Bryn", Dealing::War);
         assert_eq!(game.balance().lean(), LEAN_PER_DEALING);
-        let events = ticks(&mut game, 11, 6_000);
+        let events = ticks(&mut game, 11, ten);
         assert_eq!(game.balance().mood(), Mood::Restless);
         assert!(events.contains(&Event::MoodChanged { from: Mood::Even, to: Mood::Restless }));
 
         // The next storm takes a share of everything, in every land.
-        let storm = ticks(&mut game, 6_001, STORM_EVERY.as_ticks() * 6);
+        let storm = ticks(&mut game, ten + 1, stormy);
         assert!(storm.contains(&Event::Storm));
         assert!(stock_in(&game, home) < stock_in(&untroubled, home), "a deposit nobody touched is the poorer for it");
 
@@ -4183,7 +4192,7 @@ mod tests {
         deal(&mut game, ASH, "Bryn", Dealing::Truce);
         let truce = deal(&mut game, BRYN, "Ash", Dealing::Truce);
         assert!(truce.contains(&Event::MoodChanged { from: Mood::Restless, to: Mood::Even }));
-        let from = STORM_EVERY.as_ticks() * 6 + 1;
+        let from = stormy + 1;
         let after = ticks(&mut game, from, from + BALANCE_EVERY.as_ticks() * 20);
         assert_eq!(game.balance().lean(), 0);
         assert!(!after.contains(&Event::Storm));
@@ -4361,11 +4370,12 @@ mod tests {
         assert_eq!(at_war, learned(&game) * 2);
 
         // Lands failing everywhere: the Void. Nothing put down stays down.
-        for zone in &mut game.zones {
-            zone.mourn(90);
-        }
         let from = BALANCE_EVERY.as_ticks() * 2 + 1;
-        let fell = ticks(&mut game, from, BALANCE_EVERY.as_ticks() * 3);
+        let mut fell = ticks(&mut game, from, BALANCE_EVERY.as_ticks() * 3 - 60);
+        for zone in &mut game.zones {
+            zone.mourn(100);
+        }
+        fell.extend(ticks(&mut game, BALANCE_EVERY.as_ticks() * 3 - 59, BALANCE_EVERY.as_ticks() * 3));
         assert!(fell.iter().any(|event| matches!(event, Event::EraChanged { to: Era::VoidConsumption, .. })), "{:?}", game.era());
     }
 

@@ -293,7 +293,7 @@ pub const LEAST_BOUNTY_ON_NEWCOMER: u64 = 100;
 pub const NEWCOMER_BELOW_LEVEL: u32 = 10;
 
 /// How often the pacts between lands push the balance of the world.
-pub const BALANCE_EVERY: Duration = Duration::minutes(10);
+pub const BALANCE_EVERY: Duration = Duration::hours(1);
 
 /// How far each standing war pushes the world toward fury, and each
 /// standing alliance toward stillness, every [`BALANCE_EVERY`].

@@ -59,6 +59,21 @@ impl Policy {
     }
 }
 
+/// How a founder's bot deals with other lands, once it is strong
+/// enough to get out of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Stance {
+    /// Offers every land an alliance, and a truce to any at war with it.
+    Peaceful,
+    /// Declares war on every land.
+    Warlike,
+    /// Has no dealings with anyone, and stays at home.
+    Aloof,
+}
+
+/// The Vigor and Resilience at which a founder's bot will try the pass.
+const STRENGTH_TO_BREAK_OUT: u32 = 75;
+
 /// One step of a route: an exit to take, and what to do if the tide has
 /// closed it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,17 +109,26 @@ pub struct Plan {
     /// Whether it challenges marked characters it meets, and picks up
     /// what they drop.
     pub warden: bool,
+    /// How it deals with other lands, if it founds one. A bot with a
+    /// stance also raises its land's house as soon as it can.
+    pub stance: Option<Stance>,
 }
 
 impl Plan {
     /// Walks the whole shoreline, gathering wherever `policy` allows.
     pub const fn roam(policy: Policy) -> Self {
-        Self { policy, approach: &[], circuit: CIRCUIT, warden: false }
+        Self { policy, approach: &[], circuit: CIRCUIT, warden: false, stance: None }
     }
 
     /// Walks to one place and stays, gathering whenever `policy` allows.
     pub const fn camp(policy: Policy, approach: &'static [Leg]) -> Self {
-        Self { policy, approach, circuit: &[], warden: false }
+        Self { policy, approach, circuit: &[], warden: false, stance: None }
+    }
+
+    /// A careful roamer who, as a founder, raises a house and deals
+    /// with other lands as `stance` says.
+    pub const fn founder(stance: Stance) -> Self {
+        Self { stance: Some(stance), ..Self::roam(Policy::Careful) }
     }
 
     /// The same plan, but challenging any marked character it meets.
@@ -229,6 +253,14 @@ impl Bots {
         if let Some(death) = me.death().copied() {
             return self.haunt(index, &death, session, events, now);
         }
+        // A spirit with no body to go back to (unborn, or forgotten)
+        // has only the afterlife to get through.
+        if me.is_spirit() {
+            let command = if me.is_dormant() { Some(Command::wake(who)) } else { afterlife(session.world(), who) };
+            events.extend(command.map(|command| session.submit(now, command)).transpose()?.unwrap_or_default());
+            self.bots[index].free_at = busy_until(session, who, now).max(now + PAUSE);
+            return Ok(());
+        }
         let (bot, world) = (&self.bots[index], session.world());
         // The command to give, and the least time before the next turn.
         let choice = match sleep_duty(world, bot, now) {
@@ -240,6 +272,8 @@ impl Bots {
             Sleep::HeadHome => None,
             Sleep::Do(command) => Some((command, PAUSE)),
             Sleep::NotNow => beast_duty(world, bot)
+                .or_else(|| founder_duty(world, bot))
+                .or_else(|| enemy_duty(world, bot))
                 .or_else(|| warden_duty(world, bot))
                 .or_else(|| thieving(world, bot, now))
                 .or_else(|| rite_duty(world, bot, now))
@@ -347,10 +381,13 @@ impl Errand {
     /// plan to keep to.
     fn of(game: &Game, bot: &Bot, now: Tick) -> Option<Self> {
         let me = game.character(bot.who)?;
-        let (here, land) = (me.place(), game.zone_at(me.place()));
+        let here = me.place();
         if game.zones().first().is_some_and(|first| first.contains(here)) {
             return None;
         }
+        // Its rounds are in the land it belongs to, wherever it is now.
+        let land = game.zone_at(me.home());
+        let abroad = strong_enough(me) && business_abroad(game, bot).is_some();
         // Somewhere worth working that is nothing's lair.
         let worth = |place: PlaceId| game.map().place(place).is_some_and(|data| data.deposit.is_some() && data.lair.is_none());
         let rounds: Vec<PlaceId> = land.place_ids().filter(|&place| worth(place)).collect();
@@ -358,14 +395,21 @@ impl Errand {
         // Each camper has its own spot; a roamer's moves on with its steps.
         let turn = if camps { bot.who.get() as usize } else { bot.step };
         let worn_out = me.rested() == 0;
-        let goal = if worn_out || rounds.is_empty() { land.anchor() } else { rounds[turn % rounds.len()] };
+        let goal = match game.meeting_ground() {
+            // A founder with dealings to make, and the strength for the pass, goes out.
+            Some(ground) if abroad => ground,
+            _ if worn_out || rounds.is_empty() => land.anchor(),
+            _ => rounds[turn % rounds.len()],
+        };
         if here == goal {
             return Some(Self::Arrived { stays: camps || rounds.is_empty() });
         }
-        // Not through water, and not through anything's lair.
-        let safe = |exit: &eq_world_graph::Exit| {
-            exit.passage.is_open(now) && (exit.to == goal || game.map().place(exit.to).is_some_and(|data| data.lair.is_none()))
-        };
+        // Not through water, and not through anything's lair, unless the
+        // bot is on its way out and strong enough to fight its way through.
+        // The same goes for coming home again.
+        let away = !land.contains(here) && strong_enough(me);
+        let passable = |place: PlaceId| abroad || away || game.map().place(place).is_some_and(|data| data.lair.is_none());
+        let safe = |exit: &eq_world_graph::Exit| exit.passage.is_open(now) && (exit.to == goal || passable(exit.to));
         Some(game.map().first_step(here, goal, safe).map_or(Self::Blocked, |exit| Self::Go(exit.label.clone())))
     }
 }
@@ -463,6 +507,69 @@ fn rite_duty(game: &Game, bot: &Bot, now: Tick) -> Option<Command> {
         other != bot.who && game.character(other).is_some_and(|other| !other.is_spirit() && !other.is_lying_down())
     });
     (answering || (company && !waiting)).then(|| Command::rite(bot.who))
+}
+
+/// Whether a character has the strength to try a pass.
+fn strong_enough(me: &Character) -> bool {
+    [crate::Attribute::Vigor, crate::Attribute::Resilience].iter().all(|&attribute| me.attribute(attribute).level() >= STRENGTH_TO_BREAK_OUT)
+}
+
+/// The next dealing a founder's bot means to have with another land:
+/// which founder's land, and what. `None` if it founded nothing, keeps
+/// aloof, or has said all it has to say for now.
+fn business_abroad(game: &Game, bot: &Bot) -> Option<(alloc::string::String, crate::pact::Dealing)> {
+    use crate::pact::{Dealing, Pact};
+    let stance = bot.plan.stance?;
+    let mine = game.zone_at(game.character(bot.who)?.home());
+    if mine.founder() != Some(bot.who) {
+        return None;
+    }
+    let others = game.zones().iter().filter(|land| land.founder().is_some_and(|founder| founder != bot.who));
+    others
+        .filter_map(|land| {
+            let offered = |dealing| game.has_offered(mine.anchor(), land.anchor(), dealing);
+            let dealing = match (stance, game.pact(mine.anchor(), land.anchor())) {
+                (Stance::Warlike, None | Some(Pact::Alliance)) => Some(Dealing::War),
+                (Stance::Peaceful, Some(Pact::War)) if !offered(Dealing::Truce) => Some(Dealing::Truce),
+                (Stance::Peaceful, None) if !offered(Dealing::Ally) => Some(Dealing::Ally),
+                _ => None,
+            }?;
+            let founder = game.character(land.founder()?)?;
+            Some((founder.name().into(), dealing))
+        })
+        .next()
+}
+
+/// What a founder's bot does before its ordinary work: raise its
+/// land's house as soon as it stands somewhere a house can stand with
+/// the means to build one, and, on the Meeting Ground, deal.
+fn founder_duty(game: &Game, bot: &Bot) -> Option<Command> {
+    bot.plan.stance?;
+    let me = game.character(bot.who)?;
+    let land = game.zone_at(me.home());
+    if land.founder() != Some(bot.who) {
+        return None;
+    }
+    if Some(me.place()) == game.meeting_ground() {
+        return business_abroad(game, bot).map(|(with, dealing)| Command::deal(bot.who, &with, dealing));
+    }
+    let site = game.map().place(me.place()).is_some_and(|data| data.safety != Safety::Haven && data.lair.is_none());
+    let afford = game.house_cost().iter().all(|(resource, amount)| me.carried(*resource) >= *amount);
+    (land.hall().is_none() && land.contains(me.place()) && site && afford).then(|| Command::raise(bot.who))
+}
+
+/// A bot whose land is at war goes for any of the enemy it finds
+/// itself standing with, if it is fit to and the place allows it.
+fn enemy_duty(game: &Game, bot: &Bot) -> Option<Command> {
+    let me = game.character(bot.who)?;
+    if me.health() < HEALTH_TO_FIGHT {
+        return None;
+    }
+    let at_war = |other: &Character| game.pact(me.home(), other.home()) == Some(crate::pact::Pact::War);
+    let enemy = game.occupants(me.place()).iter().copied().find(|&other| {
+        game.character(other).is_some_and(at_war) && game.can_attack(bot.who, other).is_ok()
+    })?;
+    Some(Command::attack(bot.who, enemy))
 }
 
 /// Any bot fit to fight goes for a creature that would go for it.
