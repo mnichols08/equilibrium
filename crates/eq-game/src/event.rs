@@ -351,6 +351,14 @@ pub enum Outcome {
         /// How much of each resource they took, in pack order.
         took: [u64; Resource::ALL.len()],
     },
+    /// Their grave was dug up, by them or by someone else, and it has
+    /// changed them: the body is the less for it, the spirit the more.
+    Unearthed {
+        /// Which of Vigor, Finesse and Resilience fell.
+        fell: Attribute,
+        /// How many levels left it, and went to Attunement.
+        levels: u32,
+    },
     /// Someone dug up their grave. The life that ended there is lost
     /// to them: what it knew no longer comes back fast.
     GraveRobbed {
