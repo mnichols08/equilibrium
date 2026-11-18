@@ -126,6 +126,24 @@ export function startOnline(socket, view, login, hooks = {}) {
  * @param {{ online?: boolean }} [options]  `online` when the game is on a server, where time is not the player's to spend.
  * @returns {View & { onCommand: (send: (line: string) => void) => void }}
  */
+/**
+ * One line about the wider world, from what the scene says of it. A
+ * world that is even, in its first era, says nothing about either.
+ * @param {{ land?: string | null, house?: string | null, era?: string, mood?: string, you: { bloodline?: string } }} scene
+ * @returns {string}
+ */
+export function worldLine(scene) {
+  return [
+    scene.land,
+    scene.house ? `House ${scene.house}` : '',
+    scene.era && scene.era !== 'the Era of Rebuilding' ? scene.era : '',
+    scene.mood && scene.mood !== 'even' ? `the world is ${scene.mood}` : '',
+    scene.you.bloodline ? `of ${scene.you.bloodline}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 export function pageView(root, options = {}) {
   const map = root.querySelector('eq-map')
   const status = root.querySelector('eq-status')
@@ -139,6 +157,7 @@ export function pageView(root, options = {}) {
         clock: scene.clock,
         tide: scene.tide,
         vitality: scene.vitality,
+        world: worldLine(scene),
         health: scene.health,
         you: scene.you,
         company: scene.company,
