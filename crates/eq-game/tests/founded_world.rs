@@ -26,6 +26,12 @@ struct Report {
     game: Game,
     deaths: usize,
     storms: usize,
+    /// How many bounties were posted, earned and collected.
+    bounties: (usize, usize, usize),
+    /// How many times a land fell into collapse.
+    collapses: usize,
+    /// How many times each character died, in the order they joined.
+    died: [usize; 12],
     news: Vec<String>,
 }
 
@@ -40,28 +46,44 @@ fn play(seed: u64, days: u64) -> Report {
     for (index, name) in FRIENDS.into_iter().chain(STRANGERS).enumerate() {
         let who = id(FOUNDERS.len() + index);
         session.submit(Tick::ZERO, Command::join(who, name)).unwrap();
-        // One greedy roamer among the friends, to give the land something to mark.
-        crew.push((who, Plan::roam(if index == 3 { Policy::Greedy } else { Policy::Careful })));
+        // One greedy roamer among the friends, to give the land something
+        // to mark. The strangers are wardens, and will hunt.
+        let plan = Plan::roam(if index == 3 { Policy::Greedy } else { Policy::Careful });
+        crew.push((who, if index >= FRIENDS.len() { plan.as_warden() } else { plan }));
     }
     let mut bots = Bots::new(crew);
     let (mut deaths, mut storms, mut news) = (0, 0, Vec::new());
+    // Posted, earned, collected.
+    let mut bounties = (0, 0, 0);
+    let mut collapses = 0;
+    let mut died = [0usize; 12];
     for day in 1..=days {
         for stamped in bots.run(&mut session, Tick::new(day * DAY)).unwrap() {
             let hour = stamped.tick.get() / 3_600;
             match &stamped.value {
-                Event::Character { outcome: Outcome::Died { .. }, .. } => deaths += 1,
+                Event::Character { who, outcome: Outcome::Died { .. } } => {
+                    deaths += 1;
+                    died[who.get() as usize] += 1;
+                }
                 Event::Storm => storms += 1,
                 Event::Pact { dealt, .. } => news.push(format!("hour {hour}: {dealt:?}")),
                 Event::MoodChanged { to, .. } => news.push(format!("hour {hour}: the world is {}", to.name())),
                 Event::EraChanged { to, .. } => news.push(format!("hour {hour}: {}", to.name())),
+                Event::Character { outcome: Outcome::BountyPosted { .. }, .. } => bounties.0 += 1,
+                Event::Character { outcome: Outcome::BountyEarned { .. }, .. } => bounties.1 += 1,
+                Event::Character { outcome: Outcome::Collected { .. }, .. } => bounties.2 += 1,
+                Event::VitalityChanged { to: eq_game::Health::Collapsed, .. } => collapses += 1,
                 Event::Character { who, outcome: Outcome::HouseRaised } => {
                     news.push(format!("hour {hour}: {} raises a house", session.world().character(*who).unwrap().name()));
                 }
                 _ => {}
             }
         }
+        let lands = session.world().zones().iter().filter(|land| land.founder().is_some());
+        let vitality: Vec<i64> = lands.map(eq_game::Zone::vitality).collect();
+        news.push(format!("day {day}: vitality {vitality:?}, deaths so far {deaths}"));
     }
-    Report { game: session.world().clone(), deaths, storms, news }
+    Report { game: session.world().clone(), deaths, storms, bounties, collapses, died, news }
 }
 
 fn people_of(game: &Game, founder: CharacterId) -> usize {
@@ -75,6 +97,8 @@ fn four_founders_of_different_temper_make_a_world() {
     let game = &report.game;
     println!("{}", report.news.join("\n"));
     println!("deaths {}, storms {}, lean {}, {}", report.deaths, report.storms, game.balance().lean(), game.era().name());
+    println!("bounties posted {}, earned {}, collected {}", report.bounties.0, report.bounties.1, report.bounties.2);
+    println!("collapses {}, deaths each {:?}", report.collapses, report.died);
     for (index, (name, _)) in FOUNDERS.into_iter().enumerate() {
         let land = game.zone_at(game.character(id(index)).unwrap().home());
         println!("{name}'s land: {} people, vitality {}, house {}", people_of(game, id(index)), land.vitality(), land.hall().is_some());
@@ -100,8 +124,13 @@ fn four_founders_of_different_temper_make_a_world() {
     assert!([0, 1, 3].into_iter().all(|other| game.pact(home(2), home(other)) == Some(Pact::War)));
     // The aloof one dealt with nobody, and was dealt with anyway.
     assert_eq!(game.pact(home(3), home(0)), None);
-    // Three wars to one alliance: the world leans toward fury.
+    // Three wars to one alliance, and nobody to end them: the world rages
+    // until the lands fail and the Void has it.
     assert!(game.balance().lean() > 0);
+    assert_eq!(game.era(), eq_game::era::Era::VoidConsumption);
+    // The greedy one was marked, priced, hunted and paid for, over and over.
+    assert!(report.bounties.0 > 0 && report.bounties.1 > 0 && report.bounties.2 > 0);
+    assert!(report.died[7] > report.deaths / 2, "most of the dying was the greedy one's");
 }
 
 #[test]
