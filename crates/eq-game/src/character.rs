@@ -432,9 +432,11 @@ impl Character {
     }
 
     /// Learns a little fighting from a blow struck while alive.
-    pub(crate) fn learn_from_blow(&mut self, outcomes: &mut Vec<Outcome>) {
+    ///
+    /// `percent` is how much the times make a blow worth: 100 as a rule.
+    pub(crate) fn learn_from_blow(&mut self, percent: u64, outcomes: &mut Vec<Outcome>) {
         let skill = SkillKind::Fighting;
-        let xp = with_rested_bonus(FIGHTING_XP_PER_BLOW, self.rested());
+        let xp = with_rested_bonus(FIGHTING_XP_PER_BLOW * percent / 100, self.rested());
         let progress = &mut self.skills[skill.index()];
         if progress.practice(xp, &SKILL_RULES).levels_gained > 0 {
             outcomes.push(Outcome::SkillRose { skill, level: progress.level() });
