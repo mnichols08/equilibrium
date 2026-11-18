@@ -15,6 +15,7 @@ use crate::board::{Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::balance::Mood;
+use crate::era::Era;
 use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
@@ -123,6 +124,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::Character { who, outcome } if *who == viewer => Some(own(outcome, game, viewer)),
         Event::Character { who, outcome } => witnessed(*who, outcome, game, viewer, here),
         Event::UnknownCharacter { .. } => None,
+        Event::EraChanged { to, .. } => Some(era_changed(*to).into()),
         Event::MoodChanged { to, .. } => Some(mood_changed(*to).into()),
         Event::Storm => Some("A storm comes through. The sea tears at the shore, and everything that can be worked is the poorer for it.".into()),
         Event::Pact { by, with, dealt } => Some(pact_news(game, *by, *with, *dealt)),
@@ -515,6 +517,9 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
             lines.push(format!("{land}, founded by {whose}."));
         }
     }
+    if game.era() != Era::Rebuilding {
+        lines.push(format!("It is {}.", game.era().name()));
+    }
     let mood = game.balance().mood();
     if mood != Mood::Even {
         lines.push(format!("The world is {}.", mood.name()));
@@ -745,6 +750,15 @@ fn pact_news(game: &Game, by: PlaceId, with: PlaceId, dealt: Dealt) -> String {
     }
 }
 
+/// What everyone is told when one era gives way to another.
+const fn era_changed(to: Era) -> &'static str {
+    match to {
+        Era::Rebuilding => "The Era of Rebuilding begins. The lands are well and nobody is at war: what is built now costs a quarter less.",
+        Era::Conflict => "The Era of Conflict begins. The lands are over-worked or at war, and every blow struck teaches twice what it did.",
+        Era::VoidConsumption => "The Void Consumption begins. The lands are failing everywhere, and whatever is put down in the wild is back before the blood is dry.",
+    }
+}
+
 /// What everyone is told when the world itself changes.
 const fn mood_changed(to: Mood) -> &'static str {
     match to {
@@ -925,7 +939,7 @@ fn cannot_found(why: FoundRefusal) -> String {
             "A house is raised in your own land, somewhere that is not a haven already and is nothing's lair.".into()
         }
         FoundRefusal::HouseStands => "Your land has its house already.".into(),
-        FoundRefusal::CannotAfford => "A house takes 40 driftwood and 20 ore, and you are not carrying that.".into(),
+        FoundRefusal::CannotAfford => "A house takes 40 driftwood and 20 ore (a quarter less in the Era of Rebuilding), and you are not carrying that.".into(),
         FoundRefusal::Name(Problem::TooShort) => "That name is too short.".into(),
         FoundRefusal::Name(Problem::TooLong) => "That name is too long.".into(),
         FoundRefusal::Name(Problem::BadCharacter(bad)) => {

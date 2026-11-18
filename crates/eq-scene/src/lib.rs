@@ -24,6 +24,8 @@ pub struct Scene {
     pub clock: String,
     /// `"low"` or `"high"`.
     pub tide: &'static str,
+    /// The era the world is in, by name.
+    pub era: &'static str,
     /// What the world at large is like: `"parched"`, `"dry"`, `"even"`,
     /// `"restless"` or `"raging"`.
     pub mood: &'static str,
@@ -328,6 +330,7 @@ impl Scene {
         Some(Self {
             clock: clock(now),
             tide: if TIDE.is_within(now, LOW_TIDE) { "low" } else { "high" },
+            era: game.era().name(),
             mood: game.balance().mood().name(),
             vitality: game.zone_at(here).vitality(),
             health: game.zone_at(here).health().name(),

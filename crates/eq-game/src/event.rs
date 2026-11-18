@@ -11,6 +11,7 @@ use crate::board::{ContractId, Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::balance::Mood;
 use crate::creature::Being;
+use crate::era::Era;
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::spirit::SpiritTier;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
@@ -513,6 +514,13 @@ pub enum Event {
         from: Mood,
         /// What it is like now.
         to: Mood,
+    },
+    /// The world passed from one era into another. Everyone knows it.
+    EraChanged {
+        /// The era that ended.
+        from: Era,
+        /// The era that began.
+        to: Era,
     },
     /// A storm tore at everything that can be worked. Everyone feels it.
     Storm,

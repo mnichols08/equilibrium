@@ -29,6 +29,7 @@ use crate::occupancy::Occupancy;
 use crate::pact::{Dealing, Dealt, Pact, PactRefusal, Pacts};
 use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, SkillKind, Standing};
 use crate::balance::Balance;
+use crate::era::Era;
 use crate::escort::{Escort, Escorts};
 use crate::zone::{Epitaph, Weather, Zone};
 
@@ -56,6 +57,8 @@ pub struct Game {
     pacts: Pacts,
     /// How far all that peace and war has tipped the world.
     balance: Balance,
+    /// The era the world is in.
+    era: Era,
     /// Who has paid to be seen safely somewhere, and by whom.
     escorts: Escorts,
     /// Every place in the world. Each zone is a run of them.
@@ -105,6 +108,7 @@ impl Game {
             river: None,
             pacts: Pacts::new(),
             balance: Balance::new(),
+            era: Era::Rebuilding,
             escorts: Escorts::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
@@ -371,7 +375,7 @@ impl Game {
                 Err(FoundRefusal::HouseStands)
             } else if !land.contains(here) || !fit {
                 Err(FoundRefusal::CannotStandHere)
-            } else if content::HOUSE_COST.iter().any(|(resource, amount)| self.characters[index].carried(*resource) < *amount) {
+            } else if self.house_cost().iter().any(|(resource, amount)| self.characters[index].carried(*resource) < *amount) {
                 Err(FoundRefusal::CannotAfford)
             } else {
                 Ok(zone)
@@ -379,8 +383,9 @@ impl Game {
         });
         match checked {
             Ok(zone) => {
+                let cost = self.house_cost();
                 let founder = &mut self.characters[index];
-                for (resource, amount) in content::HOUSE_COST {
+                for (resource, amount) in cost {
                     founder.spend(resource, amount);
                 }
                 founder.busy_until = now + content::RAISE_TIME;
@@ -395,6 +400,30 @@ impl Game {
     /// land they belong to, where nobody can strike or rob them.
     pub fn is_sheltered(&self, character: &Character) -> bool {
         self.zones[self.land_of(character)].hall() == Some(character.place())
+    }
+
+    /// The era the world is in.
+    pub const fn era(&self) -> Era {
+        self.era
+    }
+
+    /// What raising a house costs in this era.
+    pub fn house_cost(&self) -> [(crate::types::Resource, u64); 2] {
+        content::HOUSE_COST.map(|(resource, amount)| (resource, amount * self.era.building_percent() / 100))
+    }
+
+    /// Works out the era from how the lived-in lands are doing and
+    /// whether any are at war, and tells everyone if it has changed.
+    fn turn_era(&mut self, events: &mut Vec<Event>) {
+        let founded = self.is_founded();
+        let lands: Vec<&Zone> = self.zones.iter().filter(|zone| zone.founder().is_some() || !founded).collect();
+        // A world has only a handful of lands.
+        let vitality = lands.iter().map(|zone| zone.vitality()).sum::<i64>() / lands.len().max(1) as i64;
+        let to = Era::of(vitality, self.pacts.count(Pact::War));
+        if to != self.era {
+            events.push(Event::EraChanged { from: self.era, to });
+            self.era = to;
+        }
     }
 
     /// How far the world leans, and what that is like to live in.
@@ -412,6 +441,9 @@ impl Game {
             let pull = self.pacts.count(Pact::War) as i64 - self.pacts.count(Pact::Alliance) as i64;
             let change = if pull == 0 { self.balance.settle() } else { self.balance.tip(pull * content::LEAN_PER_PACT) };
             events.extend(change.map(|(from, to)| Event::MoodChanged { from, to }));
+        }
+        if now.get().is_multiple_of(content::BALANCE_EVERY.as_ticks()) {
+            self.turn_era(events);
         }
         let mood = self.balance.mood();
         let storm = mood.storm_percent() > 0 && now.get().is_multiple_of(content::STORM_EVERY.as_ticks());
@@ -739,7 +771,7 @@ impl Game {
             | Event::CreatureAppeared { place, .. }
             | Event::CreatureGone { place, .. } => self.occupants(*place).to_vec(),
             // The whole world feels it.
-            Event::MoodChanged { .. } | Event::Storm => self.characters().map(|(id, _)| id).collect(),
+            Event::MoodChanged { .. } | Event::EraChanged { .. } | Event::Storm => self.characters().map(|(id, _)| id).collect(),
             // Everyone who belongs to either land hears of it.
             Event::Pact { by, with, .. } => {
                 let lands = [self.zone_index(*by), self.zone_index(*with)];
@@ -1429,7 +1461,7 @@ impl Game {
         let caught_lying = self.characters[victim].is_lying_down();
         let (damage, health) = self.strike(index, victim);
         outcomes.push(Outcome::Struck { target, damage });
-        self.characters[index].learn_from_blow(outcomes);
+        self.characters[index].learn_from_blow(self.era.fighting_xp_percent(), outcomes);
         events.push(Event::Character { who: target, outcome: Outcome::Hurt { by: attacker, damage, health } });
         self.rouse(victim, now, events);
         if health == 0 {
@@ -1583,7 +1615,7 @@ impl Game {
             taint: striker.taint(),
             resilience: creature.resilience,
         };
-        striker.learn_from_blow(outcomes);
+        striker.learn_from_blow(self.era.fighting_xp_percent(), outcomes);
         let (damage, left) = creature.hurt(blow.damage());
         creature.provoke(who);
         let being = creature.being;
@@ -1607,7 +1639,9 @@ impl Game {
         match creature.being {
             // Whatever makes its home in a place comes back to it in time.
             Being { kind: CreatureKind::Lurker | CreatureKind::Sentinel, .. } => {
-                self.empty_lairs.push((now + LURKER_RETURNS, creature.place));
+                // While the Void consumes the world, nothing stays down.
+                let rest = if self.era.lairs_never_rest() { Duration::ZERO } else { LURKER_RETURNS };
+                self.empty_lairs.push((now + rest, creature.place));
             }
             // The spirit whose body it was is no nearer the living for
             // its fall: that way is through the afterlife.
@@ -1957,6 +1991,7 @@ impl World for Game {
 mod tests {
     use super::*;
     use crate::balance::Mood;
+    use crate::era::Era;
     use crate::content::{BALANCE_EVERY, LEAN_PER_DEALING, LEAST_BOUNTY, LEAST_BOUNTY_ON_NEWCOMER, RITE_WINDOW, STORM_EVERY};
     use crate::haul::pressure_percent;
     use crate::types::{Deposit, Resource, SkillKind};
@@ -3964,7 +3999,8 @@ mod tests {
         }
         assert_eq!(raise(&mut game, BRYN), Some(Outcome::HouseRaised));
         assert_eq!(game.zone_at(brynsland).hall(), Some(site));
-        assert_eq!(game.character(BRYN).unwrap().carried_total(), 2, "the house took what it costs");
+        // 40 driftwood and 20 ore, a quarter off in the Era of Rebuilding: 30 and 15.
+        assert_eq!(game.character(BRYN).unwrap().carried_total(), 2 + 10 + 5, "the house took what it costs");
         game.characters[1].busy_until = Tick::ZERO;
         assert_eq!(raise(&mut game, BRYN), cannot(FoundRefusal::HouseStands));
 
@@ -4199,6 +4235,44 @@ mod tests {
         let over = ticks(&mut game, 22, 22);
         assert!(over.contains(&Event::Character { who: BRYN, outcome: Outcome::EscortDone { client: COLE, reward: None } }));
         assert_eq!((owed(&game), game.character(BRYN).unwrap().carried(Resource::Kelp)), (25, 0));
+    }
+
+    #[test]
+    fn the_era_turns_with_war_and_with_the_state_of_the_lands() {
+        let mut game = founders_met();
+        assert_eq!((game.era(), game.house_cost()), (Era::Rebuilding, [(Resource::Driftwood, 30), (Resource::Ore, 15)]));
+
+        // War makes it an era of conflict, known to everyone, and fighting teaches double.
+        deal(&mut game, ASH, "Bryn", Dealing::War);
+        let turned = ticks(&mut game, 11, BALANCE_EVERY.as_ticks());
+        let change = Event::EraChanged { from: Era::Rebuilding, to: Era::Conflict };
+        assert!(turned.contains(&change));
+        assert_eq!(game.audience(&change), [ASH, BRYN, COLE]);
+        assert_eq!(game.house_cost(), crate::content::HOUSE_COST);
+        let learned = |game: &Game| {
+            let mut game = game.clone();
+            let before = game.character(ASH).unwrap().skill(SkillKind::Fighting).progress();
+            game.apply(&Command::attack(ASH, BRYN), Tick::new(BALANCE_EVERY.as_ticks() + 1), &mut Vec::new());
+            game.character(ASH).unwrap().skill(SkillKind::Fighting).progress() - before
+        };
+        let at_war = learned(&game);
+
+        // A truce, and it is rebuilding again.
+        deal(&mut game, ASH, "Bryn", Dealing::Truce);
+        deal(&mut game, BRYN, "Ash", Dealing::Truce);
+        let from = BALANCE_EVERY.as_ticks() + 1;
+        let healed = ticks(&mut game, from, BALANCE_EVERY.as_ticks() * 2);
+        assert!(healed.contains(&Event::EraChanged { from: Era::Conflict, to: Era::Rebuilding }));
+        // The Meeting Ground is contested, so the same blow can still be struck.
+        assert_eq!(at_war, learned(&game) * 2);
+
+        // Lands failing everywhere: the Void. Nothing put down stays down.
+        for zone in &mut game.zones {
+            zone.mourn(90);
+        }
+        let from = BALANCE_EVERY.as_ticks() * 2 + 1;
+        let fell = ticks(&mut game, from, BALANCE_EVERY.as_ticks() * 3);
+        assert!(fell.iter().any(|event| matches!(event, Event::EraChanged { to: Era::VoidConsumption, .. })), "{:?}", game.era());
     }
 
     #[test]
