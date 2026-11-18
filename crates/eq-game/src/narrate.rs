@@ -13,13 +13,13 @@ use eq_world_graph::{Passage, PlaceId};
 
 use crate::board::{Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
-use crate::content::{CORPSE_TIME, LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
+use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::balance::Mood;
 use crate::era::Era;
 use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
-use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
+use crate::types::{Attribute, Cause, Health, Resource, SkillKind, Standing};
 
 /// The command list.
 pub const HELP: &str = "\
@@ -33,7 +33,6 @@ Commands:
   take                 open the relics here and take what is in them
   sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
   rob <name>           go through the pack of someone asleep here
-  return               as a spirit, go back into your body
   bury <name>          lay someone's body in the ground where it lies
   gather               as a spirit, practise where the living would work:
                        go far enough in one skill and you live again
@@ -81,10 +80,10 @@ Sleep keeps you rested, and the rested learn faster. It is only safe in
 a haven: anywhere else a sleeper can be robbed. Sleep for more than a
 few days and the body starts to waste.
 
-If you are killed your body stays where it fell and you become a spirit.
-Get back to it within ten minutes and return. Leave it longer and it
-rises as a guard over what you dropped. Then, or if someone buries it,
-the only way back to the living is through the afterlife. Nothing can
+If you are killed that life is over. Your body stays where it fell, your
+spirit is carried off, and there is no going back into the body. After
+ten minutes it rises as a guard over what you dropped, unless someone
+buries it. The way back to the living is through the afterlife. Nothing can
 hurt you there, so it is the place to practise: gather where the living
 would work, or fight the shades where they do not, learning each skill
 as if for the first time. Go far enough in one and you arise in
@@ -208,10 +207,8 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Hurt { by, damage, health } => {
             format!("{} strikes you for {damage}. You have {health} health left.", name_of(game, *by))
         }
-        Outcome::Died { by: Cause::Character(by), place, passing, .. } => died(game, name_of(game, *by), *place, *passing),
-        Outcome::Died { by: Cause::Creature(being), place, passing, .. } => {
-            died(game, &capitalise(&being_name(game, *being, viewer)), *place, *passing)
-        }
+        Outcome::Died { by: Cause::Character(by), .. } => died(game, name_of(game, *by)),
+        Outcome::Died { by: Cause::Creature(being), .. } => died(game, &capitalise(&being_name(game, *being, viewer))),
         Outcome::CameToRiver => "You are on the bank of the River of Souls, where every soul enters the afterlife. Shades drift here to be fought (attack shade), and ways lead from the bank into the lands of the living, where a spirit can practise the work (gather). Nothing leads back.".into(),
         Outcome::Battered { damage, health } => {
             format!("The storm catches you in the open and takes {damage} from you. You have {health} health left. A haven, or your own roof, would have kept it off.")
@@ -242,28 +239,17 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             "{} strikes you for {damage}. You have {health} health left.",
             capitalise(&being_name(game, *by, viewer)),
         ),
-        Outcome::BodyRose => {
-            "You left it too long. Your body has risen without you and stands guard over what you dropped. The way back to the living is through the afterlife now: gather where the living would work, or fight the shades where they do not, until you have come far enough in one skill. Each death asks a little more of you than the last, and sends you back knowing more.".into()
-        }
+        Outcome::BodyRose => "Far off, the body you left has risen, and stands guard over what you dropped.".into(),
         Outcome::RelicSealed => {
             "The relic here is sealed. It opens for its owner, or once the body it belongs to is gone or brought down.".into()
-        }
-        Outcome::CannotReturn { why: ReturnRefusal::Risen } => {
-            "Your body has risen as a guard. There is no going back into it. Practise in the afterlife to live again.".into()
         }
         Outcome::Died { by: Cause::LongSleep, place, .. } => format!(
             "You slept too long. Your body has died where it lay at {}, and what you carried lies there. \
              You are a forgotten spirit now, with no body to go back to.",
             place_name(game, *place),
         ),
-        Outcome::CannotReturn { why: ReturnRefusal::KillerNear } => {
-            "What killed you still stands over your body. There is no getting back into it while it does: wait for it to go, or have someone drive it off.".into()
-        }
-        Outcome::CannotReturn { why: ReturnRefusal::Buried } => {
-            "Your body is in the ground. There is no going back into it. Practise in the afterlife to live again.".into()
-        }
         Outcome::CannotReturn { why: ReturnRefusal::Unredeemed } => {
-            "There is no giving up and starting again. Return to your body if you still can, or practise in the afterlife: gather where the living would work, or fight the shades where they do not, until you have come far enough in one skill (look says how far).".into()
+            "There is no giving up and starting again. Practise in the afterlife: gather where the living would work, or fight the shades where they do not, until you have come far enough in one skill (look says how far).".into()
         }
         Outcome::Unborn => "You have not lived yet. Every land was founded before you came, and nobody sent for you, so you begin as a spirit. Nothing can hurt you here, so practise: gather where the living would work. Reach level 10 in a skill and you will be born wherever the world has most need of people, already knowing it.".into(),
         Outcome::Practised { skill, level, needed } => {
@@ -278,8 +264,8 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             "{} has buried your body. You cannot go back to it, but the life you had will not be lost: you will learn it again fast.",
             name_of(game, *by),
         ),
-        Outcome::CannotReturn { why: ReturnRefusal::NoBody } => {
-            "You have no body to go back to or give up. Seek your memories, or hope to be named at camp.".into()
+        Outcome::CannotReturn { why: ReturnRefusal::NoWayBack } => {
+            "There is no going back into a body. That life is over; the way on is through the afterlife, and it comes out somewhere else.".into()
         }
         Outcome::Stirred => format!(
             "You stir, a spirit without a body. You have {} awake to redeem yourself: seek three memories of yourself where the shoreline can be worked, or be named at camp by the living.",
@@ -313,14 +299,6 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             "Your time has run out. Who you were is gone, and your name is cut in the stones at {}. You walk out of the tide into life {life} with almost nothing.",
             place_name(game, home_of(game, viewer)),
         ),
-        Outcome::CannotReturn { why: ReturnRefusal::NotAtBody } => {
-            let body = game.character(viewer).and_then(|you| you.death()).map(|death| death.body);
-            format!("Your body is not here. It lies at {}.", body.map_or("no place you know", |place| place_name(game, place)))
-        }
-        Outcome::CannotReturn { why: ReturnRefusal::TooSoon(ready_at) } => {
-            format!("Something still holds you back. You cannot return before {}.", time_of_day(*ready_at))
-        }
-        Outcome::Returned => "You are back in your body, weak but alive.".into(),
         Outcome::Reborn { life } => format!(
             "You remember enough to live. You walk out of the tide at {}, whole and rested, into life {life}. Little of what you knew has come with you.",
             place_name(game, home_of(game, viewer)),
@@ -472,7 +450,6 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         Outcome::Buried { target } if actor.place() == here => {
             Some(format!("{name} lays {}'s body in the ground.", name_of(game, *target)))
         }
-        Outcome::Returned if actor.place() == here => Some(format!("{name}'s body stirs, and {name} stands.")),
         Outcome::Reborn { .. } | Outcome::Redeemed { .. } | Outcome::Faded { .. } if actor.place() == here => {
             Some(format!("{name} walks out of the tide, reborn."))
         }
@@ -813,24 +790,15 @@ pub fn condition(character: &crate::Character, now: Tick) -> Option<&'static str
 
 /// What a character is told on dying, which depends on how their spirit
 /// stands to the body.
-fn died(game: &Game, killer: &str, place: PlaceId, passing: Passing) -> String {
-    let killed = format!("{killer} has killed you. What you carried lies beside your body.");
-    let anchor = place_name(game, game.zone_at(place).anchor());
-    let body = place_name(game, place);
-    let limit = span(CORPSE_TIME);
-    let next = match passing {
-        Passing::Tethered => format!(
-            "Someone stood by, so your spirit stays close. Wait a moment, then return to your body. You have {limit} before it rises without you."
-        ),
-        Passing::Severed => format!(
-            "You died alone, and your spirit is pulled to {anchor}. Get back to your body at {body} and return to it within {limit}, before it rises without you."
-        ),
-        Passing::Forgotten => String::new(),
-        Passing::Corrupted => format!(
-            "The land here is failing, and it holds your spirit at {anchor} before you can start back to your body at {body}. You have {limit} before it rises without you."
-        ),
+fn died(game: &Game, killer: &str) -> String {
+    let onward = match game.river() {
+        Some(_) => "Your spirit is carried to the River of Souls, where every soul enters the afterlife.",
+        None => "Your spirit is carried off to the haven.",
     };
-    format!("{killed} {next}")
+    format!(
+        "{killer} has killed you. What you carried lies beside your body, and there is no going back to either: \
+         that life is over. {onward} Practise there until you have come far enough to live again, somewhere else, as someone new."
+    )
 }
 
 /// World time as `h:mm:ss`, without the tide.

@@ -2,7 +2,7 @@
 //! each rebuilt exactly from its own command log.
 //!
 //! - life → death → spirit → rebirth
-//! - life → death → the walk back to a body that cannot be had
+//! - life → death → death, and no way back into the body
 //! - oversleep → atrophy → the long sleep → forgotten → redeemed
 //! - the same, ending in fading
 
@@ -68,7 +68,7 @@ fn a_life_ends_in_the_grotto_and_the_spirit_buys_a_better_next_one() {
     assert_eq!(you(&solo).spirit_tier(), SpiritTier::WanderingPhantom);
 
     // By now the body has risen in the grotto. Nothing to go back to.
-    assert!(said(&mut solo, "return").contains("risen as a guard") || said(&mut solo, "return").contains("not here"));
+    assert!(said(&mut solo, "return").contains("no going back into a body"));
     assert!(said(&mut solo, "relinquish").contains("no giving up"));
     // The way back is practice. Drawing on the beach has been foraging all along.
     let mut reborn = String::new();
@@ -91,26 +91,27 @@ fn a_life_ends_in_the_grotto_and_the_spirit_buys_a_better_next_one() {
 }
 
 #[test]
-fn there_is_no_getting_back_into_a_body_while_its_killer_stands_over_it() {
+fn there_is_no_getting_back_into_a_body() {
     let mut solo = Solo::new(4);
     solo.handle("east");
     while !said(&mut solo, "cave").contains("Tidal Cave") {
         solo.handle("wait 1m");
     }
     solo.handle("down");
+    let mut last = String::new();
     while !you(&solo).is_spirit() {
-        solo.handle("gather");
+        last = said(&mut solo, "gather");
     }
-    // Three places back to the body; the tide is nothing to a spirit.
+    // Nobody is told where they fell, only that it is over.
+    assert!(last.contains("that life is over"), "{last}");
+    assert_eq!(you(&solo).place(), solo.game().anchor(), "the spirit is carried off");
+    // Walking all the way back to it is no use.
     for way in ["east", "cave", "down"] {
         solo.handle(way);
     }
-    // The lurker is still there. Alone, with nobody to drive it off,
-    // there is no way back in, however quick the walk.
     let back = said(&mut solo, "return");
-    assert!(back.contains("still stands over your body"), "{back}");
+    assert!(back.contains("no going back into a body"), "{back}");
     assert!(you(&solo).is_spirit());
-    assert_eq!(you(&solo).life(), 1);
     assert!(solo.replays_identically());
 }
 

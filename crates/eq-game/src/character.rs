@@ -10,8 +10,8 @@ use eq_skills::Proficiency;
 use eq_world_graph::PlaceId;
 
 use crate::content::{
-    AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES, HEALTH_ON_RETURN,
-    AFTERLIFE_LEVEL, AFTERLIFE_LEVEL_PER_DEATH, MOST_AFTERLIFE_LEVEL, BLOODLINE_LEARNING_PERCENT, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
+    AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES,
+    AFTERLIFE_LEVEL, AFTERLIFE_LEVEL_PER_DEATH, MOST_AFTERLIFE_LEVEL, BLOODLINE_LEARNING_PERCENT, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::bloodline::Bloodline;
@@ -39,8 +39,6 @@ pub struct Death {
     pub by: Cause,
     /// How the spirit stands to the body.
     pub passing: Passing,
-    /// The earliest the spirit may return.
-    pub ready_at: Tick,
     /// When the body, if its spirit has not come back, rises as a Body Guard.
     pub lost_at: Tick,
     /// Whether the body has risen. There is no returning to it then.
@@ -115,8 +113,6 @@ pub struct Character {
     shade: u32,
     /// Which life this is, counting the first as 1.
     life: u32,
-    /// How worn the spirit is by recent deaths. It outlasts rebirth.
-    degradation: Meter,
     rested: Meter,
     /// When sleep began, or will begin once they have settled.
     asleep_from: Option<Tick>,
@@ -167,7 +163,6 @@ impl Character {
             practised: [Proficiency::new(); SkillKind::ALL.len()],
             shade: SHADE_HEALTH,
             life: 1,
-            degradation: Meter::empty(0, MOST_DEGRADATION),
             rested: Meter::full(0, FULLY_RESTED as i64),
             asleep_from: None,
             ectoplasm: 0,
@@ -338,17 +333,6 @@ impl Character {
         self.life
     }
 
-    /// How many recent deaths still wear on the spirit.
-    pub const fn degradation(&self) -> u32 {
-        // The meter is bounded to a handful.
-        self.degradation.value() as u32
-    }
-
-    /// Lets one death's wear on the spirit fade.
-    pub(crate) fn recover_spirit(&mut self) {
-        self.degradation.adjust(-1);
-    }
-
     /// Takes `damage` from health and returns what is left.
     pub(crate) fn hurt(&mut self, damage: u32) -> u32 {
         self.health.adjust(-i64::from(damage));
@@ -365,7 +349,6 @@ impl Character {
     /// that change of standing.
     pub(crate) fn die(&mut self, death: Death) -> ([u64; Resource::ALL.len()], Option<Outcome>) {
         self.death = Some(death);
-        self.degradation.adjust(1);
         self.asleep_from = None;
         self.vigil = Duration::ZERO;
         let cleansed = self.shift_taint(-i64::from(self.taint()));
@@ -381,7 +364,6 @@ impl Character {
         }
         self.vigil = Duration::ZERO;
         self.forgotten = Some(Forgotten { played: Duration::ZERO, dormant: true, found_in: Vec::new(), unborn: false });
-        self.degradation.adjust(1);
         let cleansed = self.shift_taint(-i64::from(self.taint()));
         (core::mem::take(&mut self.pack), cleansed)
     }
@@ -474,16 +456,6 @@ impl Character {
         if let Some(death) = &mut self.death {
             death.risen = true;
         }
-    }
-
-    /// Goes back into the body, weak but alive. Returns where the body lay.
-    pub(crate) fn return_to_body(&mut self) -> Option<PlaceId> {
-        let death = self.death.take()?;
-        // What was practised in the afterlife is only for a new life.
-        self.practised = [Proficiency::new(); SkillKind::ALL.len()];
-        self.place = death.body;
-        self.health.set(HEALTH_ON_RETURN);
-        Some(death.body)
     }
 
     /// Begins a new life at `place`: whole and rested, with a share of

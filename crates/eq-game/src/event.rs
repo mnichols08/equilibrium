@@ -229,8 +229,6 @@ pub enum Outcome {
         /// Why not.
         why: ReturnRefusal,
     },
-    /// They went back into their body, weak but alive.
-    Returned,
     /// Their body was lost or given up, and they began a new life.
     Reborn {
         /// Which life this is, counting the first as 1.
