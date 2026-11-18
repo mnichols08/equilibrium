@@ -275,6 +275,12 @@ pub const MIXED_RITE_MENDS_PERCENT: u32 = 100;
 /// strongest thing their body has, and into Attunement.
 pub const GRAVE_SHIFT: u32 = 5;
 
+/// The taint that comes with being paid for a killing, whoever was
+/// killed. Two fifths of the way to the land's mark: it fades in ten
+/// minutes, but three paid killings in a row and the hunter is marked,
+/// and fair game in turn.
+pub const TAINT_FOR_BLOOD_MONEY: i64 = 20;
+
 /// The least a bounty may pay, in units of whatever it pays in.
 pub const LEAST_BOUNTY: u64 = 10;
 

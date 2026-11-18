@@ -470,6 +470,11 @@ impl Game {
                 }
                 founder.busy_until = now + content::RAISE_TIME;
                 self.zones[zone].hall = Some(here);
+                // A house stands on ground that could have been worked:
+                // whatever this place gave, it gives no more.
+                if let Some(site) = self.map.place_mut(here) {
+                    site.deposit = None;
+                }
                 outcomes.push(Outcome::HouseRaised);
             }
             Err(why) => outcomes.push(Outcome::CannotFound { why }),
@@ -1375,8 +1380,11 @@ impl Game {
                 events.push(Event::Character { who: killer, outcome: Outcome::BountyEarned { on: victim, reward, at } });
             }
         }
-        if let (true, true, Some(hunter)) = (paid, innocent, self.index_of(killer)) {
-            let marked = self.characters[hunter].shift_taint(TAINT_FOR_ROBBING);
+        // Blood money stains whoever takes it, and stains them through
+        // if the land had no quarrel with the dead.
+        if let (true, Some(hunter)) = (paid, self.index_of(killer)) {
+            let stain = if innocent { TAINT_FOR_ROBBING } else { content::TAINT_FOR_BLOOD_MONEY };
+            let marked = self.characters[hunter].shift_taint(stain);
             events.extend(marked.map(|outcome| Event::Character { who: killer, outcome }));
         }
     }
@@ -2447,6 +2455,9 @@ mod tests {
         let earned = Event::Character { who: ASH, outcome: Outcome::BountyEarned { on: BRYN, reward, at: CAMP } };
         assert!(fight.contains(&earned));
         assert_eq!(game.audience(&earned), [ASH]);
+        // Blood money stains: not a mark, for one killing the land wanted.
+        let ash = game.character(ASH).unwrap();
+        assert_eq!((i64::from(ash.taint()), ash.standing()), (crate::content::TAINT_FOR_BLOOD_MONEY, Standing::Clean));
 
         let mut events = Vec::new();
         game.apply(&Command::go(ASH, "south"), Tick::new(now), &mut events);
@@ -4195,8 +4206,13 @@ mod tests {
         for (resource, amount) in crate::content::HOUSE_COST {
             game.characters[1].stow(resource, amount + 1);
         }
+        let worked = |game: &Game| game.zone_at(brynsland).place_ids().filter(|&place| game.map().place(place).unwrap().deposit.is_some()).count();
+        let before = worked(&game);
         assert_eq!(raise(&mut game, BRYN), Some(Outcome::HouseRaised));
         assert_eq!(game.zone_at(brynsland).hall(), Some(site));
+        // The price that is never paid off: one place fewer to work, for good.
+        assert!(game.map().place(site).unwrap().deposit.is_none());
+        assert_eq!(worked(&game), before - 1);
         // 40 driftwood and 20 ore, a quarter off in the Era of Rebuilding: 30 and 15.
         assert_eq!(game.character(BRYN).unwrap().carried_total(), 2 + 10 + 5, "the house took what it costs");
         game.characters[1].busy_until = Tick::ZERO;
