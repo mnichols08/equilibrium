@@ -1,7 +1,8 @@
 //! A whole founded world, played by bots: four founders of different
 //! temper, a friend each, and four strangers who arrive unborn.
 //!
-//! This is where the rules of Phase 5 are tried together. Run it with
+//! This is where the rules of Phase 5 are tried together. Forty days:
+//! it takes a founder about four weeks to be strong enough for the pass. Run it with
 //! `cargo test -p eq-game --test founded_world -- --nocapture` to see
 //! the report.
 
@@ -81,7 +82,9 @@ fn play(seed: u64, days: u64) -> Report {
         }
         let lands = session.world().zones().iter().filter(|land| land.founder().is_some());
         let vitality: Vec<i64> = lands.map(eq_game::Zone::vitality).collect();
-        news.push(format!("day {day}: vitality {vitality:?}, deaths so far {deaths}"));
+        if day % 5 == 0 {
+            news.push(format!("day {day}: vitality {vitality:?}, deaths so far {deaths}"));
+        }
     }
     Report { game: session.world().clone(), deaths, storms, bounties, collapses, died, news }
 }
@@ -93,12 +96,14 @@ fn people_of(game: &Game, founder: CharacterId) -> usize {
 
 #[test]
 fn four_founders_of_different_temper_make_a_world() {
-    let report = play(11, 10);
+    let report = play(11, 40);
     let game = &report.game;
     println!("{}", report.news.join("\n"));
     println!("deaths {}, storms {}, lean {}, {}", report.deaths, report.storms, game.balance().lean(), game.era().name());
     println!("bounties posted {}, earned {}, collected {}", report.bounties.0, report.bounties.1, report.bounties.2);
     println!("collapses {}, deaths each {:?}", report.collapses, report.died);
+    let greedy = game.character(id(7)).unwrap();
+    println!("the greedy one is in life {} and the afterlife now asks level {} of them", greedy.life(), greedy.afterlife_goal());
     for (index, (name, _)) in FOUNDERS.into_iter().enumerate() {
         let land = game.zone_at(game.character(id(index)).unwrap().home());
         println!("{name}'s land: {} people, vitality {}, house {}", people_of(game, id(index)), land.vitality(), land.hall().is_some());

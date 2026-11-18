@@ -151,13 +151,12 @@ fn wardens_leave_a_defector_with_nothing() {
     let worst_warden = *wardens.iter().min().unwrap();
 
     // Rites already protect the careful. What wardens add is that the
-    // defector is left with a fraction of even a poor living. (It was
-    // next to nothing until wardens began putting prices on heads: a
-    // price outlasts the mark, the mark is what weakens the arm, and a
-    // defector hunted at full strength sometimes wins and takes what
-    // the warden carried.)
-    assert!(guarded.carried(0) * 3 < unguarded.carried(0), "{} vs {}", guarded.carried(0), unguarded.carried(0));
-    assert!(guarded.carried(0) * 5 < fair_share, "the defector kept {}", guarded.carried(0));
+    // defector is left with next to nothing instead of a poor living.
+    // (For a while it kept a quarter of one: a price outlasts the mark,
+    // the mark is what weakens the arm, and a defector hunted at full
+    // strength sometimes won. Wardens now size up the priced first.)
+    assert!(guarded.carried(0) * 10 < unguarded.carried(0), "{} vs {}", guarded.carried(0), unguarded.carried(0));
+    assert!(guarded.carried(0) * 10 < fair_share, "the defector kept {}", guarded.carried(0));
     println!("defector {} guarded, {} unguarded; wardens {wardens:?}; fair share {fair_share}", guarded.carried(0), unguarded.carried(0));
     // And it costs the wardens nothing to speak of.
     assert!(worst_warden * 5 > fair_share * 4, "wardens {wardens:?} vs a fair share of {fair_share}");

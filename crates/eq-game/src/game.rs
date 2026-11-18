@@ -18,7 +18,7 @@ use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTie
 use crate::content::{
     self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, BURY_TIME, MOST_VIGIL, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
     VIGIL_PER_TENDING, WARD_TIME, CORPSE_TIME, CORRUPTED_WAIT, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
-    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, AFTERLIFE_LEVEL, AFTERLIFE_XP_PER_DRAW, FIGHTING_XP_PER_BLOW, EFFORT_SPREAD,
+    CREATURE_BLOW_EVERY, GUARD_LASTS, LURKER_RETURNS, DAMAGE_SPREAD, DEGRADATION_FADES_EVERY, DEGRADATION_WAIT, DRAW_TIME, AFTERLIFE_XP_PER_DRAW, FIGHTING_XP_PER_BLOW, EFFORT_SPREAD,
     FADED_CARRYOVER_PERCENT, GATHER_TIME,
     HAVEN_MENDING, HEALTH_MENDS_EVERY, LONG_SLEEP, MEMORIES_TO_REDEEM, MENDING, MIN_WORKABLE_STOCK, NAME_TIME,
     REBIRTH_CARRYOVER_PERCENT, REDEMPTION_CLOCK, RESTED_LASTS, SEEK_TIME, SETTLE_TIME, TAINT_FADES_EVERY,
@@ -1026,7 +1026,7 @@ impl Game {
         outcomes.push(Outcome::Drew { amount, held: character.ectoplasm() });
         outcomes.append(&mut risen);
         // The work is practice too, and enough practice is the way back.
-        if character.practise(deposit.resource.skill(), AFTERLIFE_XP_PER_DRAW, outcomes) >= AFTERLIFE_LEVEL {
+        if character.practise(deposit.resource.skill(), AFTERLIFE_XP_PER_DRAW, outcomes) >= character.afterlife_goal() {
             self.arise(index, now, outcomes);
         }
     }
@@ -1048,7 +1048,7 @@ impl Game {
         character.busy_until = now + ATTACK_TIME;
         let (damage, left) = (blow.damage(), character.hurt_shade(blow.damage()));
         outcomes.push(Outcome::Sparred { damage, left });
-        if character.practise(SkillKind::Fighting, FIGHTING_XP_PER_BLOW, outcomes) >= AFTERLIFE_LEVEL {
+        if character.practise(SkillKind::Fighting, FIGHTING_XP_PER_BLOW, outcomes) >= character.afterlife_goal() {
             self.arise(index, now, outcomes);
         }
     }
@@ -2042,6 +2042,10 @@ impl World for Game {
 mod tests {
     use super::*;
     use crate::balance::Mood;
+    use crate::content::AFTERLIFE_LEVEL;
+
+    /// What the afterlife asks of someone who has died once.
+    const AFTER_ONE_DEATH: u32 = AFTERLIFE_LEVEL + crate::content::AFTERLIFE_LEVEL_PER_DEATH;
     use crate::era::Era;
     use crate::content::{BALANCE_EVERY, LEAN_PER_DEALING, LEAST_BOUNTY, LEAST_BOUNTY_ON_NEWCOMER, RITE_WINDOW, STORM_EVERY};
     use crate::haul::pressure_percent;
@@ -2269,10 +2273,10 @@ mod tests {
         assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::Reborn { life: 2 } }));
         let bryn = game.character(BRYN).unwrap();
         assert!(!bryn.is_spirit());
-        assert_eq!((bryn.place(), bryn.health(), bryn.rested(), bryn.life()), (CAMP, 100, 100, 2));
+        assert_eq!((bryn.place(), bryn.health(), bryn.rested(), bryn.life()), (CAMP, 100, 0, 2), "whole, but weary");
         // Death kept nothing. The ledge is where Bryn practised, so mining is what came back.
         let mining = bryn.skill(crate::types::SkillKind::Mining);
-        assert_eq!((mining.level(), mining.peak()), (AFTERLIFE_LEVEL, AFTERLIFE_LEVEL.max(mining_before)));
+        assert_eq!((mining.level(), mining.peak()), (AFTER_ONE_DEATH, AFTER_ONE_DEATH.max(mining_before)));
         assert_eq!(game.bodies_at(LEDGE).count(), 0);
     }
 
@@ -2362,7 +2366,7 @@ mod tests {
         let bryn = game.character(BRYN).unwrap();
         let (mining_now, foraging) = (bryn.skill(SkillKind::Mining), bryn.skill(SkillKind::Foraging));
         assert_eq!((mining_now.level(), mining_now.peak()), (0, mining));
-        assert_eq!((foraging.level(), foraging.peak()), (AFTERLIFE_LEVEL, AFTERLIFE_LEVEL));
+        assert_eq!((foraging.level(), foraging.peak()), (AFTER_ONE_DEATH, AFTER_ONE_DEATH));
     }
 
     /// Walks a spirit on the Ore Ledge down to the Shingle Beach.
@@ -2528,9 +2532,9 @@ mod tests {
         let (events, then) = through_the_afterlife(&mut game, BRYN, now + ATTACK_TIME.as_ticks());
         assert!(events.iter().any(|event| matches!(event, Event::Character { outcome: Outcome::Sparred { left: 0, .. }, .. })));
         let minutes = (then - now) / 60;
-        assert!((15..=25).contains(&minutes), "about as long as gathering takes: {minutes} minutes");
+        assert!((30..=40).contains(&minutes), "about as long as gathering takes: {minutes} minutes");
         let bryn = game.character(BRYN).unwrap();
-        assert_eq!((bryn.life(), bryn.skill(SkillKind::Fighting).level()), (2, AFTERLIFE_LEVEL));
+        assert_eq!((bryn.life(), bryn.skill(SkillKind::Fighting).level()), (2, AFTER_ONE_DEATH));
 
         // Where the living work there is work to practise, not shades.
         let (mut game, now) = bryn_a_spirit_on_the_ledge();
@@ -2547,6 +2551,31 @@ mod tests {
         game.apply(&Command::fight(ASH, lurker(&game).unwrap().id), Tick::new(now), &mut events);
         // One blow is three points of the hundred a level takes, and more when rested.
         assert!(game.character(ASH).unwrap().skill(SkillKind::Fighting).progress() >= FIGHTING_XP_PER_BLOW);
+    }
+
+    #[test]
+    fn every_death_asks_more_of_the_afterlife_and_sends_more_back() {
+        let (mut game, now) = bryn_marked_on_the_ledge();
+        assert_eq!(game.character(BRYN).unwrap().afterlife_goal(), AFTER_ONE_DEATH, "what a first death will ask");
+        let (_, now) = fight_to_the_end(&mut game, now);
+        let (_, first) = through_the_afterlife(&mut game, BRYN, now);
+        let bryn = game.character(BRYN).unwrap();
+        assert_eq!((bryn.life(), bryn.skill(SkillKind::Fighting).level(), bryn.afterlife_goal()), (2, 15, 20));
+
+        // Killed again, Bryn is longer about it, and comes back knowing more.
+        game.fell(1, Cause::Character(ASH), 0, Tick::new(first), &mut Vec::new());
+        let (_, second) = through_the_afterlife(&mut game, BRYN, first);
+        let bryn = game.character(BRYN).unwrap();
+        assert_eq!((bryn.life(), bryn.skill(SkillKind::Fighting).level()), (3, 20));
+        assert!(second - first > first - now, "{} against {}", second - first, first - now);
+
+        // It only ever asks so much.
+        let mut old = Character::new("Old", CAMP);
+        for _ in 0..40 {
+            old.die(Death { body: CAMP, passing: Passing::Severed, ready_at: Tick::ZERO, lost_at: Tick::ZERO, risen: false, buried: false, disturbed: false });
+            old.be_reborn(CAMP, Tick::ZERO, Rebirth { base: 0, favoured: None, spend_ectoplasm: false, bloodline: Bloodline::Tidal });
+        }
+        assert_eq!(old.afterlife_goal(), crate::content::MOST_AFTERLIFE_LEVEL);
     }
 
     #[test]
@@ -2760,8 +2789,14 @@ mod tests {
         let mut now = much_later;
         let mut hauls_back = 0;
         while game.character(ASH).unwrap().skill(SkillKind::Mining).level() < peak {
+            assert!(hauls_back < hauls, "it should never take as long again");
             game.apply(&Command::gather(ASH), Tick::new(now), &mut events);
-            now += GATHER_TIME.as_ticks();
+            // Leave the ledge time to regrow, as before.
+            for tick in now + 1..=now + 600 {
+                game.tick(Tick::new(tick), &mut events);
+            }
+            events.clear();
+            now += 600;
             hauls_back += 1;
         }
         assert!(hauls_back * 3 < hauls, "{hauls_back} hauls to get back what took {hauls}");
@@ -3295,10 +3330,11 @@ mod tests {
         // The body rises, and the long way round is all that is left.
         through_the_afterlife(&mut game, BRYN, now + CORPSE_TIME.as_ticks());
         let bryn = game.character(BRYN).unwrap();
-        // It takes 115 draws to practise a skill to level 10. A hundred of
-        // that ectoplasm buys five percent of the old life; the rest is kept.
-        assert_eq!((bryn.kept(), bryn.ectoplasm()), (5, 15));
-        assert_eq!(bryn.skill(SkillKind::Mining).level(), AFTERLIFE_LEVEL.max(mining * 5 / 100));
+        // It takes 179 draws to practise a skill to the 15 a first death
+        // asks. A hundred and sixty of that ectoplasm buys eight percent
+        // of the old life; the rest is kept.
+        assert_eq!((bryn.kept(), bryn.ectoplasm()), (8, 19));
+        assert_eq!(bryn.skill(SkillKind::Mining).level(), AFTER_ONE_DEATH.max(mining * 8 / 100));
     }
 
     #[test]

@@ -272,6 +272,14 @@ pub const REBIRTH_CARRYOVER_PERCENT: u32 = 0;
 /// before it lives again.
 pub const AFTERLIFE_LEVEL: u32 = 10;
 
+/// How much further a spirit must go for each death it has died. The
+/// afterlife asks more each time, and gives more back: whatever is
+/// practised there comes into the next life whole.
+pub const AFTERLIFE_LEVEL_PER_DEATH: u32 = 5;
+
+/// The most the afterlife ever asks.
+pub const MOST_AFTERLIFE_LEVEL: u32 = 50;
+
 /// How much faster those born to a bloodline learn the attributes it
 /// leans toward, as a percentage of the usual pace.
 pub const BLOODLINE_LEARNING_PERCENT: u64 = 125;
@@ -348,7 +356,7 @@ pub const MOST_CARRYOVER_PERCENT: u32 = 50;
 
 /// Lineage experience for each life lived to its end. Lineage is the
 /// one attribute that is never cut back at rebirth.
-pub const LINEAGE_XP_PER_LIFE: u64 = 500;
+pub const LINEAGE_XP_PER_LIFE: u64 = 2_400;
 
 /// How many times its share the attribute of the place of death keeps:
 /// die on the ore and the next life remembers the ore.
@@ -356,7 +364,7 @@ pub const DEATH_PLACE_CARRYOVER_TIMES: u32 = 2;
 
 /// Attunement experience for each level the body wastes in too long a
 /// sleep. The spirit grows as the body fails.
-pub const AFFINITY_XP_PER_WASTED_LEVEL: u64 = 100;
+pub const AFFINITY_XP_PER_WASTED_LEVEL: u64 = 480;
 
 /// Ectoplasm ever drawn at which each spirit tier is reached.
 pub const SPIRIT_TIER_AT: [u64; 4] = [0, 100, 400, 1_000];
@@ -379,9 +387,12 @@ pub const TAKE_TIME: Duration = Duration::seconds(5);
 /// How skills grow: about a hundred units gathered for the first level.
 pub const SKILL_RULES: Rules = Rules { cap: 100, xp_per_level: 100, relearning_percent: MUSCLE_MEMORY_PERCENT };
 
-/// How attributes grow: about two hundred and fifty units for the first level.
+/// How attributes grow: about twelve hundred units for the first
+/// level. Set so that someone working a land alone, day and night,
+/// takes about 24 days to bring an attribute to its cap (Mikey,
+/// 2026-11-17; it was 250, and five days).
 pub const ATTRIBUTE_RULES: Rules =
-    Rules { cap: 100, xp_per_level: 250, relearning_percent: MUSCLE_MEMORY_PERCENT };
+    Rules { cap: 100, xp_per_level: 1200, relearning_percent: MUSCLE_MEMORY_PERCENT };
 
 /// The tide: twenty minutes from one low water to the next.
 pub const TIDE: Cycle = Cycle::new(Duration::minutes(20));
