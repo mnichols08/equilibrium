@@ -1,5 +1,6 @@
 <!--
-  Where you are and how you and the shoreline are doing.
+  Where you are and how you, the land and the world are doing.
+  @prop {string} world - One line about the wider world: the land, its house, the era, the mood, your bloodline. Empty hides it.
   @prop {{ name: string, marked: boolean, asleep: boolean }[]} company - Everyone else standing where you are.
   @prop {{ place_name: string, description: string, health: number, life: number, ectoplasm: number, spirit_tier: string, body: null | { place_name: string, state: string, can_return: boolean, held_for: number, lost_in: number }, forgotten: null | { unborn: boolean, dormant: boolean, memories: number, needed: number, time_left: number }, afterlife: null | { level: number, needed: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
 -->
@@ -37,16 +38,17 @@
   .marked { color: var(--eq-marked, #a3262a); font-weight: 600; }
   ul { margin: 0.35rem 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem 0.9rem; }
 </style>
-<eq-status clock="0:00:00" tide="low" vitality={100} health="peak health" you={emptyYou} company={[]}>
+<eq-status clock="0:00:00" tide="low" vitality={100} health="peak health" world="" you={emptyYou} company={[]}>
   <header>
     <h2>{you.place_name}</h2>
     <span class="meta">{clock} · {tide} tide</span>
   </header>
+  <p zb-if={world} class="meta">{world}</p>
   <p>{you.description}</p>
   <p zb-if={alsoHere}>Also here: {alsoHere}.</p>
   <p zb-if={spirit} class="marked" role="status">{spirit}</p>
   <p>
-    <label>Shoreline <meter min="0" max="100" low="31" high="81" optimum="100" value={vitality}></meter> {vitality} ({health})</label>
+    <label>This land <meter min="0" max="100" low="31" high="81" optimum="100" value={vitality}></meter> {vitality} ({health})</label>
   </p>
   <p>
     <label>Health <meter min="0" max="100" low="30" high="60" optimum="100" value={you.health}></meter> {you.health}{you.life > 1 ? ` · life ${you.life}` : ""}</label>

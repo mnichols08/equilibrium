@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { DEFAULT_BOTS, MOST_BOTS, PROTOCOL_VERSION, settings, startGame, startOnline } from '../app.js'
+import { DEFAULT_BOTS, MOST_BOTS, PROTOCOL_VERSION, settings, startGame, startOnline, worldLine } from '../app.js'
 
 /** A game that records what it is sent and counts its turns. */
 function fakeGame() {
@@ -157,4 +157,12 @@ test('a refusal and a closed connection are reported', () => {
   assert.deepEqual(heard, ['That name is taken.', 'closed'])
   send('look')
   assert.equal(socket.sent.length, 1, 'nothing is sent on a closed connection')
+})
+
+test('the world line says only what is worth saying', () => {
+  const quiet = { land: null, house: null, era: 'the Era of Rebuilding', mood: 'even', you: { bloodline: 'the Tidal line' } }
+  assert.equal(worldLine(quiet), 'of the Tidal line')
+  const loud = { land: 'Saltmarch', house: 'Thorne', era: 'the Era of Conflict', mood: 'restless', you: { bloodline: 'Ironkin' } }
+  assert.equal(worldLine(loud), 'Saltmarch · House Thorne · the Era of Conflict · the world is restless · of Ironkin')
+  assert.equal(worldLine({ you: {} }), '')
 })
