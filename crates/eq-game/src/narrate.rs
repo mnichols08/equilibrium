@@ -35,7 +35,9 @@ Commands:
   rob <name>           go through the pack of someone asleep here
   dig                  dig up a grave where you stand and take what is in
                        it: your own if it is here, else the oldest. It
-                       costs the grave's owner the life it remembered.
+                       costs the grave's owner the life it remembered,
+                       and moves 5 levels from their strongest of Vigor,
+                       Finesse and Resilience into Attunement.
   bury <name>          lay someone's body in the ground where it lies
   gather               as a spirit, practise where the living would work:
                        go far enough in one skill and you live again
@@ -339,6 +341,13 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             "You dig up {}'s grave and take what was buried there: {}. It is robbery, and the land knows it.",
             name_of(game, *owner),
             pile(took),
+        ),
+        Outcome::Unearthed { fell, levels: 0 } => {
+            format!("The grave had nothing of your {} left to take.", fell.name())
+        }
+        Outcome::Unearthed { fell, levels } => format!(
+            "The grave keeps something of you all the same. Your {} falls by {levels}, and your Attunement rises by as much: less of the body, more of the spirit.",
+            fell.name(),
         ),
         Outcome::GraveRobbed { by } => format!(
             "Something in you goes quiet. {} has dug up your grave, and the life that ended there is lost to you: what it knew will come no faster now than to anyone.",

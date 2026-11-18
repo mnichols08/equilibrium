@@ -304,8 +304,10 @@ impl Game {
     /// theirs is here, or else the oldest. They have what was buried
     /// in it. The price is the tie it kept: its owner no longer learns
     /// again fast what that life knew, whether the owner is the digger,
-    /// or someone else, living or still in the afterlife. Digging up
-    /// someone else's grave is robbery, and the land marks it.
+    /// or someone else, living or still in the afterlife; and it changes
+    /// the owner, body for spirit (see `Character::be_unearthed`), which
+    /// costs something however much of that life they had won back.
+    /// Digging up someone else's grave is robbery, and the land marks it.
     fn dig(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
         let who = id_at(index);
         let here = self.characters[index].place();
@@ -319,18 +321,20 @@ impl Game {
         digger.busy_until = now + BURY_TIME;
         outcomes.push(Outcome::DugUp { owner: grave.owner, took: grave.contents });
         if grave.owner == who {
-            return digger.forget_the_old_life();
+            let (fell, levels) = digger.be_unearthed();
+            return outcomes.push(Outcome::Unearthed { fell, levels });
         }
         outcomes.extend(digger.shift_taint(TAINT_FOR_ROBBING));
         if let Some(owner) = self.index_of(grave.owner) {
             let owner = &mut self.characters[owner];
-            // Still in the afterlife from that death, or living since.
+            // If they are still in the afterlife from that death, the
+            // life it was will not be remembered when they come out.
             if owner.death().is_some_and(|death| death.buried && death.body == here) {
                 owner.be_disturbed();
-            } else {
-                owner.forget_the_old_life();
             }
+            let (fell, levels) = owner.be_unearthed();
             events.push(Event::Character { who: grave.owner, outcome: Outcome::GraveRobbed { by: who } });
+            events.push(Event::Character { who: grave.owner, outcome: Outcome::Unearthed { fell, levels } });
         }
     }
 
@@ -2047,7 +2051,7 @@ mod tests {
     /// What the afterlife asks of someone who has died once.
     const AFTER_ONE_DEATH: u32 = AFTERLIFE_LEVEL + crate::content::AFTERLIFE_LEVEL_PER_DEATH;
     use crate::era::Era;
-    use crate::content::{BALANCE_EVERY, LEAN_PER_DEALING, LEAST_BOUNTY, LEAST_BOUNTY_ON_NEWCOMER, RITE_WINDOW, STORM_EVERY};
+    use crate::content::{GRAVE_SHIFT, BALANCE_EVERY, LEAN_PER_DEALING, LEAST_BOUNTY, LEAST_BOUNTY_ON_NEWCOMER, RITE_WINDOW, STORM_EVERY};
     use crate::haul::pressure_percent;
     use crate::types::{Deposit, Resource, SkillKind};
     use eq_world_graph::PlaceId;
@@ -2602,6 +2606,13 @@ mod tests {
         start.apply(&Command::go(BRYN, "east"), Tick::new(died), &mut events);
         let (_, born) = through_the_afterlife(&mut start, BRYN, died + TRAVEL_TIME.as_ticks());
         assert_eq!(start.character(BRYN).unwrap().skill(SkillKind::Mining).peak(), mining);
+        // Time passes. Bryn works, and wins back all of that life and more.
+        hardened(&mut start, BRYN, 30);
+        while start.character(BRYN).unwrap().skill(SkillKind::Mining).level() < mining {
+            start.characters[1].train(Resource::Ore, 12, &mut Vec::new());
+        }
+        let level = |game: &Game, attribute| game.character(BRYN).unwrap().attribute(attribute).level();
+        let before = (level(&start, Attribute::Vigor), level(&start, Attribute::Attunement));
         start.characters.iter_mut().for_each(|character| character.busy_until = Tick::ZERO);
         let dig = |game: &mut Game, who: CharacterId| {
             let mut events = Vec::new();
@@ -2617,9 +2628,16 @@ mod tests {
         let mut own = start.clone();
         set_down(&mut own, BRYN, LEDGE);
         assert!(crate::narrate::place(&own, BRYN, Tick::new(born)).contains("You lie buried here."));
-        assert_eq!(dig(&mut own, BRYN), [Event::Character { who: BRYN, outcome: Outcome::DugUp { owner: BRYN, took: grave.contents } }]);
+        assert_eq!(dig(&mut own, BRYN), [
+            Event::Character { who: BRYN, outcome: Outcome::DugUp { owner: BRYN, took: grave.contents } },
+            Event::Character { who: BRYN, outcome: Outcome::Unearthed { fell: Attribute::Vigor, levels: GRAVE_SHIFT } },
+        ]);
+        // Having relearned everything does not make it free: the body
+        // is the less for it, and the spirit the more.
+        assert_eq!((level(&own, Attribute::Vigor), level(&own, Attribute::Attunement)), (before.0 - GRAVE_SHIFT, before.1 + GRAVE_SHIFT));
         let bryn = own.character(BRYN).unwrap();
         assert_eq!((bryn.carried_total(), bryn.skill(SkillKind::Mining).peak()), (carried, bryn.skill(SkillKind::Mining).level()));
+        assert_eq!(bryn.attribute(Attribute::Vigor).peak(), before.0 - GRAVE_SHIFT, "and it will not come back any faster");
         assert_eq!(bryn.standing(), Standing::Clean, "it was theirs to take");
         assert_eq!(own.graves_at(LEDGE).count(), 0, "a grave is dug up once");
 
@@ -2630,8 +2648,12 @@ mod tests {
         assert!(stolen.contains(&Event::Character { who: ASH, outcome: Outcome::DugUp { owner: BRYN, took: grave.contents } }));
         assert!(stolen.contains(&Event::Character { who: BRYN, outcome: Outcome::GraveRobbed { by: ASH } }));
         assert_eq!(robbed.character(ASH).unwrap().standing(), Standing::Marked);
+        assert!(stolen.contains(&Event::Character { who: BRYN, outcome: Outcome::Unearthed { fell: Attribute::Vigor, levels: GRAVE_SHIFT } }));
         let bryn = robbed.character(BRYN).unwrap();
         assert_eq!(bryn.skill(SkillKind::Mining).peak(), bryn.skill(SkillKind::Mining).level());
+        // The same change comes over Bryn, who is nowhere near; Ash is as Ash was.
+        assert_eq!((level(&robbed, Attribute::Vigor), level(&robbed, Attribute::Attunement)), (before.0 - GRAVE_SHIFT, before.1 + GRAVE_SHIFT));
+        assert_eq!(robbed.character(ASH).unwrap().attribute(Attribute::Attunement).level(), 0);
     }
 
     /// Walks a spirit through the afterlife, memory by memory, until it

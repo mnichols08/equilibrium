@@ -11,7 +11,7 @@ use eq_world_graph::PlaceId;
 
 use crate::content::{
     AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES,
-    AFTERLIFE_LEVEL, AFTERLIFE_LEVEL_PER_DEATH, MOST_AFTERLIFE_LEVEL, BLOODLINE_LEARNING_PERCENT, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, SKILL_RULES,
+    AFTERLIFE_LEVEL, AFTERLIFE_LEVEL_PER_DEATH, GRAVE_SHIFT, MOST_AFTERLIFE_LEVEL, BLOODLINE_LEARNING_PERCENT, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::bloodline::Bloodline;
@@ -399,6 +399,23 @@ impl Character {
         for known in self.skills.iter_mut().chain(self.attributes.iter_mut()) {
             *known = known.reborn(100);
         }
+    }
+
+    /// What having their grave dug up does to its owner, whoever did
+    /// the digging: the body is the less for it and the spirit the
+    /// more. Up to [`GRAVE_SHIFT`] levels leave whichever of Vigor,
+    /// Finesse and Resilience stands highest, and as many are added to
+    /// Attunement. Then the old life is forgotten. Returns which
+    /// attribute fell, and by how much.
+    pub(crate) fn be_unearthed(&mut self) -> (Attribute, u32) {
+        let body = [Attribute::Vigor, Attribute::Finesse, Attribute::Resilience];
+        // The first of the highest: `max_by_key` would take the last.
+        let strongest = body.into_iter().rev().max_by_key(|&attribute| self.attribute(attribute).level()).unwrap_or(Attribute::Vigor);
+        let moved = self.attributes[strongest.index()].lose(GRAVE_SHIFT, 0);
+        let attunement = &mut self.attributes[Attribute::Attunement.index()];
+        *attunement = attunement.at_least((attunement.level() + moved).min(ATTRIBUTE_RULES.cap));
+        self.forget_the_old_life();
+        (strongest, moved)
     }
 
     /// Notes that someone else took what lay beside the body.

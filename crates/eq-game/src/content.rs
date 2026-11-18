@@ -271,6 +271,10 @@ pub const BLOODLINE_LEARNING_PERCENT: u64 = 125;
 /// [`RITE_MENDS_PERCENT`].
 pub const MIXED_RITE_MENDS_PERCENT: u32 = 100;
 
+/// How many levels move when someone's grave is dug up: out of the
+/// strongest thing their body has, and into Attunement.
+pub const GRAVE_SHIFT: u32 = 5;
+
 /// The least a bounty may pay, in units of whatever it pays in.
 pub const LEAST_BOUNTY: u64 = 10;
 
