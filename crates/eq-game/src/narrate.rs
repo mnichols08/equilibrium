@@ -55,6 +55,11 @@ Commands:
                        answer one someone else has begun
   tend <name>          look after someone asleep here, so they last longer
   board                at camp, read the Contract Board and its bounties
+  hire 40 ore to <land>   at camp, pay to be seen safely to another land,
+                       or: hire 40 ore to ground (the Meeting Ground)
+  guard <name>         take the escort job of someone standing with you:
+                       paid when you both stand where they were going
+  dismiss              give up on the escort you asked for
   bounty bryn 30 ore   at camp, put a price on someone's head: it pays
                        whoever kills them, wherever they are
   post 10 ore for 30 kelp   at camp, pin up an offer (what you offer is held)
@@ -334,6 +339,25 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             span(*vigil),
         ),
         Outcome::CannotTrade { why } => cannot_trade(game, viewer, *why),
+        Outcome::Hiring { reward, to } => format!(
+            "You put up {} for whoever sees you safely to {}. The board holds it. Whoever takes the job must be standing with you (guard <your name>).",
+            lot(*reward),
+            place_name(game, *to),
+        ),
+        Outcome::Guarding { client, reward, to } => format!(
+            "You take the job: see {} safely to {}, and {} is yours when you both stand there.",
+            name_of(game, *client),
+            place_name(game, *to),
+            lot(*reward),
+        ),
+        Outcome::Guarded { by } => format!("{} has taken your escort job. Stay close.", name_of(game, *by)),
+        Outcome::EscortOver { paid: true } => "You are where you were going, and your guard is paid.".into(),
+        Outcome::EscortOver { paid: false } => "Your escort is over, unpaid. The reward waits for you at the board you put it up on.".into(),
+        Outcome::EscortDone { client, reward: Some(reward) } => {
+            format!("You have seen {} safely there. {} is yours.", name_of(game, *client), lot(*reward))
+        }
+        Outcome::EscortDone { client, reward: None } => format!("Your escort of {} has come to nothing. There is no pay.", name_of(game, *client)),
+        Outcome::GuardLost => "Your guard is dead. The job is open again for anyone standing with you.".into(),
         Outcome::BountyPosted { on, reward } => format!(
             "You put {} on {}'s head. The board holds it for whoever kills them, and until someone does they can be struck anywhere but a haven.",
             lot(*reward),
@@ -868,6 +892,16 @@ pub fn board(game: &Game, viewer: CharacterId) -> String {
         lines.push("Bounties:".into());
         lines.extend(hunted);
     }
+    let wanted: Vec<String> = game
+        .escorts()
+        .iter()
+        .filter(|job| job.posted_at == zone.anchor() && job.guard.is_none())
+        .map(|job| format!("  {} wants seeing safely to {}: {}", name_of(game, job.client), place_name(game, job.to), lot(job.reward)))
+        .collect();
+    if !wanted.is_empty() {
+        lines.push("Escorts wanted:".into());
+        lines.extend(wanted);
+    }
     let owed = zone.board().owed_to(viewer);
     if owed.iter().any(|&amount| amount > 0) {
         lines.push(format!("Waiting for you to collect: {}.", pile(&owed)));
@@ -921,6 +955,9 @@ fn cannot_trade(game: &Game, viewer: CharacterId, why: TradeRefusal) -> String {
         TradeRefusal::TooMany => "You have as many contracts up as one person may.".into(),
         TradeRefusal::Empty => "A contract has to offer something and ask something.".into(),
         TradeRefusal::NothingOwed => "The board holds nothing for you.".into(),
+        TradeRefusal::AlreadyHiring => "You have asked for an escort already. Dismiss it first (dismiss).".into(),
+        TradeRefusal::NotHiring => "There is no escort job there to take or give up.".into(),
+        TradeRefusal::NoSuchPlace => "An escort is to another land, by its name or its founder's, or to the Meeting Ground (\"ground\").".into(),
         TradeRefusal::OnYourself => "Nobody puts a price on their own head.".into(),
         TradeRefusal::TooLittle(least) => format!("A price on that head has to be at least {least}. Newcomers cost more than they are worth."),
     }

@@ -44,6 +44,8 @@ pub enum Input {
     Name(String),
     /// Tend a sleeper, by name.
     Tend(String),
+    /// Take the escort job of someone here, by name.
+    Guard(String),
     /// Put a price on someone's head, by name.
     Bounty(String, Lot),
     /// Read the Contract Board.
@@ -136,6 +138,15 @@ pub fn parse(line: &str) -> Input {
             }
             _ => Input::Unknown("A bounty on whom, of what? Try \"bounty bryn 30 ore\".".into()),
         },
+        "hire" => match hire(rest, words) {
+            Some((reward, to)) => Input::Do(Action::Hire { reward, to }),
+            None => Input::Unknown("Hire a guard for what, to where? Try \"hire 40 ore to saltmarch\", or \"to ground\".".into()),
+        },
+        "guard" | "escort" => match rest {
+            Some(name) => Input::Guard(name.into()),
+            None => Input::Unknown("Guard whom? Try \"guard bryn\".".into()),
+        },
+        "dismiss" => Input::Do(Action::Dismiss),
         "collect" => Input::Do(Action::Collect),
         "bury" => match rest {
             Some(name) => Input::Bury(name.into()),
@@ -163,6 +174,17 @@ fn offer<'a>(first: Option<&str>, mut rest: impl Iterator<Item = &'a str>) -> Op
     }
     let want = lot(rest.next()?, rest.next()?)?;
     Some((give, want))
+}
+
+/// Reads "40 ore to the salt march": the amount is `first`, and the
+/// place is every word after "to".
+fn hire<'a>(first: Option<&str>, mut rest: impl Iterator<Item = &'a str>) -> Option<(Lot, String)> {
+    let reward = lot(first?, rest.next()?)?;
+    if rest.next()? != "to" || reward.amount == 0 {
+        return None;
+    }
+    let to = rest.collect::<alloc::vec::Vec<_>>().join(" ");
+    (!to.is_empty()).then_some((reward, to))
 }
 
 /// An amount and what it is an amount of.
@@ -317,6 +339,11 @@ mod tests {
             assert!(matches!(parse(nonsense), Input::Unknown(_)), "{nonsense}");
         }
         assert_eq!(parse("board"), Input::Board);
+        let reward = Lot { resource: Resource::Ore, amount: 40 };
+        assert_eq!(parse("hire 40 ore to The Salt March"), Input::Do(Action::Hire { reward, to: "the salt march".into() }));
+        assert!(matches!(parse("hire 40 ore"), Input::Unknown(_)));
+        assert_eq!(parse("guard Bryn"), Input::Guard("bryn".into()));
+        assert_eq!(parse("dismiss"), Input::Do(Action::Dismiss));
         assert_eq!(parse("bounty Bryn 30 ore"), Input::Bounty("bryn".into(), Lot { resource: Resource::Ore, amount: 30 }));
         assert!(matches!(parse("bounty bryn"), Input::Unknown(_)));
         assert!(matches!(parse("bounty bryn 0 ore"), Input::Unknown(_)));

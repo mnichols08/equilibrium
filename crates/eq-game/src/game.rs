@@ -29,6 +29,7 @@ use crate::occupancy::Occupancy;
 use crate::pact::{Dealing, Dealt, Pact, PactRefusal, Pacts};
 use crate::types::{Attribute, Cause, Health, Passing, Place, Safety, SkillKind, Standing};
 use crate::balance::Balance;
+use crate::escort::{Escort, Escorts};
 use crate::zone::{Epitaph, Weather, Zone};
 
 /// How often the world looks for sleepers whose time has run out.
@@ -55,6 +56,8 @@ pub struct Game {
     pacts: Pacts,
     /// How far all that peace and war has tipped the world.
     balance: Balance,
+    /// Who has paid to be seen safely somewhere, and by whom.
+    escorts: Escorts,
     /// Every place in the world. Each zone is a run of them.
     map: Graph<Place>,
     /// The world's territories, oldest first. There is always one.
@@ -102,6 +105,7 @@ impl Game {
             river: None,
             pacts: Pacts::new(),
             balance: Balance::new(),
+            escorts: Escorts::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
             characters,
@@ -855,6 +859,9 @@ impl Game {
             Action::NameHouse(name) => self.name_founding(index, name, true, outcomes),
             Action::Invite(name) => self.invite(index, name, outcomes),
             Action::Raise => self.raise(index, now, outcomes),
+            Action::Hire { reward, to } => self.hire(index, *reward, to, now, outcomes),
+            Action::Guard(client) => self.guard(index, *client, outcomes, events),
+            Action::Dismiss => self.dismiss(index, outcomes, events),
             Action::Bounty { on, reward } => self.bounty(index, *on, *reward, now, outcomes, events),
             Action::Deal { with, dealing } => self.deal(index, with, *dealing, outcomes, events),
             Action::Bury(target) => self.bury(index, *target, now, outcomes, events),
@@ -1080,6 +1087,113 @@ impl Game {
         poster.busy_until = now + BOARD_TIME;
         let id = self.zone_of_index_mut(index).board.post(who, give, want);
         outcomes.push(Outcome::Posted { id, give, want });
+    }
+
+    /// Every escort wanted or under way.
+    pub fn escorts(&self) -> &[Escort] {
+        self.escorts.all()
+    }
+
+    /// The place called `name`: "ground" for the Meeting Ground, or the
+    /// haven of the land of that name or founder.
+    fn place_called(&self, name: &str) -> Option<PlaceId> {
+        match name.trim() {
+            "ground" | "meeting ground" | "the meeting ground" => self.meeting_ground,
+            land => self.land_called(land).map(|zone| self.zones[zone].anchor()),
+        }
+    }
+
+    /// Puts up a reward at the board here for whoever sees this
+    /// character safely to a place. The board holds the reward.
+    fn hire(&mut self, index: usize, reward: Lot, to: &str, now: Tick, outcomes: &mut Vec<Outcome>) {
+        let who = id_at(index);
+        let here = self.characters[index].place();
+        let checked = self.at_the_board(index).and_then(|()| match self.place_called(to) {
+            _ if reward.amount == 0 => Err(TradeRefusal::Empty),
+            _ if self.escorts.of(who).is_some() => Err(TradeRefusal::AlreadyHiring),
+            None => Err(TradeRefusal::NoSuchPlace),
+            Some(to) if to == here => Err(TradeRefusal::NoSuchPlace),
+            Some(to) => Ok(to),
+        });
+        let to = match checked {
+            Ok(to) => to,
+            Err(why) => return outcomes.push(Outcome::CannotTrade { why }),
+        };
+        let client = &mut self.characters[index];
+        if !client.spend(reward.resource, reward.amount) {
+            return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::CannotPay });
+        }
+        client.busy_until = now + BOARD_TIME;
+        self.escorts.open(Escort { client: who, guard: None, reward, to, posted_at: here });
+        outcomes.push(Outcome::Hiring { reward, to });
+    }
+
+    /// Takes the escort job of someone standing in the same place.
+    fn guard(&mut self, index: usize, client: CharacterId, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let together = self.character(client).is_some_and(|other| other.place() == self.characters[index].place());
+        if !together || !self.escorts.take(client, who) {
+            return outcomes.push(Outcome::CannotTrade { why: TradeRefusal::NotHiring });
+        }
+        let Some(job) = self.escorts.of(client).copied() else { return };
+        outcomes.push(Outcome::Guarding { client, reward: job.reward, to: job.to });
+        events.push(Event::Character { who: client, outcome: Outcome::Guarded { by: who } });
+    }
+
+    /// Gives up on an escort. The reward goes back to the board it was
+    /// put up on.
+    fn dismiss(&mut self, index: usize, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        match self.escorts.close(id_at(index)) {
+            Some(job) => {
+                self.refund(job);
+                outcomes.push(Outcome::EscortOver { paid: false });
+                let lost = Outcome::EscortDone { client: job.client, reward: None };
+                events.extend(job.guard.map(|who| Event::Character { who, outcome: lost }));
+            }
+            None => outcomes.push(Outcome::CannotTrade { why: TradeRefusal::NotHiring }),
+        }
+    }
+
+    /// Sends an escort's reward back to the board it was put up on, for
+    /// the client to collect.
+    fn refund(&mut self, job: Escort) {
+        let zone = self.zone_index(job.posted_at);
+        self.zones[zone].board.hold_for(job.client, job.reward);
+    }
+
+    /// Settles every escort that has come to an end this tick: paid if
+    /// client and guard stand together where the client was going;
+    /// refunded if the client is dead; open again if the guard is.
+    fn settle_escorts(&mut self, events: &mut Vec<Event>) {
+        let living = |who: CharacterId| self.character(who).filter(|character| !character.is_spirit());
+        let mut over = Vec::new();
+        let mut fallen = Vec::new();
+        for job in self.escorts.all() {
+            let Some(client) = living(job.client) else {
+                over.push((*job, false));
+                continue;
+            };
+            match job.guard.map(|guard| (guard, living(guard))) {
+                Some((guard, None)) => fallen.push(guard),
+                Some((_, Some(guard))) if client.place() == job.to && guard.place() == job.to => over.push((*job, true)),
+                _ => {}
+            }
+        }
+        for guard in fallen {
+            for client in self.escorts.release(guard) {
+                events.push(Event::Character { who: client, outcome: Outcome::GuardLost });
+            }
+        }
+        for (job, paid) in over {
+            self.escorts.close(job.client);
+            match (paid, job.guard.and_then(|guard| self.index_of(guard))) {
+                (true, Some(guard)) => self.characters[guard].stow(job.reward.resource, job.reward.amount),
+                _ => self.refund(job),
+            }
+            events.push(Event::Character { who: job.client, outcome: Outcome::EscortOver { paid } });
+            let done = Outcome::EscortDone { client: job.client, reward: paid.then_some(job.reward) };
+            events.extend(job.guard.map(|who| Event::Character { who, outcome: done }));
+        }
     }
 
     /// Puts a price on someone's head at the board here. It changes
@@ -1818,6 +1932,7 @@ impl World for Game {
         self.lose_bodies(now, events);
         self.creatures_strike(now, events);
         self.upkeep(now, events);
+        self.settle_escorts(events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
@@ -4000,6 +4115,90 @@ mod tests {
         let from = LURKER_RETURNS.as_ticks() * 2 + 1;
         ticks(&mut game, from, from + UPKEEP_EVERY.as_ticks());
         assert_eq!(kinds(&game), (3, 2));
+    }
+
+    #[test]
+    fn a_guard_is_paid_when_client_and_guard_stand_where_the_client_was_going() {
+        let mut game = founders_met();
+        let (ground, home) = (game.meeting_ground().unwrap(), game.character(COLE).unwrap().home());
+        let reward = Lot { resource: Resource::Ore, amount: 40 };
+        game.characters[2].stow(Resource::Ore, 50);
+        let act = |game: &mut Game, command: Command| {
+            let mut events = Vec::new();
+            game.apply(&command, Tick::new(20), &mut events);
+            game.characters.iter_mut().for_each(|character| character.busy_until = Tick::ZERO);
+            events
+        };
+        let refused = |events: &[Event]| match outcome(events) {
+            Some(Outcome::CannotTrade { why }) => Some(*why),
+            _ => None,
+        };
+
+        // Cole, at home, wants seeing to the Meeting Ground.
+        assert_eq!(refused(&act(&mut game, Command::hire(COLE, reward, "nowhere"))), Some(TradeRefusal::NoSuchPlace));
+        assert_eq!(refused(&act(&mut game, Command::hire(COLE, Lot { amount: 500, ..reward }, "ground"))), Some(TradeRefusal::CannotPay));
+        assert_eq!(outcome(&act(&mut game, Command::hire(COLE, reward, "ground"))), Some(&Outcome::Hiring { reward, to: ground }));
+        assert_eq!(refused(&act(&mut game, Command::hire(COLE, reward, "ash"))), Some(TradeRefusal::AlreadyHiring));
+        assert_eq!(game.character(COLE).unwrap().carried(Resource::Ore), 10, "the board holds the reward");
+        assert!(crate::narrate::board(&game, COLE).contains("Cole wants seeing safely to The Meeting Ground"));
+
+        // Bryn is not there to take it, and Cole cannot guard Cole.
+        assert_eq!(refused(&act(&mut game, Command::guard(BRYN, COLE))), Some(TradeRefusal::NotHiring));
+        assert_eq!(refused(&act(&mut game, Command::guard(COLE, COLE))), Some(TradeRefusal::NotHiring));
+        set_down(&mut game, BRYN, home);
+        let taken = act(&mut game, Command::guard(BRYN, COLE));
+        assert_eq!(taken, [
+            Event::Character { who: BRYN, outcome: Outcome::Guarding { client: COLE, reward, to: ground } },
+            Event::Character { who: COLE, outcome: Outcome::Guarded { by: BRYN } },
+        ]);
+        assert_eq!(refused(&act(&mut game, Command::guard(ASH, COLE))), Some(TradeRefusal::NotHiring), "it is taken");
+
+        // One of them there is not enough. Both, and Bryn is paid on the spot.
+        set_down(&mut game, COLE, ground);
+        assert!(ticks(&mut game, 21, 21).is_empty());
+        set_down(&mut game, BRYN, ground);
+        let done = ticks(&mut game, 22, 22);
+        assert!(done.contains(&Event::Character { who: COLE, outcome: Outcome::EscortOver { paid: true } }));
+        assert!(done.contains(&Event::Character { who: BRYN, outcome: Outcome::EscortDone { client: COLE, reward: Some(reward) } }));
+        assert_eq!(game.character(BRYN).unwrap().carried(Resource::Ore), 40);
+        assert!(game.escorts().is_empty());
+    }
+
+    #[test]
+    fn an_escort_that_comes_to_nothing_sends_the_reward_back_to_its_board() {
+        let mut start = founders_met();
+        let home = start.character(COLE).unwrap().home();
+        let reward = Lot { resource: Resource::Kelp, amount: 25 };
+        start.characters[2].stow(Resource::Kelp, 25);
+        set_down(&mut start, BRYN, home);
+        let mut events = Vec::new();
+        start.apply(&Command::hire(COLE, reward, "ground"), Tick::new(20), &mut events);
+        start.apply(&Command::guard(BRYN, COLE), Tick::new(20), &mut events);
+        assert_eq!(start.escorts()[0].guard, Some(BRYN));
+        start.characters.iter_mut().for_each(|character| character.busy_until = Tick::ZERO);
+        let owed = |game: &Game| game.zone_at(home).board().owed_to(COLE)[Resource::Kelp.index()];
+
+        // Cole thinks better of it.
+        let mut game = start.clone();
+        events.clear();
+        game.apply(&Command::dismiss(COLE), Tick::new(21), &mut events);
+        assert!(events.contains(&Event::Character { who: COLE, outcome: Outcome::EscortOver { paid: false } }));
+        assert!(events.contains(&Event::Character { who: BRYN, outcome: Outcome::EscortDone { client: COLE, reward: None } }));
+        assert_eq!((owed(&game), game.escorts().len()), (25, 0));
+
+        // The guard dies: the job is open again, and Ash can take it.
+        let mut game = start.clone();
+        game.fell(1, Cause::Character(ASH), 0, Tick::new(21), &mut Vec::new());
+        let lost = ticks(&mut game, 22, 22);
+        assert!(lost.contains(&Event::Character { who: COLE, outcome: Outcome::GuardLost }));
+        assert_eq!(game.escorts()[0].guard, None);
+
+        // The client dies: nobody is paid, and the reward goes home.
+        let mut game = start.clone();
+        game.fell(2, Cause::Character(ASH), 0, Tick::new(21), &mut Vec::new());
+        let over = ticks(&mut game, 22, 22);
+        assert!(over.contains(&Event::Character { who: BRYN, outcome: Outcome::EscortDone { client: COLE, reward: None } }));
+        assert_eq!((owed(&game), game.character(BRYN).unwrap().carried(Resource::Kelp)), (25, 0));
     }
 
     #[test]
