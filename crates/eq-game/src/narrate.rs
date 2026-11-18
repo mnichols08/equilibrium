@@ -51,7 +51,8 @@ Commands:
   bloodline <name>     as a founder, name your bloodline (for good)
   raise                as a founder, raise your house where you stand
                        (40 driftwood, 20 ore): your land's people cannot
-                       be struck or robbed under its roof
+                       be struck or robbed under its roof, and the
+                       ground it stands on can never be worked again
   invite <name>        as a founder, invite someone: whoever joins under
                        that name arrives in your land
   ally <land>          as a founder on the Meeting Ground, offer another
@@ -170,7 +171,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Joined => format!("You walk out of the tide at {}, new to the shoreline.", place_name(game, home_of(game, viewer))),
         Outcome::Founded => "Nobody has stood here before you. This land is yours to name (call <name>), and your house with it (house <name>). Those you invite (invite <name>) will arrive here.".into(),
         Outcome::CannotFound { why } => cannot_found(*why),
-        Outcome::HouseRaised => "You raise your house here, out of what you carried. From now on nobody can strike or rob your land's people under its roof.".into(),
+        Outcome::HouseRaised => "You raise your house here, out of what you carried. From now on nobody can strike or rob your land's people under its roof. The ground it stands on will never be worked again.".into(),
         Outcome::CannotDeal { why } => cannot_deal(*why).into(),
         Outcome::Offered { land, dealing } => format!(
             "You offer {} {}. It waits on their founder saying the same of you, here on the Meeting Ground.",
@@ -379,7 +380,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         ),
         Outcome::Hunted { reward } => format!("Word reaches you: there is a price on your head. {} to whoever kills you, and anyone may try, anywhere but a haven.", lot(*reward)),
         Outcome::BountyEarned { on, reward, at } => format!(
-            "There was a price on {}'s head, and it is yours: {} waits for you at the board at {}.",
+            "There was a price on {}'s head, and it is yours: {} waits for you at the board at {}. Killing for pay leaves its stain: the land's taint is on you for a while, and enough of it is a mark.",
             name_of(game, *on),
             lot(*reward),
             place_name(game, *at),
