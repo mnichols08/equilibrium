@@ -33,6 +33,9 @@ Commands:
   take                 open the relics here and take what is in them
   sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
   rob <name>           go through the pack of someone asleep here
+  dig                  dig up a grave where you stand and take what is in
+                       it: your own if it is here, else the oldest. It
+                       costs the grave's owner the life it remembered.
   bury <name>          lay someone's body in the ground where it lies
   gather               as a spirit, practise where the living would work:
                        go far enough in one skill and you live again
@@ -257,11 +260,11 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         }
         Outcome::CannotBury { target } => format!("{}'s body does not lie here.", name_of(game, *target)),
         Outcome::Buried { target } => format!(
-            "You lay {} in the ground, and what they dropped with them. Nobody can disturb them now: their next life will remember this one.",
+            "You lay {} in the ground, and what they dropped with them. While the grave is left alone, their next life will remember this one.",
             name_of(game, *target),
         ),
         Outcome::WasBuried { by } => format!(
-            "{} has buried your body. You cannot go back to it, but the life you had will not be lost: you will learn it again fast.",
+            "{} has buried your body. While that grave is left alone the life you had is not lost: you will learn it again fast.",
             name_of(game, *by),
         ),
         Outcome::CannotReturn { why: ReturnRefusal::NoWayBack } => {
@@ -327,6 +330,20 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             span(*vigil),
         ),
         Outcome::CannotTrade { why } => cannot_trade(game, viewer, *why),
+        Outcome::NoGrave => "There is no grave here.".into(),
+        Outcome::DugUp { owner, took } if *owner == viewer => format!(
+            "You dig up your own grave and take back what was buried with you: {}. Whatever tied you to that life is broken. What it knew will come no faster to you now than to anyone.",
+            pile(took),
+        ),
+        Outcome::DugUp { owner, took } => format!(
+            "You dig up {}'s grave and take what was buried there: {}. It is robbery, and the land knows it.",
+            name_of(game, *owner),
+            pile(took),
+        ),
+        Outcome::GraveRobbed { by } => format!(
+            "Something in you goes quiet. {} has dug up your grave, and the life that ended there is lost to you: what it knew will come no faster now than to anyone.",
+            name_of(game, *by),
+        ),
         Outcome::Hiring { reward, to } => format!(
             "You put up {} for whoever sees you safely to {}. The board holds it. Whoever takes the job must be standing with you (guard <your name>).",
             lot(*reward),
@@ -504,6 +521,10 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     }
     if game.era() != Era::Rebuilding {
         lines.push(format!("It is {}.", game.era().name()));
+    }
+    for grave in game.graves_at(character.place()) {
+        let whose = if grave.owner == viewer { "You lie".into() } else { format!("{} lies", name_of(game, grave.owner)) };
+        lines.push(format!("{whose} buried here."));
     }
     let mood = game.balance().mood();
     if mood != Mood::Even {

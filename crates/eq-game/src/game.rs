@@ -14,7 +14,7 @@ use crate::board::{Board, Bounty, ContractId, Lot, TradeRefusal};
 use crate::character::{Character, CharacterId, Death, Rebirth};
 use crate::combat::{may_attack, may_rob, Blow, FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::command::{Action, Command};
-use crate::creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
+use crate::creature::{Being, Creature, CreatureId, CreatureKind, Grave, Relic, RelicTier};
 use crate::content::{
     self, ATTACK_TIME, BASE_EFFORT, BOARD_TIME, BURY_TIME, MOST_VIGIL, RITE_MENDS_PERCENT, RITE_TIME, TEND_TIME,
     VIGIL_PER_TENDING, WARD_TIME, CORPSE_TIME, CORRUPTION_PER_DEATH, CORRUPTION_PER_SLEEPER_DEATH,
@@ -63,6 +63,8 @@ pub struct Game {
     era: Era,
     /// What founders have called the bloodlines, in bloodline order.
     bloodline_names: [Option<String>; Bloodline::ALL.len()],
+    /// Every grave in the world, oldest first.
+    graves: Vec<Grave>,
     /// Who has paid to be seen safely somewhere, and by whom.
     escorts: Escorts,
     /// Every place in the world. Each zone is a run of them.
@@ -114,6 +116,7 @@ impl Game {
             balance: Balance::new(),
             era: Era::Rebuilding,
             bloodline_names: [const { None }; Bloodline::ALL.len()],
+            graves: Vec::new(),
             escorts: Escorts::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
@@ -278,10 +281,57 @@ impl Game {
         };
         self.characters[body].be_buried();
         self.dead.retain(|&spirit| spirit != target);
+        // What they dropped goes into the ground with them, and stays.
+        let mut contents = [0; crate::types::Resource::ALL.len()];
+        for relic in self.relics.iter().filter(|relic| relic.owner == target && relic.place == here) {
+            for (buried, dropped) in contents.iter_mut().zip(relic.contents) {
+                *buried += dropped;
+            }
+        }
         self.relics.retain(|relic| !(relic.owner == target && relic.place == here));
+        self.graves.push(Grave { owner: target, place: here, contents });
         self.characters[index].busy_until = now + BURY_TIME;
         outcomes.push(Outcome::Buried { target });
         events.push(Event::Character { who: target, outcome: Outcome::WasBuried { by: who } });
+    }
+
+    /// The graves in a place, oldest first.
+    pub fn graves_at(&self, place: PlaceId) -> impl Iterator<Item = &Grave> {
+        self.graves.iter().filter(move |grave| grave.place == place)
+    }
+
+    /// Digs up a grave where the digger stands: their own if one of
+    /// theirs is here, or else the oldest. They have what was buried
+    /// in it. The price is the tie it kept: its owner no longer learns
+    /// again fast what that life knew, whether the owner is the digger,
+    /// or someone else, living or still in the afterlife. Digging up
+    /// someone else's grave is robbery, and the land marks it.
+    fn dig(&mut self, index: usize, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
+        let who = id_at(index);
+        let here = self.characters[index].place();
+        let slot = |owned: bool| self.graves.iter().position(|grave| grave.place == here && (grave.owner == who) == owned);
+        let Some(slot) = slot(true).or_else(|| slot(false)) else {
+            return outcomes.push(Outcome::NoGrave);
+        };
+        let grave = self.graves.remove(slot);
+        let digger = &mut self.characters[index];
+        digger.stow_all(grave.contents);
+        digger.busy_until = now + BURY_TIME;
+        outcomes.push(Outcome::DugUp { owner: grave.owner, took: grave.contents });
+        if grave.owner == who {
+            return digger.forget_the_old_life();
+        }
+        outcomes.extend(digger.shift_taint(TAINT_FOR_ROBBING));
+        if let Some(owner) = self.index_of(grave.owner) {
+            let owner = &mut self.characters[owner];
+            // Still in the afterlife from that death, or living since.
+            if owner.death().is_some_and(|death| death.buried && death.body == here) {
+                owner.be_disturbed();
+            } else {
+                owner.forget_the_old_life();
+            }
+            events.push(Event::Character { who: grave.owner, outcome: Outcome::GraveRobbed { by: who } });
+        }
     }
 
     /// Makes a new territory from the world's seed and adds it to the
@@ -927,6 +977,7 @@ impl Game {
             Action::Invite(name) => self.invite(index, name, outcomes),
             Action::NameBloodline(name) => self.name_bloodline(index, name, outcomes),
             Action::Raise => self.raise(index, now, outcomes),
+            Action::Dig => self.dig(index, now, outcomes, events),
             Action::Hire { reward, to } => self.hire(index, *reward, to, now, outcomes),
             Action::Guard(client) => self.guard(index, *client, outcomes, events),
             Action::Dismiss => self.dismiss(index, outcomes, events),
@@ -2485,6 +2536,102 @@ mod tests {
         };
         assert_eq!(next_life(false), (0, mining), "nobody touched it: the old life can be won back fast");
         assert_eq!(next_life(true), (0, 0), "Ash took what lay beside it: the old life is gone");
+    }
+
+    #[test]
+    fn a_friend_who_buries_the_body_keeps_it_from_the_robber_all_the_way_through_the_afterlife() {
+        let (mut start, now) = bryn_marked_on_the_ledge();
+        // Cole is Bryn's friend; Ash is the one who does the killing.
+        let mut events = Vec::new();
+        start.apply(&Command::join(COLE, "Cole"), Tick::new(now), &mut events);
+        let mining = start.character(BRYN).unwrap().skill(SkillKind::Mining).level();
+        let (_, died) = fight_to_the_end(&mut start, now);
+        set_down(&mut start, COLE, LEDGE);
+
+        // Bryn is a good way into the afterlife, on the beach, when Ash goes
+        // through what Bryn dropped. Does Bryn's next life remember this one?
+        let next_life = |friend_buries: bool| {
+            let mut game = start.clone();
+            let mut events = Vec::new();
+            if friend_buries {
+                game.apply(&Command::bury(COLE, BRYN), Tick::new(died), &mut events);
+                assert!(events.contains(&Event::Character { who: COLE, outcome: Outcome::Buried { target: BRYN } }));
+            }
+            game.apply(&Command::go(BRYN, "east"), Tick::new(died), &mut events);
+            let midway = died + 300;
+            for tick in died + 1..=midway {
+                game.tick(Tick::new(tick), &mut events);
+                if game.character(BRYN).unwrap().busy_until() <= Tick::new(tick) {
+                    game.apply(&Command::gather(BRYN), Tick::new(tick), &mut events);
+                }
+            }
+            assert!(game.character(BRYN).unwrap().is_spirit(), "still in the afterlife");
+            events.clear();
+            game.apply(&Command::take(ASH), Tick::new(midway), &mut events);
+            let robbed = matches!(outcome(&events), Some(Outcome::Took { .. }));
+            through_the_afterlife(&mut game, BRYN, midway + 1);
+            (robbed, game.character(BRYN).unwrap().skill(SkillKind::Mining).peak())
+        };
+        assert_eq!(next_life(false), (true, 0), "nobody guarded it: robbed midway, and the old life is forgotten");
+        assert_eq!(next_life(true), (false, mining), "in the ground there was nothing to rob, and the old life comes back fast");
+
+        // Once Bryn lives again, what happens at the old body is nothing to Bryn.
+        let mut game = start.clone();
+        through_the_afterlife(&mut game, BRYN, died);
+        let before = *game.character(BRYN).unwrap().skill(SkillKind::Mining);
+        let later = game.character(BRYN).unwrap().busy_until().get() + 1;
+        game.apply(&Command::take(ASH), Tick::new(later), &mut Vec::new());
+        assert_eq!(*game.character(BRYN).unwrap().skill(SkillKind::Mining), before);
+        assert_eq!(before.peak(), mining.max(before.level()));
+    }
+
+    #[test]
+    fn digging_up_a_grave_pays_what_is_in_it_and_costs_its_owner_the_life_it_kept() {
+        let (mut start, now) = bryn_marked_on_the_ledge();
+        let mut events = Vec::new();
+        start.apply(&Command::join(COLE, "Cole"), Tick::new(now), &mut events);
+        let mining = start.character(BRYN).unwrap().skill(SkillKind::Mining).level();
+        let carried = start.character(BRYN).unwrap().carried_total();
+        let (_, died) = fight_to_the_end(&mut start, now);
+        set_down(&mut start, COLE, LEDGE);
+        start.apply(&Command::bury(COLE, BRYN), Tick::new(died), &mut events);
+        let grave = *start.graves_at(LEDGE).next().unwrap();
+        assert_eq!((grave.owner, grave.contents.iter().sum::<u64>()), (BRYN, carried), "everything went into the ground");
+        assert!(crate::narrate::place(&start, COLE, Tick::new(died)).contains("Bryn lies buried here."));
+        // Bryn lives again, by way of the beach, and remembers.
+        start.apply(&Command::go(BRYN, "east"), Tick::new(died), &mut events);
+        let (_, born) = through_the_afterlife(&mut start, BRYN, died + TRAVEL_TIME.as_ticks());
+        assert_eq!(start.character(BRYN).unwrap().skill(SkillKind::Mining).peak(), mining);
+        start.characters.iter_mut().for_each(|character| character.busy_until = Tick::ZERO);
+        let dig = |game: &mut Game, who: CharacterId| {
+            let mut events = Vec::new();
+            game.apply(&Command::dig(who), Tick::new(born), &mut events);
+            events
+        };
+
+        // Nothing to dig at camp.
+        assert_eq!(outcome(&dig(&mut start, BRYN)), Some(&Outcome::NoGrave));
+
+        // Bryn remembers the ledge, goes back, and robs their own grave:
+        // everything they carried is theirs again, and the old life is gone.
+        let mut own = start.clone();
+        set_down(&mut own, BRYN, LEDGE);
+        assert!(crate::narrate::place(&own, BRYN, Tick::new(born)).contains("You lie buried here."));
+        assert_eq!(dig(&mut own, BRYN), [Event::Character { who: BRYN, outcome: Outcome::DugUp { owner: BRYN, took: grave.contents } }]);
+        let bryn = own.character(BRYN).unwrap();
+        assert_eq!((bryn.carried_total(), bryn.skill(SkillKind::Mining).peak()), (carried, bryn.skill(SkillKind::Mining).level()));
+        assert_eq!(bryn.standing(), Standing::Clean, "it was theirs to take");
+        assert_eq!(own.graves_at(LEDGE).count(), 0, "a grave is dug up once");
+
+        // Ash gets there first instead. Ash has the goods and the land's
+        // mark, and Bryn, wherever Bryn is, has lost that life.
+        let mut robbed = start.clone();
+        let stolen = dig(&mut robbed, ASH);
+        assert!(stolen.contains(&Event::Character { who: ASH, outcome: Outcome::DugUp { owner: BRYN, took: grave.contents } }));
+        assert!(stolen.contains(&Event::Character { who: BRYN, outcome: Outcome::GraveRobbed { by: ASH } }));
+        assert_eq!(robbed.character(ASH).unwrap().standing(), Standing::Marked);
+        let bryn = robbed.character(BRYN).unwrap();
+        assert_eq!(bryn.skill(SkillKind::Mining).peak(), bryn.skill(SkillKind::Mining).level());
     }
 
     /// Walks a spirit through the afterlife, memory by memory, until it

@@ -31,6 +31,8 @@ struct Report {
     bounties: (usize, usize, usize),
     /// How many escorts were wanted, taken and paid.
     escorts: (usize, usize, usize),
+    /// How many of the dead were buried by their own.
+    burials: usize,
     /// How many times a land fell into collapse.
     collapses: usize,
     /// How many times each character died, in the order they joined.
@@ -66,6 +68,7 @@ fn play(seed: u64, days: u64) -> Report {
     let mut bounties = (0, 0, 0);
     // Wanted, taken, paid.
     let mut escorts = (0, 0, 0);
+    let mut burials = 0;
     let mut collapses = 0;
     let mut died = [0usize; 12];
     for day in 1..=days {
@@ -94,6 +97,7 @@ fn play(seed: u64, days: u64) -> Report {
                     let name = session.world().character(*who).unwrap().name();
                     news.push(format!("hour {hour}: {name}'s escort is over, {}", if *paid { "paid" } else { "unpaid" }));
                 }
+                Event::Character { outcome: Outcome::Buried { .. }, .. } => burials += 1,
                 Event::Character { outcome: Outcome::BountyPosted { .. }, .. } => bounties.0 += 1,
                 Event::Character { outcome: Outcome::BountyEarned { .. }, .. } => bounties.1 += 1,
                 Event::Character { outcome: Outcome::Collected { .. }, .. } => bounties.2 += 1,
@@ -110,7 +114,7 @@ fn play(seed: u64, days: u64) -> Report {
             news.push(format!("day {day}: vitality {vitality:?}, deaths so far {deaths}"));
         }
     }
-    Report { game: session.world().clone(), deaths, storms, bounties, escorts, collapses, died, news }
+    Report { game: session.world().clone(), deaths, storms, bounties, escorts, burials, collapses, died, news }
 }
 
 fn people_of(game: &Game, founder: CharacterId) -> usize {
@@ -126,6 +130,7 @@ fn four_founders_of_different_temper_make_a_world() {
     println!("deaths {}, storms {}, lean {}, {}", report.deaths, report.storms, game.balance().lean(), game.era().name());
     println!("bounties posted {}, earned {}, collected {}", report.bounties.0, report.bounties.1, report.bounties.2);
     println!("escorts wanted {}, taken {}, paid {}", report.escorts.0, report.escorts.1, report.escorts.2);
+    println!("burials {}", report.burials);
     println!("collapses {}, deaths each {:?}", report.collapses, report.died);
     let greedy = game.character(id(7)).unwrap();
     println!("the greedy one is in life {} and the afterlife now asks level {} of them", greedy.life(), greedy.afterlife_goal());

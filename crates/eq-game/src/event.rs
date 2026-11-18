@@ -342,6 +342,21 @@ pub enum Outcome {
         /// Why not.
         why: TradeRefusal,
     },
+    /// There is no grave here to dig up.
+    NoGrave,
+    /// They dug up a grave and took what was in it.
+    DugUp {
+        /// Whose grave it was. Their own, perhaps.
+        owner: CharacterId,
+        /// How much of each resource they took, in pack order.
+        took: [u64; Resource::ALL.len()],
+    },
+    /// Someone dug up their grave. The life that ended there is lost
+    /// to them: what it knew no longer comes back fast.
+    GraveRobbed {
+        /// Who did it.
+        by: CharacterId,
+    },
     /// They put up a reward for an escort.
     Hiring {
         /// What it pays.

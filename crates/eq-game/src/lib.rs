@@ -60,7 +60,7 @@ mod zone;
 pub use board::{Board, Bounty, Contract, ContractId, Lot, TradeRefusal};
 pub use character::{Character, CharacterId, Death, Forgotten};
 pub use command::{Action, Command};
-pub use creature::{Being, Creature, CreatureId, CreatureKind, Relic, RelicTier};
+pub use creature::{Being, Creature, CreatureId, CreatureKind, Grave, Relic, RelicTier};
 pub use event::{Event, Outcome};
 pub use game::Game;
 pub use haul::{pressure_percent, Haul};

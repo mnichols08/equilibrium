@@ -149,6 +149,7 @@ pub fn parse(line: &str) -> Input {
         },
         "dismiss" => Input::Do(Action::Dismiss),
         "collect" => Input::Do(Action::Collect),
+        "dig" | "exhume" => Input::Do(Action::Dig),
         "bury" => match rest {
             Some(name) => Input::Bury(name.into()),
             None => Input::Unknown("Bury whom? Try \"bury bryn\".".into()),
