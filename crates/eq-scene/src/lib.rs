@@ -292,7 +292,7 @@ impl Scene {
             health: character.health(),
             life: character.life(),
             bloodline: game.bloodline_name(character.bloodline()).to_owned(),
-            body: character.death().map(|death| body_view(game, death, here, now)),
+            body: character.death().map(|death| body_view(game, death, game.can_return(viewer, now).is_ok(), now)),
             can_spar: character.is_spirit() && !character.is_dormant() && place.deposit.is_none(),
             afterlife: character
                 .is_spirit()
@@ -353,7 +353,7 @@ impl Scene {
     }
 }
 
-fn body_view(game: &Game, death: &Death, here: PlaceId, now: Tick) -> BodyView {
+fn body_view(game: &Game, death: &Death, can_return: bool, now: Tick) -> BodyView {
     let held_for = death.ready_at.get().saturating_sub(now.get());
     let state = match (death.buried, death.risen) {
         (true, _) => "buried",
@@ -364,7 +364,7 @@ fn body_view(game: &Game, death: &Death, here: PlaceId, now: Tick) -> BodyView {
         state,
         place: death.body.get(),
         place_name: game.map().place(death.body).map_or("", |place| place.name),
-        can_return: state == "lying" && death.body == here && held_for == 0,
+        can_return,
         held_for,
         lost_in: death.lost_at.get().saturating_sub(now.get()),
     }
@@ -563,7 +563,10 @@ mod tests {
         game.apply(&Command::go(bryn, "north"), died, &mut events);
         let back = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap();
         assert!(back.you.can_gather && !back.you.can_spar, "the ledge is somewhere to practise the work");
-        assert!(back.you.body.unwrap().can_return);
+        assert!(!back.you.body.unwrap().can_return, "not while Ash, who did it, stands over the body");
+        let mut alone = game.clone();
+        alone.apply(&Command::go(ash, "north"), died + TETHERED_WAIT, &mut events);
+        assert!(Scene::of(&alone, bryn, died + TETHERED_WAIT).unwrap().you.body.unwrap().can_return);
 
         // Buried, there is no body to go back to, and nothing left to take.
         game.apply(&Command::bury(ash, bryn), died + TETHERED_WAIT, &mut events);

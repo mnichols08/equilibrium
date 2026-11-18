@@ -2,7 +2,7 @@
 //! each rebuilt exactly from its own command log.
 //!
 //! - life → death → spirit → rebirth
-//! - life → death → back into the body
+//! - life → death → the walk back to a body that cannot be had
 //! - oversleep → atrophy → the long sleep → forgotten → redeemed
 //! - the same, ending in fading
 
@@ -91,7 +91,7 @@ fn a_life_ends_in_the_grotto_and_the_spirit_buys_a_better_next_one() {
 }
 
 #[test]
-fn a_spirit_that_gets_back_in_time_stands_up_again() {
+fn there_is_no_getting_back_into_a_body_while_its_killer_stands_over_it() {
     let mut solo = Solo::new(4);
     solo.handle("east");
     while !said(&mut solo, "cave").contains("Tidal Cave") {
@@ -105,9 +105,12 @@ fn a_spirit_that_gets_back_in_time_stands_up_again() {
     for way in ["east", "cave", "down"] {
         solo.handle(way);
     }
+    // The lurker is still there. Alone, with nobody to drive it off,
+    // there is no way back in, however quick the walk.
     let back = said(&mut solo, "return");
-    assert!(back.contains("back in your body"), "{back}");
-    assert_eq!((you(&solo).life(), you(&solo).health() <= 25), (1, true));
+    assert!(back.contains("still stands over your body"), "{back}");
+    assert!(you(&solo).is_spirit());
+    assert_eq!(you(&solo).life(), 1);
     assert!(solo.replays_identically());
 }
 

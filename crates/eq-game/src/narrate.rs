@@ -256,6 +256,9 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
              You are a forgotten spirit now, with no body to go back to.",
             place_name(game, *place),
         ),
+        Outcome::CannotReturn { why: ReturnRefusal::KillerNear } => {
+            "What killed you still stands over your body. There is no getting back into it while it does: wait for it to go, or have someone drive it off.".into()
+        }
         Outcome::CannotReturn { why: ReturnRefusal::Buried } => {
             "Your body is in the ground. There is no going back into it. Practise in the afterlife to live again.".into()
         }

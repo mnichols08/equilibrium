@@ -18,7 +18,7 @@ use crate::bloodline::Bloodline;
 use crate::event::Outcome;
 use crate::rest::{atrophy, atrophy_floor, rest_gained, with_rested_bonus, FULLY_RESTED};
 use crate::spirit::{ectoplasm_per_draw, inheritance, SpiritTier};
-use crate::types::{Attribute, Passing, Resource, SkillKind, Standing};
+use crate::types::{Attribute, Cause, Passing, Resource, SkillKind, Standing};
 
 eq_ids::define_id!(
     /// Identifies a character within one [`Game`](crate::Game).
@@ -34,6 +34,9 @@ crate::wire::as_number!(CharacterId);
 pub struct Death {
     /// Where the body lies.
     pub body: PlaceId,
+    /// What killed them. While it stands over the body there is no
+    /// getting back into it.
+    pub by: Cause,
     /// How the spirit stands to the body.
     pub passing: Passing,
     /// The earliest the spirit may return.

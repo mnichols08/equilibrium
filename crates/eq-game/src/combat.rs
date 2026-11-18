@@ -42,6 +42,8 @@ pub enum ReturnRefusal {
     Risen,
     /// The body has been buried.
     Buried,
+    /// Whoever, or whatever, did the killing still stands over the body.
+    KillerNear,
     /// There is no giving up and starting again: the way back to the
     /// living is through the afterlife, memory by memory.
     Unredeemed,
