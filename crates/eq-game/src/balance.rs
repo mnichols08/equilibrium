@@ -66,6 +66,34 @@ impl Mood {
     }
 }
 
+impl Mood {
+    /// Whether the creatures that live in the wild can live at all.
+    /// In a parched world they die where they are and none come back.
+    pub const fn sustains_animals(self) -> bool {
+        !matches!(self, Self::Parched)
+    }
+
+    /// How hard creatures strike, as a percentage of their usual
+    /// strength. A roused world rouses what lives in it.
+    pub const fn ferocity_percent(self) -> u32 {
+        match self {
+            Self::Parched | Self::Dry | Self::Even => 100,
+            Self::Restless => 125,
+            Self::Raging => 150,
+        }
+    }
+
+    /// The health each storm takes from anyone caught without shelter.
+    /// A storm batters; it does not kill.
+    pub const fn storm_harm(self) -> u32 {
+        match self {
+            Self::Parched | Self::Dry | Self::Even => 0,
+            Self::Restless => 5,
+            Self::Raging => 15,
+        }
+    }
+}
+
 /// How far the world leans: below zero toward stillness, above toward
 /// fury.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -134,6 +162,9 @@ mod tests {
 
         assert_eq!(balance.tip(160), Some((Mood::Parched, Mood::Raging)));
         assert!(Mood::Raging.storm_percent() > Mood::Restless.storm_percent());
+        assert!(Mood::Raging.storm_harm() > Mood::Restless.storm_harm() && Mood::Even.storm_harm() == 0);
+        assert_eq!((Mood::Even.ferocity_percent(), Mood::Raging.ferocity_percent()), (100, 150));
+        assert!(!Mood::Parched.sustains_animals() && Mood::Dry.sustains_animals() && Mood::Raging.sustains_animals());
         assert_eq!(Mood::Raging.growth_percent(), 100);
     }
 

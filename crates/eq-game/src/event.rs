@@ -191,6 +191,13 @@ pub enum Outcome {
         /// What it was.
         being: Being,
     },
+    /// A storm caught them without shelter.
+    Battered {
+        /// The health it took.
+        damage: u32,
+        /// The health they have left.
+        health: u32,
+    },
     /// A creature struck them.
     Mauled {
         /// What struck them.

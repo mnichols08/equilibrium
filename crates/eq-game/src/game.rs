@@ -413,8 +413,39 @@ impl Game {
         let storm = mood.storm_percent() > 0 && now.get().is_multiple_of(content::STORM_EVERY.as_ticks());
         if storm {
             events.push(Event::Storm);
+            self.batter(mood.storm_harm(), events);
+        }
+        if !mood.sustains_animals() {
+            self.starve_animals(now, events);
         }
         Weather { growth_percent: mood.growth_percent(), storm_percent: if storm { mood.storm_percent() } else { 0 } }
+    }
+
+    /// A storm takes `harm` health from everyone living who is caught
+    /// outside a haven and their own house. It never takes the last of it.
+    fn batter(&mut self, harm: u32, events: &mut Vec<Event>) {
+        for index in 0..self.characters.len() {
+            let character = &self.characters[index];
+            let sheltered = character.is_spirit()
+                || self.is_sheltered(character)
+                || self.map.place(character.place()).is_none_or(|place| place.safety == Safety::Haven);
+            let damage = harm.min(character.health().saturating_sub(1));
+            if sheltered || damage == 0 {
+                continue;
+            }
+            let health = self.characters[index].hurt(damage);
+            events.push(Event::Character { who: id_at(index), outcome: Outcome::Battered { damage, health } });
+        }
+    }
+
+    /// In a parched world the creatures of the wild die where they are.
+    /// Their lairs stay empty until the world can keep them again.
+    fn starve_animals(&mut self, now: Tick, events: &mut Vec<Event>) {
+        while let Some(slot) = self.creatures.iter().position(|creature| creature.being.kind == CreatureKind::Lurker) {
+            let (place, being) = (self.creatures[slot].place, self.creatures[slot].being);
+            events.push(Event::CreatureGone { place, being });
+            self.remove_creature(slot, now);
+        }
     }
 
     /// The land a character belongs to: the one their lives begin in.
@@ -1485,7 +1516,9 @@ impl Game {
             let blow = Blow {
                 roll,
                 vigor: creature.vigor,
-                fighting: 0,
+                // A roused world rouses what lives in it: the extra is
+                // counted the way skill at arms is, as a share of the blow.
+                fighting: (self.balance.mood().ferocity_percent() - 100) * content::FIGHTING_PER_PERCENT_DAMAGE as u32,
                 taint: 0,
                 resilience: struck.attribute(Attribute::Resilience).level(),
             };
@@ -1543,8 +1576,13 @@ impl Game {
             events.push(Event::CreatureGone { place, being });
             self.remove_creature(slot, now);
         }
-        let due: Vec<PlaceId> = self.empty_lairs.iter().filter(|(at, _)| *at <= now).map(|&(_, place)| place).collect();
-        self.empty_lairs.retain(|(at, _)| *at > now);
+        // Nothing comes back to a lair in a world that cannot keep it;
+        // what bars a pass is stone, and comes back regardless.
+        let alive = self.balance.mood().sustains_animals();
+        let lair = |place: PlaceId| self.map.place(place).and_then(|data| data.lair).unwrap_or(CreatureKind::Lurker);
+        let returns = |&(at, place): &(Tick, PlaceId)| at <= now && (alive || lair(place) != CreatureKind::Lurker);
+        let due: Vec<PlaceId> = self.empty_lairs.iter().filter(|entry| returns(entry)).map(|&(_, place)| place).collect();
+        self.empty_lairs.retain(|entry| !returns(entry));
         for place in due {
             let id = self.new_creature_id();
             let kind = self.map.place(place).and_then(|data| data.lair).unwrap_or(CreatureKind::Lurker);
@@ -3904,6 +3942,64 @@ mod tests {
         let after = ticks(&mut game, from, from + BALANCE_EVERY.as_ticks() * 20);
         assert_eq!(game.balance().lean(), 0);
         assert!(!after.contains(&Event::Storm));
+    }
+
+    #[test]
+    fn a_roused_world_batters_whoever_is_caught_out_and_rouses_its_creatures() {
+        let mut game = founders_met();
+        let (ashland, brynsland) = (game.character(ASH).unwrap().home(), game.character(BRYN).unwrap().home());
+        game.balance.tip(100);
+        // Ash and Bryn stand on the Meeting Ground; Cole is at home in the haven.
+        let at = STORM_EVERY.as_ticks();
+        let storm = ticks(&mut game, at, at);
+        let battered = |who| storm.iter().any(|event| matches!(event, Event::Character { who: hit, outcome: Outcome::Battered { .. } } if *hit == who));
+        assert!(battered(ASH) && battered(BRYN) && !battered(COLE));
+        assert!((85..=86).contains(&game.character(ASH).unwrap().health()), "fifteen, less a moment's mending");
+        assert_eq!(game.character(COLE).unwrap().health(), 100);
+        // However many storms, the last of someone's health is never the storm's.
+        game.characters[0].hurt(80);
+        ticks(&mut game, at * 2, at * 2);
+        let ash = game.character(ASH).unwrap();
+        assert!(!ash.is_spirit() && ash.health() <= 2, "{}", ash.health());
+
+        // A lurker in a raging world hits half as hard again.
+        let lair = |game: &Game| game.zone_at(brynsland).place_ids().find(|&place| game.map().place(place).unwrap().lair == Some(CreatureKind::Lurker)).unwrap();
+        let first_blow = |lean: i64| {
+            let mut game = founders_met();
+            game.balance.tip(lean);
+            let den = lair(&game);
+            set_down(&mut game, COLE, den);
+            let blows = ticks(&mut game, 1, 30);
+            blows.iter().find_map(|event| match event {
+                Event::Character { who: COLE, outcome: Outcome::Mauled { damage, .. } } => Some(*damage),
+                _ => None,
+            })
+        };
+        let (even, raging) = (first_blow(0).unwrap(), first_blow(100).unwrap());
+        assert!(raging * 10 >= even * 14, "even {even}, raging {raging}");
+        let _ = ashland;
+    }
+
+    #[test]
+    fn a_parched_world_cannot_keep_its_creatures_and_stone_does_not_care() {
+        let mut game = founders_met();
+        let kinds = |game: &Game| {
+            let count = |kind| game.creatures.iter().filter(|creature| creature.being.kind == kind).count();
+            (count(CreatureKind::Lurker), count(CreatureKind::Sentinel))
+        };
+        assert_eq!(kinds(&game), (3, 2), "a lurker in the grotto and one in each land; a sentinel in each pass");
+        game.balance.tip(-100);
+        let died = ticks(&mut game, 1, 1);
+        assert_eq!(kinds(&game), (0, 2));
+        assert_eq!(died.iter().filter(|event| matches!(event, Event::CreatureGone { .. })).count(), 3);
+        // None come back while it lasts.
+        ticks(&mut game, 2, LURKER_RETURNS.as_ticks() * 2);
+        assert_eq!(kinds(&game).0, 0);
+        // When the world can keep them again, they do.
+        game.balance.tip(60);
+        let from = LURKER_RETURNS.as_ticks() * 2 + 1;
+        ticks(&mut game, from, from + UPKEEP_EVERY.as_ticks());
+        assert_eq!(kinds(&game), (3, 2));
     }
 
     #[test]
