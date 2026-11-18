@@ -258,6 +258,11 @@ pub enum Outcome {
         /// Why not.
         why: NameRefusal,
     },
+    /// A founder gave their bloodline its name.
+    BloodlineNamed {
+        /// The name.
+        name: String,
+    },
     /// A founder raised their land's house where they stand.
     HouseRaised,
     /// A founder's dealing with another land came to nothing.

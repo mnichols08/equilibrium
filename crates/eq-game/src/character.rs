@@ -11,9 +11,10 @@ use eq_world_graph::PlaceId;
 
 use crate::content::{
     AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES, HEALTH_ON_RETURN,
-    AFTERLIFE_LEVEL, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
+    AFTERLIFE_LEVEL, BLOODLINE_LEARNING_PERCENT, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
+use crate::bloodline::Bloodline;
 use crate::event::Outcome;
 use crate::rest::{atrophy, atrophy_floor, rest_gained, with_rested_bonus, FULLY_RESTED};
 use crate::spirit::{ectoplasm_per_draw, inheritance, SpiritTier};
@@ -93,6 +94,8 @@ pub struct Character {
     /// lives begins.
     pub(crate) home: PlaceId,
     pub(crate) place: PlaceId,
+    /// The bloodline they were born into. It outlasts every life.
+    pub(crate) bloodline: Bloodline,
     pub(crate) busy_until: Tick,
     skills: [Proficiency; SkillKind::ALL.len()],
     attributes: [Proficiency; Attribute::ALL.len()],
@@ -135,6 +138,9 @@ pub(crate) struct Rebirth {
     /// Whether ectoplasm may be spent on a better inheritance. If not,
     /// it is lost.
     pub spend_ectoplasm: bool,
+    /// The bloodline of the land they arise in. Only someone who has
+    /// never lived takes it: blood, once had, is kept.
+    pub bloodline: Bloodline,
 }
 
 /// The attributes that waste when the body lies too long.
@@ -146,6 +152,7 @@ impl Character {
             name: name.into(),
             home: place,
             place,
+            bloodline: Bloodline::default(),
             busy_until: Tick::ZERO,
             skills: [Proficiency::new(); SkillKind::ALL.len()],
             attributes: [Proficiency::new(); Attribute::ALL.len()],
@@ -388,6 +395,11 @@ impl Character {
         }
     }
 
+    /// The bloodline they were born into.
+    pub const fn bloodline(&self) -> Bloodline {
+        self.bloodline
+    }
+
     /// Whether the character is new to the world: in their first life,
     /// with no skill yet at the level a spirit must reach to live again.
     pub fn is_newcomer(&self) -> bool {
@@ -486,6 +498,9 @@ impl Character {
         self.busy_until = now;
         // The unborn have had no life yet: this is their first.
         self.life += u32::from(!unborn);
+        if unborn {
+            self.bloodline = rebirth.bloodline;
+        }
         self.health.set(MAX_HEALTH);
         self.rested.set(i64::from(FULLY_RESTED));
         let favoured = rebirth.favoured.map(Attribute::index);
@@ -586,6 +601,8 @@ impl Character {
         let xp = stepped_bonus(units * ATTRIBUTE_XP_PER_UNIT, resource.tier(), TIERS_PER_WHOLE);
         let xp = with_rested_bonus(xp, rested);
         for &attribute in resource.attributes() {
+            // Blood tells: what the bloodline leans toward comes easier.
+            let xp = if self.bloodline.leans_to(attribute) { xp * BLOODLINE_LEARNING_PERCENT / 100 } else { xp };
             let progress = &mut self.attributes[attribute.index()];
             if progress.practice(xp, &ATTRIBUTE_RULES).levels_gained > 0 {
                 outcomes.push(Outcome::AttributeRose { attribute, level: progress.level() });
@@ -611,7 +628,7 @@ mod tests {
     }
 
     fn rebirth(favoured: Option<Attribute>) -> Rebirth {
-        Rebirth { base: 15, favoured, spend_ectoplasm: true }
+        Rebirth { base: 15, favoured, spend_ectoplasm: true, bloodline: Bloodline::default() }
     }
 
     #[test]
@@ -647,7 +664,7 @@ mod tests {
             ash.draw(&mut outcomes);
         }
         assert_eq!(ash.ectoplasm(), 60);
-        ash.be_reborn(CAMP, Tick::ZERO, Rebirth { base: 5, favoured: None, spend_ectoplasm: false });
+        ash.be_reborn(CAMP, Tick::ZERO, Rebirth { base: 5, favoured: None, spend_ectoplasm: false, bloodline: Bloodline::default() });
         assert_eq!((ash.kept(), ash.ectoplasm()), (5, 0));
         assert_eq!(ash.spirit_tier(), crate::spirit::SpiritTier::LostShade, "the tier counts what was ever drawn: 60");
     }

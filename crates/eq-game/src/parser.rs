@@ -107,11 +107,12 @@ pub fn parse(line: &str) -> Input {
             Some(name) => Input::Name(name.into()),
             None => Input::Unknown("Name whom? Try \"name bryn\".".into()),
         },
-        "call" | "house" | "invite" | "ally" | "war" | "truce" if given.is_empty() => {
+        "call" | "house" | "bloodline" | "invite" | "ally" | "war" | "truce" if given.is_empty() => {
             Input::Unknown(alloc::format!("{verb} what? Give a name: \"{verb} Saltmarch\"."))
         }
         "call" => Input::Do(Action::NameLand(given.into())),
         "house" => Input::Do(Action::NameHouse(given.into())),
+        "bloodline" => Input::Do(Action::NameBloodline(given.into())),
         "invite" => Input::Do(Action::Invite(given.into())),
         "ally" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::Ally }),
         "war" => Input::Do(Action::Deal { with: given.into(), dealing: Dealing::War }),

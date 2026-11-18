@@ -272,6 +272,15 @@ pub const REBIRTH_CARRYOVER_PERCENT: u32 = 0;
 /// before it lives again.
 pub const AFTERLIFE_LEVEL: u32 = 10;
 
+/// How much faster those born to a bloodline learn the attributes it
+/// leans toward, as a percentage of the usual pace.
+pub const BLOODLINE_LEARNING_PERCENT: u64 = 125;
+
+/// The share of a deposit's strain lifted by a rite in which two
+/// bloodlines join, as a percentage. One bloodline alone lifts
+/// [`RITE_MENDS_PERCENT`].
+pub const MIXED_RITE_MENDS_PERCENT: u32 = 100;
+
 /// The least a bounty may pay, in units of whatever it pays in.
 pub const LEAST_BOUNTY: u64 = 10;
 

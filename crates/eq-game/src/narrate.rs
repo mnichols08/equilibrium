@@ -43,6 +43,7 @@ Commands:
   name <name>          at camp, speak a forgotten spirit's name to redeem it
   call <name>          as a founder, name your land (for good)
   house <name>         as a founder, name your house (for good)
+  bloodline <name>     as a founder, name your bloodline (for good)
   raise                as a founder, raise your house where you stand
                        (40 driftwood, 20 ore): your land's people cannot
                        be struck or robbed under its roof
@@ -176,6 +177,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         ),
         Outcome::LandNamed { name } => format!("You name this land {name}. It will carry that name for good."),
         Outcome::HouseNamed { name } => format!("You name your house {name}. Those you invite will carry it."),
+        Outcome::BloodlineNamed { name } => format!("You name your bloodline {name}. Everyone of that blood, in every land, carries the name from now on."),
         Outcome::Invited { name } => format!("You send word for {name}. When they come into the world, it will be here."),
         Outcome::Moved { to, .. } => format!("You make your way to {}.", place_name(game, *to)),
         Outcome::NoSuchExit { label } => format!("You can't go \"{label}\" from here."),
@@ -650,6 +652,13 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
         0 => String::new(),
         kept => format!("  (began with {kept}% of the last)"),
     };
+    let [first, second] = character.bloodline().leanings();
+    lines.push(format!(
+        "Bloodline    {} (learns {} and {} faster)",
+        game.bloodline_name(character.bloodline()),
+        first.name(),
+        second.name(),
+    ));
     lines.push(format!("Life         {:>3}{began}", character.life()));
     lines.push(format!("Ectoplasm    {:>3}  ({})", character.ectoplasm(), character.spirit_tier().name()));
     lines.push(format!("Health       {:>3}", character.health()));
