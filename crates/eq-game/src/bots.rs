@@ -327,6 +327,11 @@ impl Bots {
                 self.bots[index].free_at = death.ready_at;
                 return Ok(());
             }
+            // No use trying while what did the killing stands over the body.
+            if world.can_return(who, now).is_err() {
+                self.bots[index].free_at = now + IDLE;
+                return Ok(());
+            }
             Some(Command::return_to_body(who))
         } else {
             // Water is nothing to a spirit, so every exit will do.
@@ -754,19 +759,23 @@ mod tests {
     }
 
     #[test]
-    fn a_dead_bot_walks_back_to_its_body_and_returns_to_it() {
+    fn a_dead_bot_does_not_climb_back_into_its_body_under_its_killers_feet() {
         let mut session = session(&["Ash", "Bryn"]);
         let ledge = DEPOSIT_ROUTES[0];
         let mut bots = Bots::new([
             (ASH, Plan::camp(Policy::Careful, ledge).as_warden()),
             (BRYN, Plan::camp(Policy::Greedy, ledge)),
         ]);
-        // Long enough for one death and the walk back; a second death soon
-        // after would hold the spirit too long to reach the body.
-        let events = bots.run(&mut session, Tick::new(1_500)).unwrap();
-        assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Returned })));
-        assert!(!happened(&events, |event| matches!(event, Event::Character { outcome: Outcome::Reborn { .. }, .. })));
-        assert_eq!(session.world().character(BRYN).unwrap().life(), 1);
+        // The warden camps on the ledge, so Bryn's spirit walks back and
+        // finds it standing there. It waits, the body rises, and the only
+        // way left is the afterlife.
+        let events = bots.run(&mut session, Tick::new(6_000)).unwrap();
+        assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { .. } })));
+        assert!(!happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Returned })));
+        assert!(!happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::CannotReturn { .. } })), "it does not even try");
+        assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::BodyRose })));
+        let died = events.iter().filter(|stamped| matches!(stamped.value, Event::Character { who: BRYN, outcome: Outcome::Died { .. } })).count();
+        assert_eq!(died, 1, "killed once, not over and over");
     }
 
     #[test]

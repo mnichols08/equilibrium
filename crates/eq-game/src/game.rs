@@ -1311,6 +1311,38 @@ impl Game {
         events.push(Event::Character { who: on, outcome: Outcome::Hunted { reward } });
     }
 
+    /// Whether `who`, a spirit, may go back into its body at `now`.
+    ///
+    /// # Errors
+    /// Returns why not. Someone with no body to go back to is told so.
+    pub fn can_return(&self, who: CharacterId, now: Tick) -> Result<(), ReturnRefusal> {
+        let character = self.character(who).ok_or(ReturnRefusal::NoBody)?;
+        let death = character.death().ok_or(ReturnRefusal::NoBody)?;
+        if character.place() != death.body {
+            Err(ReturnRefusal::NotAtBody)
+        } else if death.buried {
+            Err(ReturnRefusal::Buried)
+        } else if death.risen {
+            Err(ReturnRefusal::Risen)
+        } else if now < death.ready_at {
+            Err(ReturnRefusal::TooSoon(death.ready_at))
+        } else if self.killer_stands_over(death) {
+            Err(ReturnRefusal::KillerNear)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Whether what killed someone is still where their body lies: the
+    /// one who did it, alive, or a creature of the kind that did.
+    fn killer_stands_over(&self, death: &Death) -> bool {
+        match death.by {
+            Cause::Character(killer) => self.character(killer).is_some_and(|killer| !killer.is_spirit() && killer.place() == death.body),
+            Cause::Creature(being) => self.creatures_at(death.body).any(|creature| creature.being.kind == being.kind),
+            Cause::LongSleep => false,
+        }
+    }
+
     /// Whether there is a price on `who`'s head at any board.
     pub fn is_hunted(&self, who: CharacterId) -> bool {
         self.zones.iter().any(|zone| zone.board().bounties().iter().any(|bounty| bounty.on == who))
@@ -1419,20 +1451,13 @@ impl Game {
 
     /// Puts a spirit back in its body, if it is there and allowed to yet.
     fn return_to_body(&mut self, index: usize, now: Tick) -> Outcome {
+        if self.characters[index].death().is_none() {
+            return Outcome::NotDead;
+        }
+        if let Err(why) = self.can_return(id_at(index), now) {
+            return Outcome::CannotReturn { why };
+        }
         let character = &mut self.characters[index];
-        let Some(death) = character.death().copied() else { return Outcome::NotDead };
-        if character.place() != death.body {
-            return Outcome::CannotReturn { why: ReturnRefusal::NotAtBody };
-        }
-        if death.buried {
-            return Outcome::CannotReturn { why: ReturnRefusal::Buried };
-        }
-        if death.risen {
-            return Outcome::CannotReturn { why: ReturnRefusal::Risen };
-        }
-        if now < death.ready_at {
-            return Outcome::CannotReturn { why: ReturnRefusal::TooSoon(death.ready_at) };
-        }
         character.return_to_body();
         self.dead.retain(|&who| who != id_at(index));
         Outcome::Returned
@@ -1568,7 +1593,7 @@ impl Game {
 
         let character = &mut self.characters[index];
         let innocent = character.is_newcomer() && character.standing() == Standing::Clean;
-        let (dropped, cleansed) = character.die(Death { body, passing, ready_at, lost_at, risen: false, buried: false, disturbed: false });
+        let (dropped, cleansed) = character.die(Death { body, by, passing, ready_at, lost_at, risen: false, buried: false, disturbed: false });
         self.relics.extend(Relic::new(who, body, dropped, now));
         // Only a tethered spirit stays by its body.
         let zone = self.zones.iter().position(|zone| zone.contains(body)).unwrap_or(0);
@@ -2207,6 +2232,10 @@ mod tests {
 
         game.apply(&Command::go(BRYN, "north"), Tick::new(now), &mut events);
         let arrived = now + TRAVEL_TIME.as_ticks();
+        // Not while Ash, who did it, still stands over the body.
+        game.apply(&Command::return_to_body(BRYN), Tick::new(arrived), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::KillerNear }));
+        game.apply(&Command::go(ASH, "north"), Tick::new(arrived), &mut events);
         game.apply(&Command::return_to_body(BRYN), Tick::new(arrived), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::Returned));
 
@@ -2236,7 +2265,12 @@ mod tests {
         let mut events = Vec::new();
         game.apply(&Command::return_to_body(BRYN), Tick::new(now), &mut events);
         assert!(matches!(outcome(&events), Some(Outcome::CannotReturn { why: ReturnRefusal::TooSoon(_) })));
-        game.apply(&Command::return_to_body(BRYN), Tick::new(now + TETHERED_WAIT.as_ticks()), &mut events);
+        let free = now + TETHERED_WAIT.as_ticks();
+        game.apply(&Command::return_to_body(BRYN), Tick::new(free), &mut events);
+        assert_eq!(outcome(&events), Some(&Outcome::CannotReturn { why: ReturnRefusal::KillerNear }));
+        // A friend standing by keeps the spirit close; it is the killer leaving that opens the way.
+        game.apply(&Command::go(ASH, "north"), Tick::new(free), &mut events);
+        game.apply(&Command::return_to_body(BRYN), Tick::new(free), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::Returned));
     }
 
@@ -2287,9 +2321,13 @@ mod tests {
         assert_eq!(game.character(BRYN).unwrap().degradation(), 1);
         let mut events = Vec::new();
         game.apply(&Command::go(BRYN, "north"), Tick::new(now), &mut events);
+        // Ash walks off to the High Shelf, which lets Bryn back in, and comes down again.
+        game.apply(&Command::go(ASH, "north"), Tick::new(now), &mut events);
         let back = now + TRAVEL_TIME.as_ticks();
         game.apply(&Command::return_to_body(BRYN), Tick::new(back), &mut events);
         assert_eq!(outcome(&events), Some(&Outcome::Returned));
+        game.apply(&Command::go(ASH, "south"), Tick::new(back), &mut events);
+        let back = back + TRAVEL_TIME.as_ticks();
 
         // The cave is contested ground: Ash needs no mark to strike there.
         for (tick, exit) in [(back, "south"), (back + 30, "east"), (back + 60, "cave")] {
@@ -2572,7 +2610,7 @@ mod tests {
         // It only ever asks so much.
         let mut old = Character::new("Old", CAMP);
         for _ in 0..40 {
-            old.die(Death { body: CAMP, passing: Passing::Severed, ready_at: Tick::ZERO, lost_at: Tick::ZERO, risen: false, buried: false, disturbed: false });
+            old.die(Death { body: CAMP, by: Cause::LongSleep, passing: Passing::Severed, ready_at: Tick::ZERO, lost_at: Tick::ZERO, risen: false, buried: false, disturbed: false });
             old.be_reborn(CAMP, Tick::ZERO, Rebirth { base: 0, favoured: None, spend_ectoplasm: false, bloodline: Bloodline::Tidal });
         }
         assert_eq!(old.afterlife_goal(), crate::content::MOST_AFTERLIFE_LEVEL);
