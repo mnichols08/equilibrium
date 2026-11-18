@@ -274,6 +274,7 @@ impl Bots {
             Sleep::NotNow => beast_duty(world, bot)
                 .or_else(|| founder_duty(world, bot))
                 .or_else(|| enemy_duty(world, bot))
+                .or_else(|| board_duty(world, bot))
                 .or_else(|| warden_duty(world, bot))
                 .or_else(|| thieving(world, bot, now))
                 .or_else(|| rite_duty(world, bot, now))
@@ -470,9 +471,13 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
     }
     let me = game.character(bot.who)?;
     let fit_to_fight = me.health() >= HEALTH_TO_FIGHT;
+    // The marked, and anyone with a price on their head who is not so
+    // new that taking it would mark the taker.
+    let fair_game = |other: CharacterId, character: &Character| {
+        character.standing() == Standing::Marked || (game.is_hunted(other) && !character.is_newcomer())
+    };
     let marked = game.occupants(me.place()).iter().copied().find(|&other| {
-        game.character(other).is_some_and(|character| character.standing() == Standing::Marked)
-            && game.can_attack(bot.who, other).is_ok()
+        game.character(other).is_some_and(|character| fair_game(other, character)) && game.can_attack(bot.who, other).is_ok()
     });
     if let (true, Some(target)) = (fit_to_fight, marked) {
         return Some(Command::attack(bot.who, target));
@@ -556,6 +561,35 @@ fn founder_duty(game: &Game, bot: &Bot) -> Option<Command> {
     let site = game.map().place(me.place()).is_some_and(|data| data.safety != Safety::Haven && data.lair.is_none());
     let afford = game.house_cost().iter().all(|(resource, amount)| me.carried(*resource) >= *amount);
     (land.hall().is_none() && land.contains(me.place()) && site && afford).then(|| Command::raise(bot.who))
+}
+
+/// What a bot does at a board: collect whatever is held for it, and,
+/// if it is careful, put the least price it can on the head of anyone
+/// the land has marked who has no price on them yet.
+fn board_duty(game: &Game, bot: &Bot) -> Option<Command> {
+    let me = game.character(bot.who)?;
+    let land = game.zone_at(me.place());
+    if me.place() != land.anchor() {
+        return None;
+    }
+    if land.board().owed_to(bot.who).iter().any(|&amount| amount > 0) {
+        return Some(Command::collect(bot.who));
+    }
+    if bot.plan.policy != Policy::Careful {
+        return None;
+    }
+    let least = crate::content::LEAST_BOUNTY;
+    let resource = crate::Resource::ALL.into_iter().find(|&resource| me.carried(resource) >= least)?;
+    let wanted = |(id, other): &(CharacterId, &Character)| {
+        *id != bot.who
+            && other.standing() == Standing::Marked
+            && !other.is_spirit()
+            && !other.is_newcomer()
+            && land.contains(other.place())
+            && !game.is_hunted(*id)
+    };
+    let (on, _) = game.characters().find(wanted)?;
+    Some(Command::bounty(bot.who, on, crate::Lot { resource, amount: least }))
 }
 
 /// A bot whose land is at war goes for any of the enemy it finds

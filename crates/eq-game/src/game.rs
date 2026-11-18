@@ -485,6 +485,10 @@ impl Game {
         if storm {
             events.push(Event::Storm);
             self.batter(mood.storm_harm(), events);
+            // The land itself is the worse for it, as it is for a death.
+            for zone in &mut self.zones {
+                zone.mourn(mood.storm_wear());
+            }
         }
         if !mood.sustains_animals() {
             self.starve_animals(now, events);

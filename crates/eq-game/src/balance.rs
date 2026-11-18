@@ -83,6 +83,19 @@ impl Mood {
         }
     }
 
+    /// What each storm costs every land, in the same coin as a death:
+    /// vitality that only time gives back. A land wins back ten in the
+    /// time between two storms, so a restless world only holds a land a
+    /// little under its best, and a raging one grinds it down over the
+    /// best part of a day.
+    pub const fn storm_wear(self) -> i64 {
+        match self {
+            Self::Parched | Self::Dry | Self::Even => 0,
+            Self::Restless => 5,
+            Self::Raging => 12,
+        }
+    }
+
     /// The health each storm takes from anyone caught without shelter.
     /// A storm batters; it does not kill.
     pub const fn storm_harm(self) -> u32 {
@@ -163,6 +176,7 @@ mod tests {
         assert_eq!(balance.tip(160), Some((Mood::Parched, Mood::Raging)));
         assert!(Mood::Raging.storm_percent() > Mood::Restless.storm_percent());
         assert!(Mood::Raging.storm_harm() > Mood::Restless.storm_harm() && Mood::Even.storm_harm() == 0);
+        assert!(Mood::Raging.storm_wear() > Mood::Restless.storm_wear() && Mood::Dry.storm_wear() == 0);
         assert_eq!((Mood::Even.ferocity_percent(), Mood::Raging.ferocity_percent()), (100, 150));
         assert!(!Mood::Parched.sustains_animals() && Mood::Dry.sustains_animals() && Mood::Raging.sustains_animals());
         assert_eq!(Mood::Raging.growth_percent(), 100);
