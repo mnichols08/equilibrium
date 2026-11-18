@@ -98,6 +98,11 @@ impl Pacts {
         self.sealed.iter().find(|(first, second, _)| (*first, *second) == (low, high)).map(|(_, _, pact)| *pact)
     }
 
+    /// Whether `from` has made `to` this offer and still waits on it.
+    pub fn has_offered(&self, from: usize, to: usize, dealing: Dealing) -> bool {
+        self.offers.contains(&(from, to, dealing))
+    }
+
     /// How many pairs of lands have `pact`.
     pub fn count(&self, pact: Pact) -> usize {
         self.sealed.iter().filter(|(_, _, kind)| *kind == pact).count()
