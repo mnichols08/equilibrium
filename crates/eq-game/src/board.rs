@@ -67,6 +67,12 @@ pub enum TradeRefusal {
     NothingOwed,
     /// Nobody puts a price on their own head.
     OnYourself,
+    /// They have asked for an escort already.
+    AlreadyHiring,
+    /// That person has not asked for an escort, or has one.
+    NotHiring,
+    /// No land goes by that name. (The Meeting Ground is "ground".)
+    NoSuchPlace,
     /// A bounty has to pay at least this much, and more on a newcomer.
     TooLittle(u64),
 }

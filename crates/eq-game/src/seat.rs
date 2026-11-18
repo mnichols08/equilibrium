@@ -61,6 +61,10 @@ pub fn interpret(game: &Game, who: CharacterId, now: Tick, line: &str) -> Reques
             Some(target) => Request::Act(Action::Tend(target)),
             None => nobody_here(&name),
         },
+        Input::Guard(name) => match someone_here_called(game, who, &name) {
+            Some(client) => Request::Act(Action::Guard(client)),
+            None => nobody_here(&name),
+        },
         Input::Board => say(narrate::board(game, who)),
         // A bounty can be on anyone in the world, here or not.
         Input::Bounty(name, reward) => match anyone_called(game, who, &name) {

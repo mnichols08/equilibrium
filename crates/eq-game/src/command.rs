@@ -84,6 +84,20 @@ pub enum Action {
         /// What it pays.
         reward: Lot,
     },
+    /// At the board, put up a reward for whoever sees you safely to a
+    /// place: a land, by its name or its founder's, or "ground" for the
+    /// Meeting Ground.
+    Hire {
+        /// What it pays.
+        reward: Lot,
+        /// Where to.
+        to: String,
+    },
+    /// Take the escort job of someone standing with you.
+    Guard(CharacterId),
+    /// Give up on the escort you asked for. The reward goes back to the
+    /// board it was put up on, for you to collect.
+    Dismiss,
     /// At the board, pay a contract's price and take what it offers.
     Accept(ContractId),
     /// At the board, take down a contract of your own and have back
@@ -178,6 +192,21 @@ impl Command {
     /// `who`, a founder, names their house.
     pub fn name_house(who: CharacterId, name: &str) -> Self {
         Self { who, action: Action::NameHouse(name.into()) }
+    }
+
+    /// `who` puts up `reward` for an escort to the place called `to`.
+    pub fn hire(who: CharacterId, reward: Lot, to: &str) -> Self {
+        Self { who, action: Action::Hire { reward, to: to.into() } }
+    }
+
+    /// `who` takes `client`'s escort job.
+    pub const fn guard(who: CharacterId, client: CharacterId) -> Self {
+        Self { who, action: Action::Guard(client) }
+    }
+
+    /// `who` gives up on the escort they asked for.
+    pub const fn dismiss(who: CharacterId) -> Self {
+        Self { who, action: Action::Dismiss }
     }
 
     /// `who` puts `reward` on `on`'s head.

@@ -338,6 +338,43 @@ pub enum Outcome {
         /// Why not.
         why: TradeRefusal,
     },
+    /// They put up a reward for an escort.
+    Hiring {
+        /// What it pays.
+        reward: Lot,
+        /// Where they are going.
+        to: PlaceId,
+    },
+    /// They took someone's escort job.
+    Guarding {
+        /// Who they are seeing safely there.
+        client: CharacterId,
+        /// What it pays.
+        reward: Lot,
+        /// Where to.
+        to: PlaceId,
+    },
+    /// Someone took their escort job.
+    Guarded {
+        /// Who.
+        by: CharacterId,
+    },
+    /// The escort they asked for is over. Unpaid, the reward waits for
+    /// them at the board it was put up on.
+    EscortOver {
+        /// Whether the guard was paid: they arrived together.
+        paid: bool,
+    },
+    /// They saw their client safely there and were paid, or the job
+    /// came to nothing.
+    EscortDone {
+        /// Who they were guarding.
+        client: CharacterId,
+        /// What they were paid, if they were.
+        reward: Option<Lot>,
+    },
+    /// The one guarding them is dead. The job is open again.
+    GuardLost,
     /// They put a price on someone's head.
     BountyPosted {
         /// Whose head.
