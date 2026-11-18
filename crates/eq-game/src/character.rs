@@ -53,9 +53,10 @@ pub struct Death {
 
 impl Death {
     /// Whether the next life will remember this one, and so learn
-    /// again fast what it knew: the body was buried, or left in peace.
+    /// again fast what it knew: nobody else took what lay beside the
+    /// body, or dug up its grave.
     pub const fn is_remembered(&self) -> bool {
-        self.buried || !self.disturbed
+        !self.disturbed
     }
 }
 
@@ -389,6 +390,15 @@ impl Character {
     /// with no skill yet at the level a spirit must reach to live again.
     pub fn is_newcomer(&self) -> bool {
         self.life == 1 && self.skills.iter().all(|skill| skill.level() < NEWCOMER_BELOW_LEVEL)
+    }
+
+    /// Forgets how high everything once stood: each skill and
+    /// attribute is remembered only as it is now. This is what breaking
+    /// the tie to an old life costs, and it cannot be undone.
+    pub(crate) fn forget_the_old_life(&mut self) {
+        for known in self.skills.iter_mut().chain(self.attributes.iter_mut()) {
+            *known = known.reborn(100);
+        }
     }
 
     /// Notes that someone else took what lay beside the body.

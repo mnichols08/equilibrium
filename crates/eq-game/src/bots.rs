@@ -288,6 +288,7 @@ impl Bots {
             Sleep::NotNow => beast_duty(world, bot)
                 .or_else(|| founder_duty(world, bot))
                 .or_else(|| enemy_duty(world, bot))
+                .or_else(|| burial_duty(world, bot))
                 .or_else(|| escort_duty(world, bot))
                 .or_else(|| board_duty(world, bot))
                 .or_else(|| warden_duty(world, bot))
@@ -665,6 +666,29 @@ fn board_duty(game: &Game, bot: &Bot) -> Option<Command> {
     };
     let (on, _) = game.characters().find(wanted)?;
     Some(Command::bounty(bot.who, on, crate::Lot { resource, amount: least }))
+}
+
+/// A careful bot buries one of its own it finds lying dead: someone of
+/// its land, or of a land allied to it, who was not put down by its
+/// own land's people. In the ground nobody can go through what they
+/// dropped, so their next life will remember this one.
+fn burial_duty(game: &Game, bot: &Bot) -> Option<Command> {
+    use crate::pact::Pact;
+    let me = game.character(bot.who)?;
+    if bot.plan.policy != Policy::Careful {
+        return None;
+    }
+    let ours = |home: PlaceId| {
+        game.zone_at(home).contains(me.home()) || game.pact(home, me.home()) == Some(Pact::Alliance)
+    };
+    let our_own_doing = |by: crate::Cause| match by {
+        crate::Cause::Character(killer) => game.character(killer).is_some_and(|killer| ours(killer.home())),
+        crate::Cause::Creature(_) | crate::Cause::LongSleep => false,
+    };
+    let (friend, _) = game.bodies_at(me.place()).find(|(who, body)| {
+        *who != bot.who && ours(body.home()) && body.death().is_some_and(|death| !death.risen && !our_own_doing(death.by))
+    })?;
+    Some(Command::bury(bot.who, friend))
 }
 
 /// A bot whose land is at war goes for any of the enemy it finds

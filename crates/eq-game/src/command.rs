@@ -63,6 +63,10 @@ pub enum Action {
         /// What is asked of it.
         dealing: Dealing,
     },
+    /// Dig up a grave where you stand and take what was buried in it:
+    /// your own, if one of yours is here, or else the oldest. It breaks
+    /// the tie between that life and its owner's next.
+    Dig,
     /// Bury someone's body where it lies. Whatever they dropped goes
     /// into the ground with them, and their next life remembers this one.
     Bury(CharacterId),
@@ -215,6 +219,11 @@ impl Command {
     /// `who` puts `reward` on `on`'s head.
     pub const fn bounty(who: CharacterId, on: CharacterId, reward: Lot) -> Self {
         Self { who, action: Action::Bounty { on, reward } }
+    }
+
+    /// `who` digs up a grave where they stand.
+    pub const fn dig(who: CharacterId) -> Self {
+        Self { who, action: Action::Dig }
     }
 
     /// `who`, a founder, raises their land's house where they stand.

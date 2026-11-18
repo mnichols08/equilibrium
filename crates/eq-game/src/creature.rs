@@ -207,6 +207,20 @@ pub struct Relic {
     pub expires_at: Tick,
 }
 
+/// A grave: where someone was buried, with what they carried. It
+/// stays for good, and is the tie between the life that ended there
+/// and its owner's next one. Whoever digs it up has what is in it, and
+/// breaks that tie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Grave {
+    /// Who lies in it.
+    pub owner: CharacterId,
+    /// Where it is.
+    pub place: PlaceId,
+    /// How much of each resource was buried with them, in pack order.
+    pub contents: [u64; Resource::ALL.len()],
+}
+
 impl Relic {
     /// A relic of `contents` dropped at `now`, or `None` if there was
     /// nothing to drop.
