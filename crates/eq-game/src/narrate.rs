@@ -201,6 +201,9 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             died(game, &capitalise(&being_name(game, *being, viewer)), *place, *passing)
         }
         Outcome::CameToRiver => "You are on the bank of the River of Souls, where every soul enters the afterlife. Shades drift here to be fought (attack shade), and ways lead from the bank into the lands of the living, where a spirit can practise the work (gather). Nothing leads back.".into(),
+        Outcome::Battered { damage, health } => {
+            format!("The storm catches you in the open and takes {damage} from you. You have {health} health left. A haven, or your own roof, would have kept it off.")
+        }
         Outcome::Sparred { damage, left: 0 } => {
             format!("You strike the shade for {damage} and it comes apart like smoke. Another gathers where it stood.")
         }
@@ -721,10 +724,10 @@ fn pact_news(game: &Game, by: PlaceId, with: PlaceId, dealt: Dealt) -> String {
 /// What everyone is told when the world itself changes.
 const fn mood_changed(to: Mood) -> &'static str {
     match to {
-        Mood::Parched => "There has been too much peace. The springs have failed and the fields are waste. Nothing taken from the ground comes back now.",
+        Mood::Parched => "There has been too much peace. The springs have failed and the fields are waste. Nothing taken from the ground comes back now, and the creatures of the wild are dying where they lie.",
         Mood::Dry => "The world is going still. Water runs thin, and what is taken from the ground comes back slowly.",
         Mood::Even => "The world settles. Water runs as it should, and the weather is only weather.",
-        Mood::Restless => "The world is restless with war. The rivers are loud, the tide comes harder, and storms will take their share.",
+        Mood::Restless => "The world is restless with war. The rivers are loud, the tide comes harder, and storms will take their share from the ground and from anyone caught in the open. Whatever lives out there is quicker to anger.",
         Mood::Raging => "There has been too much war. The rivers are in flood, the mountains smoke, and the storms will leave little standing.",
     }
 }
