@@ -20,6 +20,10 @@ use crate::{Character, CharacterId, Command, Death, Event, Game, Outcome, Safety
 /// A warden with less health than this leaves fighting to others.
 const HEALTH_TO_FIGHT: u32 = 40;
 
+/// A bot with less health than this does not walk in on something
+/// that will go for it: it mends first.
+const HEALTH_TO_GO_IN: u32 = 95;
+
 /// How long a bot stands idle when there is nothing it wants to do.
 const IDLE: Duration = Duration::seconds(5);
 
@@ -71,6 +75,10 @@ pub enum Stance {
     Aloof,
 }
 
+/// What a traveller's bot puts up for an escort to the Meeting Ground,
+/// in whatever it carries enough of.
+const ESCORT_PAY: u64 = 40;
+
 /// The Vigor and Resilience at which a founder's bot will try the pass.
 const STRENGTH_TO_BREAK_OUT: u32 = 75;
 
@@ -112,23 +120,33 @@ pub struct Plan {
     /// How it deals with other lands, if it founds one. A bot with a
     /// stance also raises its land's house as soon as it can.
     pub stance: Option<Stance>,
+    /// Whether it means to get to the Meeting Ground and stay there:
+    /// by hiring a guard while it is weak, or alone once it is strong.
+    pub traveller: bool,
 }
 
 impl Plan {
     /// Walks the whole shoreline, gathering wherever `policy` allows.
     pub const fn roam(policy: Policy) -> Self {
-        Self { policy, approach: &[], circuit: CIRCUIT, warden: false, stance: None }
+        Self { policy, approach: &[], circuit: CIRCUIT, warden: false, stance: None, traveller: false }
     }
 
     /// Walks to one place and stays, gathering whenever `policy` allows.
     pub const fn camp(policy: Policy, approach: &'static [Leg]) -> Self {
-        Self { policy, approach, circuit: &[], warden: false, stance: None }
+        Self { policy, approach, circuit: &[], warden: false, stance: None, traveller: false }
     }
 
     /// A careful roamer who, as a founder, raises a house and deals
     /// with other lands as `stance` says.
     pub const fn founder(stance: Stance) -> Self {
         Self { stance: Some(stance), ..Self::roam(Policy::Careful) }
+    }
+
+    /// A careful roamer who means to reach the Meeting Ground and work
+    /// it: it hires a guard to see it through the pass, or goes alone
+    /// once it has the strength.
+    pub const fn traveller() -> Self {
+        Self { traveller: true, ..Self::roam(Policy::Careful) }
     }
 
     /// The same plan, but challenging any marked character it meets.
@@ -274,12 +292,17 @@ impl Bots {
             Sleep::NotNow => beast_duty(world, bot)
                 .or_else(|| founder_duty(world, bot))
                 .or_else(|| enemy_duty(world, bot))
+                .or_else(|| escort_duty(world, bot))
                 .or_else(|| board_duty(world, bot))
                 .or_else(|| warden_duty(world, bot))
                 .or_else(|| thieving(world, bot, now))
                 .or_else(|| rite_duty(world, bot, now))
                 .map(|command| (command, PAUSE))
-                .or_else(|| bot.plan.policy.wants_to_gather(world, who).then(|| (Command::gather(who), IDLE))),
+                // Nobody on the road with an escort stops to work.
+                .or_else(|| {
+                    let free = on_the_road(world, who).is_none();
+                    (free && bot.plan.policy.wants_to_gather(world, who)).then(|| (Command::gather(who), IDLE))
+                }),
         };
         let Some((command, pause)) = choice else {
             return self.walk(index, session, events, now);
@@ -386,9 +409,17 @@ impl Errand {
         if game.zones().first().is_some_and(|first| first.contains(here)) {
             return None;
         }
+        if let Some(errand) = escort_errand(game, bot.who, now) {
+            return Some(errand);
+        }
+        let ground = game.meeting_ground();
+        // A traveller who has got where it was going stays there.
+        if bot.plan.traveller && Some(here) == ground {
+            return Some(Self::Arrived { stays: true });
+        }
         // Its rounds are in the land it belongs to, wherever it is now.
         let land = game.zone_at(me.home());
-        let abroad = strong_enough(me) && business_abroad(game, bot).is_some();
+        let abroad = strong_enough(me) && (business_abroad(game, bot).is_some() || bot.plan.traveller);
         // Somewhere worth working that is nothing's lair.
         let worth = |place: PlaceId| game.map().place(place).is_some_and(|data| data.deposit.is_some() && data.lair.is_none());
         let rounds: Vec<PlaceId> = land.place_ids().filter(|&place| worth(place)).collect();
@@ -399,6 +430,8 @@ impl Errand {
         let goal = match game.meeting_ground() {
             // A founder with dealings to make, and the strength for the pass, goes out.
             Some(ground) if abroad => ground,
+            // A traveller with the price of a guard goes to the board to hire one.
+            _ if wants_to_hire(game, bot).is_some() => land.anchor(),
             _ if worn_out || rounds.is_empty() => land.anchor(),
             _ => rounds[turn % rounds.len()],
         };
@@ -411,7 +444,19 @@ impl Errand {
         let away = !land.contains(here) && strong_enough(me);
         let passable = |place: PlaceId| abroad || away || game.map().place(place).is_some_and(|data| data.lair.is_none());
         let safe = |exit: &eq_world_graph::Exit| exit.passage.is_open(now) && (exit.to == goal || passable(exit.to));
-        Some(game.map().first_step(here, goal, safe).map_or(Self::Blocked, |exit| Self::Go(exit.label.clone())))
+        Some(game.map().first_step(here, goal, safe).map_or(Self::Blocked, |exit| Self::step(game, me, exit)))
+    }
+
+    /// Takes `exit`, unless something that will go for the bot waits
+    /// beyond it and the bot is not whole enough to meet it: then it
+    /// stands where it is and mends first.
+    fn step(game: &Game, me: &Character, exit: &eq_world_graph::Exit) -> Self {
+        let barred = game.creatures_at(exit.to).any(|creature| creature.being.kind.is_aggressive());
+        if barred && me.health() < HEALTH_TO_GO_IN {
+            Self::Arrived { stays: true }
+        } else {
+            Self::Go(exit.label.clone())
+        }
     }
 }
 
@@ -446,7 +491,9 @@ fn sleep_duty(game: &Game, bot: &Bot, now: Tick) -> Sleep {
     }
     let in_haven = game.place_of(bot.who).is_some_and(|place| place.safety == Safety::Haven);
     let camps = bot.plan.circuit.is_empty() && bot.step >= bot.plan.approach.len();
-    if in_haven || camps {
+    // A traveller on the Meeting Ground has nowhere safer to go.
+    let settled = bot.plan.traveller && game.meeting_ground() == Some(me.place());
+    if in_haven || camps || settled {
         Sleep::Do(Command::rest(bot.who))
     } else {
         Sleep::HeadHome
@@ -569,6 +616,60 @@ fn founder_duty(game: &Game, bot: &Bot) -> Option<Command> {
     (land.hall().is_none() && land.contains(me.place()) && site && afford).then(|| Command::raise(bot.who))
 }
 
+/// The escort a character is on the road with, and whether they are
+/// its client (not its guard). Only an escort that has a guard counts:
+/// until someone takes the job, the client goes about its day.
+fn on_the_road(game: &Game, who: CharacterId) -> Option<(crate::escort::Escort, bool)> {
+    let job = game.escorts().iter().find(|job| job.guard.is_some() && (job.client == who || job.guard == Some(who)))?;
+    Some((*job, job.client == who))
+}
+
+/// Where someone on the road with an escort goes next. The guard leads
+/// and deals with whatever bars the way; the client keeps behind until
+/// the way is clear, then closes up; the guard does not go on without them.
+fn escort_errand(game: &Game, who: CharacterId, now: Tick) -> Option<Errand> {
+    let (job, is_client) = on_the_road(game, who)?;
+    let here = game.character(who)?.place();
+    let place_of = |other: CharacterId| game.character(other).map(Character::place);
+    let (client_at, guard_at) = (place_of(job.client)?, place_of(job.guard?)?);
+    let barred = |place: PlaceId| game.creatures_at(place).any(|creature| creature.being.kind.is_aggressive());
+    let goal = match is_client {
+        true if here == guard_at || barred(guard_at) => return Some(Errand::Arrived { stays: true }),
+        true => guard_at,
+        false if here == job.to || client_at != here => return Some(Errand::Arrived { stays: true }),
+        false => job.to,
+    };
+    let open = |exit: &eq_world_graph::Exit| exit.passage.is_open(now);
+    let me = game.character(who)?;
+    Some(game.map().first_step(here, goal, open).map_or(Errand::Blocked, |exit| Errand::step(game, me, exit)))
+}
+
+/// What a traveller would put up for an escort right now: it is not
+/// yet strong enough to go alone, has no job up, is not on the Meeting
+/// Ground already, and carries the price.
+fn wants_to_hire(game: &Game, bot: &Bot) -> Option<crate::Lot> {
+    let me = game.character(bot.who)?;
+    let ground = game.meeting_ground()?;
+    if !bot.plan.traveller || strong_enough(me) || me.place() == ground || game.escorts().iter().any(|job| job.client == bot.who) {
+        return None;
+    }
+    let resource = crate::Resource::ALL.into_iter().find(|&resource| me.carried(resource) >= ESCORT_PAY)?;
+    Some(crate::Lot { resource, amount: ESCORT_PAY })
+}
+
+/// A bot strong enough for the pass takes the escort job of anyone
+/// awake and standing with it who is still looking for a guard.
+fn escort_duty(game: &Game, bot: &Bot) -> Option<Command> {
+    let me = game.character(bot.who)?;
+    if !strong_enough(me) || game.escorts().iter().any(|job| job.guard == Some(bot.who) || job.client == bot.who) {
+        return None;
+    }
+    let waiting = |job: &&crate::escort::Escort| {
+        job.guard.is_none() && game.character(job.client).is_some_and(|client| client.place() == me.place() && !client.is_lying_down())
+    };
+    game.escorts().iter().find(waiting).map(|job| Command::guard(bot.who, job.client))
+}
+
 /// What a bot does at a board: collect whatever is held for it, and,
 /// if it is careful, put the least price it can on the head of anyone
 /// the land has marked who has no price on them yet.
@@ -580,6 +681,9 @@ fn board_duty(game: &Game, bot: &Bot) -> Option<Command> {
     }
     if land.board().owed_to(bot.who).iter().any(|&amount| amount > 0) {
         return Some(Command::collect(bot.who));
+    }
+    if let Some(reward) = wants_to_hire(game, bot) {
+        return Some(Command::hire(bot.who, reward, "ground"));
     }
     if bot.plan.policy != Policy::Careful {
         return None;
@@ -615,7 +719,9 @@ fn enemy_duty(game: &Game, bot: &Bot) -> Option<Command> {
 /// Any bot fit to fight goes for a creature that would go for it.
 fn beast_duty(game: &Game, bot: &Bot) -> Option<Command> {
     let me = game.character(bot.who)?;
-    if me.health() < HEALTH_TO_FIGHT {
+    // Someone strong enough for the pass sees a fight through: to stop
+    // striking halfway is only to stand there and be killed.
+    if me.health() < HEALTH_TO_FIGHT && !strong_enough(me) {
         return None;
     }
     let beast = game.creatures_at(me.place()).find(|creature| creature.being.kind.is_aggressive())?;
@@ -801,6 +907,37 @@ mod tests {
         let kinds = |who: CharacterId| crate::Resource::ALL.iter().filter(|&&resource| game.character(who).unwrap().carried(resource) > 0).count();
         assert!(kinds(ASH) >= 2, "a roamer brings back more than one thing");
         assert_eq!(kinds(BRYN), 1, "a camper brings back one");
+    }
+
+    #[test]
+    fn a_weak_traveller_hires_a_guard_who_sees_it_through_the_pass_and_is_paid() {
+        // One land. Ash founded it and is strong; Bryn, invited, is not.
+        let mut session = Session::new(Game::new_world(7, 1, &[]));
+        session.submit(Tick::ZERO, Command::join(ASH, "Ash")).unwrap();
+        session.submit(Tick::ZERO, Command::invite(ASH, "Bryn")).unwrap();
+        session.submit(Tick::ZERO, Command::join(BRYN, "Bryn")).unwrap();
+        let mut bots = Bots::new([(ASH, Plan::roam(Policy::Careful)), (BRYN, Plan::traveller())]);
+        // Thirty days: long enough for Ash to have the strength for the pass.
+        let events = bots.run(&mut session, Tick::new(30 * 86_400)).unwrap();
+
+        let outcomes = |who: CharacterId| {
+            events.iter().filter_map(move |stamped| match &stamped.value {
+                Event::Character { who: actor, outcome } if *actor == who => Some(outcome),
+                _ => None,
+            })
+        };
+        assert!(outcomes(BRYN).any(|outcome| matches!(outcome, Outcome::Hiring { .. })), "Bryn never asked for a guard");
+        assert!(outcomes(ASH).any(|outcome| matches!(outcome, Outcome::Guarding { client: BRYN, .. })), "Ash never took the job");
+        let paid = outcomes(ASH).find_map(|outcome| match outcome {
+            Outcome::EscortDone { client: BRYN, reward: Some(reward) } => Some(reward.amount),
+            _ => None,
+        });
+        assert_eq!(paid, Some(ESCORT_PAY));
+        // Bryn stays to work the Meeting Ground; Ash, with no business there, goes home.
+        let game = session.world();
+        assert_eq!(Some(game.character(BRYN).unwrap().place()), game.meeting_ground());
+        assert!(game.zone_at(game.character(ASH).unwrap().home()).contains(game.character(ASH).unwrap().place()));
+        assert_eq!(game.character(BRYN).unwrap().life(), 1, "the client came through alive");
     }
 
     #[test]

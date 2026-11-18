@@ -29,6 +29,8 @@ struct Report {
     storms: usize,
     /// How many bounties were posted, earned and collected.
     bounties: (usize, usize, usize),
+    /// How many escorts were wanted, taken and paid.
+    escorts: (usize, usize, usize),
     /// How many times a land fell into collapse.
     collapses: usize,
     /// How many times each character died, in the order they joined.
@@ -49,13 +51,21 @@ fn play(seed: u64, days: u64) -> Report {
         session.submit(Tick::ZERO, Command::join(who, name)).unwrap();
         // One greedy roamer among the friends, to give the land something
         // to mark. The strangers are wardens, and will hunt.
-        let plan = Plan::roam(if index == 3 { Policy::Greedy } else { Policy::Careful });
-        crew.push((who, if index >= FRIENDS.len() { plan.as_warden() } else { plan }));
+        // Three of the friends mean to see the Meeting Ground, and will pay
+        // for a guard through the pass.
+        let plan = match index {
+            3 => Plan::roam(Policy::Greedy),
+            friend if friend < FRIENDS.len() => Plan::traveller(),
+            _ => Plan::roam(Policy::Careful).as_warden(),
+        };
+        crew.push((who, plan));
     }
     let mut bots = Bots::new(crew);
     let (mut deaths, mut storms, mut news) = (0, 0, Vec::new());
     // Posted, earned, collected.
     let mut bounties = (0, 0, 0);
+    // Wanted, taken, paid.
+    let mut escorts = (0, 0, 0);
     let mut collapses = 0;
     let mut died = [0usize; 12];
     for day in 1..=days {
@@ -70,6 +80,20 @@ fn play(seed: u64, days: u64) -> Report {
                 Event::Pact { dealt, .. } => news.push(format!("hour {hour}: {dealt:?}")),
                 Event::MoodChanged { to, .. } => news.push(format!("hour {hour}: the world is {}", to.name())),
                 Event::EraChanged { to, .. } => news.push(format!("hour {hour}: {}", to.name())),
+                Event::Character { who, outcome: Outcome::Hiring { .. } } => {
+                    escorts.0 += 1;
+                    news.push(format!("hour {hour}: {} wants an escort", session.world().character(*who).unwrap().name()));
+                }
+                Event::Character { who, outcome: Outcome::Guarding { client, .. } } => {
+                    escorts.1 += 1;
+                    let name = |who: &CharacterId| session.world().character(*who).unwrap().name();
+                    news.push(format!("hour {hour}: {} guards {}", name(who), name(client)));
+                }
+                Event::Character { who, outcome: Outcome::EscortOver { paid } } => {
+                    escorts.2 += usize::from(*paid);
+                    let name = session.world().character(*who).unwrap().name();
+                    news.push(format!("hour {hour}: {name}'s escort is over, {}", if *paid { "paid" } else { "unpaid" }));
+                }
                 Event::Character { outcome: Outcome::BountyPosted { .. }, .. } => bounties.0 += 1,
                 Event::Character { outcome: Outcome::BountyEarned { .. }, .. } => bounties.1 += 1,
                 Event::Character { outcome: Outcome::Collected { .. }, .. } => bounties.2 += 1,
@@ -86,7 +110,7 @@ fn play(seed: u64, days: u64) -> Report {
             news.push(format!("day {day}: vitality {vitality:?}, deaths so far {deaths}"));
         }
     }
-    Report { game: session.world().clone(), deaths, storms, bounties, collapses, died, news }
+    Report { game: session.world().clone(), deaths, storms, bounties, escorts, collapses, died, news }
 }
 
 fn people_of(game: &Game, founder: CharacterId) -> usize {
@@ -101,6 +125,7 @@ fn four_founders_of_different_temper_make_a_world() {
     println!("{}", report.news.join("\n"));
     println!("deaths {}, storms {}, lean {}, {}", report.deaths, report.storms, game.balance().lean(), game.era().name());
     println!("bounties posted {}, earned {}, collected {}", report.bounties.0, report.bounties.1, report.bounties.2);
+    println!("escorts wanted {}, taken {}, paid {}", report.escorts.0, report.escorts.1, report.escorts.2);
     println!("collapses {}, deaths each {:?}", report.collapses, report.died);
     let greedy = game.character(id(7)).unwrap();
     println!("the greedy one is in life {} and the afterlife now asks level {} of them", greedy.life(), greedy.afterlife_goal());
@@ -133,6 +158,9 @@ fn four_founders_of_different_temper_make_a_world() {
     // until the lands fail and the Void has it.
     assert!(game.balance().lean() > 0);
     assert_eq!(game.era(), eq_game::era::Era::VoidConsumption);
+    // The friends who wanted to see the Meeting Ground hired guards, and
+    // guards strong enough for the pass saw them there and were paid.
+    assert!(report.escorts.0 >= 3 && report.escorts.2 >= 1, "{:?}", report.escorts);
     // The greedy one was marked, priced, hunted and paid for, over and over.
     assert!(report.bounties.0 > 0 && report.bounties.1 > 0 && report.bounties.2 > 0);
     assert!(report.died[7] > report.deaths / 2, "most of the dying was the greedy one's");
