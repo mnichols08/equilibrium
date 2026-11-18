@@ -1,5 +1,6 @@
 //! The rules: how commands and the passing of time change the world.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use eq_clock::{Duration, Tick};
@@ -8,6 +9,7 @@ use eq_rng::Rng;
 use eq_world_graph::{Graph, Passage, PlaceId};
 
 
+use crate::bloodline::Bloodline;
 use crate::board::{Board, Bounty, ContractId, Lot, TradeRefusal};
 use crate::character::{Character, CharacterId, Death, Rebirth};
 use crate::combat::{may_attack, may_rob, Blow, FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
@@ -59,6 +61,8 @@ pub struct Game {
     balance: Balance,
     /// The era the world is in.
     era: Era,
+    /// What founders have called the bloodlines, in bloodline order.
+    bloodline_names: [Option<String>; Bloodline::ALL.len()],
     /// Who has paid to be seen safely somewhere, and by whom.
     escorts: Escorts,
     /// Every place in the world. Each zone is a run of them.
@@ -109,6 +113,7 @@ impl Game {
             pacts: Pacts::new(),
             balance: Balance::new(),
             era: Era::Rebuilding,
+            bloodline_names: [const { None }; Bloodline::ALL.len()],
             escorts: Escorts::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
@@ -184,6 +189,7 @@ impl Game {
         // The unborn begin where every soul enters the afterlife.
         let anchor = self.river.filter(|_| unborn).unwrap_or_else(|| self.zones[zone].anchor());
         let mut newcomer = Character::new(name, anchor);
+        newcomer.bloodline = self.zones[zone].bloodline();
         if unborn {
             newcomer.be_unborn();
             self.forgotten.push(who);
@@ -312,7 +318,9 @@ impl Game {
             }
         }
         self.occupancy.grow(self.map.len());
-        let zone = Zone::new(first, places, anchor, Some(founder));
+        let mut zone = Zone::new(first, places, anchor, Some(founder));
+        // The lands take the six bloodlines in turn.
+        zone.bloodline = Bloodline::of_land(self.zones.iter().filter(|zone| zone.founder.is_some()).count());
         let lairs: Vec<PlaceId> =
             zone.place_ids().filter(|&place| self.map.place(place).is_some_and(|data| data.lair.is_some())).collect();
         for lair in lairs {
@@ -337,6 +345,33 @@ impl Game {
             Ok(zone)
         } else {
             Err(FoundRefusal::NotFounder)
+        }
+    }
+
+    /// What a bloodline is called: what a founder named it, or what
+    /// the old stories call it.
+    pub fn bloodline_name(&self, bloodline: Bloodline) -> &str {
+        self.bloodline_names[bloodline.index()].as_deref().unwrap_or_else(|| bloodline.old_name())
+    }
+
+    /// A founder names the bloodline of their land. The first founder
+    /// of that blood to do so names it for good, in every land.
+    fn name_bloodline(&mut self, index: usize, raw: &str, outcomes: &mut Vec<Outcome>) {
+        let checked = self.founded_by(index).and_then(|zone| {
+            let bloodline = self.zones[zone].bloodline();
+            if self.bloodline_names[bloodline.index()].is_some() {
+                return Err(FoundRefusal::AlreadyNamed);
+            }
+            let taken = self.bloodline_names.iter().flatten().map(String::as_str);
+            let name = eq_naming::check(raw, &content::LAND_NAME_RULES, taken, &content::BLOCKED_NAMES);
+            name.map(|name| (bloodline, name)).map_err(FoundRefusal::Name)
+        });
+        match checked {
+            Ok((bloodline, name)) => {
+                self.bloodline_names[bloodline.index()] = Some(name.clone());
+                outcomes.push(Outcome::BloodlineNamed { name });
+            }
+            Err(why) => outcomes.push(Outcome::CannotFound { why }),
         }
     }
 
@@ -890,6 +925,7 @@ impl Game {
             Action::NameLand(name) => self.name_founding(index, name, false, outcomes),
             Action::NameHouse(name) => self.name_founding(index, name, true, outcomes),
             Action::Invite(name) => self.invite(index, name, outcomes),
+            Action::NameBloodline(name) => self.name_bloodline(index, name, outcomes),
             Action::Raise => self.raise(index, now, outcomes),
             Action::Hire { reward, to } => self.hire(index, *reward, to, now, outcomes),
             Action::Guard(client) => self.guard(index, *client, outcomes, events),
@@ -1063,7 +1099,11 @@ impl Game {
             return outcomes.push(Outcome::RiteBegun);
         };
         let before = deposit.node.quality();
-        deposit.node.mend(RITE_MENDS_PERCENT);
+        // Two bloodlines joined in a rite mend what one alone cannot.
+        // (Ids are positions in the list of characters.)
+        let blood = |who: CharacterId| self.characters.get(who.get() as usize).map(Character::bloodline);
+        let mixed = blood(who) != blood(beginner);
+        deposit.node.mend(if mixed { content::MIXED_RITE_MENDS_PERCENT } else { RITE_MENDS_PERCENT });
         deposit.warded_until = now + WARD_TIME;
         deposit.rite_begun = None;
         let (resource, after) = (deposit.resource, deposit.node.quality());
@@ -1401,11 +1441,12 @@ impl Game {
             .and_then(|death| self.map.place(death.body))
             .and_then(|place| place.deposit)
             .map(|deposit| deposit.resource.attributes()[0]);
-        let home = self.zones[self.emptiest_land(Some(who))].anchor();
+        let land = &self.zones[self.emptiest_land(Some(who))];
+        let (home, bloodline) = (land.anchor(), land.bloodline());
         let character = &mut self.characters[index];
         self.occupancy.leave(character.place(), who);
         self.occupancy.enter(home, who);
-        character.be_reborn(home, now, Rebirth { base, favoured, spend_ectoplasm });
+        character.be_reborn(home, now, Rebirth { base, favoured, spend_ectoplasm, bloodline });
         self.dead.retain(|&spirit| spirit != who);
         self.forgotten.retain(|&spirit| spirit != who);
         character.life()
@@ -3506,6 +3547,58 @@ mod tests {
     }
 
     #[test]
+    fn two_bloodlines_joined_in_a_rite_mend_what_one_alone_cannot() {
+        let (start, now) = a_stripped_ledge();
+        let strain_after = |blood: Bloodline| {
+            let mut game = start.clone();
+            game.characters[1].bloodline = blood;
+            let mut events = Vec::new();
+            game.apply(&Command::rite(ASH), Tick::new(now), &mut events);
+            game.apply(&Command::rite(BRYN), Tick::new(now + 40), &mut events);
+            ledge(&game).node.strain_percent()
+        };
+        let (alone, joined) = (strain_after(Bloodline::Tidal), strain_after(Bloodline::Ash));
+        assert!(alone > 0, "one bloodline lifts half: {alone}");
+        assert_eq!(joined, 0, "two lift all of it");
+    }
+
+    #[test]
+    fn everyone_is_born_into_the_bloodline_of_their_land_and_founders_name_it() {
+        let mut game = founders_met();
+        let blood = |game: &Game, who| game.character(who).unwrap().bloodline();
+        assert_eq!((blood(&game, ASH), blood(&game, BRYN), blood(&game, COLE)), (Bloodline::Tidal, Bloodline::Covenant, Bloodline::Covenant));
+        assert_eq!(game.bloodline_name(Bloodline::Covenant), "the Covenant line");
+
+        let name = |game: &mut Game, who, name: &str| {
+            let mut events = Vec::new();
+            game.apply(&Command::name_bloodline(who, name), Tick::new(30), &mut events);
+            outcome(&events).cloned()
+        };
+        let cannot = |why| Some(Outcome::CannotFound { why });
+        assert_eq!(name(&mut game, COLE, "Ironkin"), cannot(FoundRefusal::NotFounder));
+        assert_eq!(name(&mut game, BRYN, "Ironkin"), Some(Outcome::BloodlineNamed { name: "Ironkin".into() }));
+        assert_eq!(name(&mut game, BRYN, "Stonekin"), cannot(FoundRefusal::AlreadyNamed));
+        assert_eq!(name(&mut game, ASH, "ironkin"), cannot(FoundRefusal::Name(eq_naming::Problem::Taken)));
+        assert_eq!(game.bloodline_name(blood(&game, COLE)), "Ironkin");
+        assert!(crate::narrate::stats(&game, COLE).contains("Bloodline    Ironkin (learns Resilience and Willpower faster)"));
+
+        // Blood tells: the same work teaches Bryn's line more Resilience than Ash's.
+        let resilience = |game: &mut Game, index: usize| {
+            for _ in 0..40 {
+                game.characters[index].train(Resource::Ore, 12, &mut Vec::new());
+            }
+            let known = *game.characters[index].attribute(Attribute::Resilience);
+            u64::from(known.level()) * 1_000 + known.progress()
+        };
+        assert!(resilience(&mut game, 1) > resilience(&mut game, 0));
+
+        // Blood is kept: wherever Cole next arises, it is as one of the Covenant line.
+        game.fell(2, Cause::Character(ASH), 0, Tick::new(40), &mut Vec::new());
+        game.begin_life(2, Tick::new(50), 0, false);
+        assert_eq!((game.character(COLE).unwrap().home(), blood(&game, COLE)), (game.character(ASH).unwrap().home(), Bloodline::Covenant));
+    }
+
+    #[test]
     fn a_ward_lets_a_deposit_be_worked_only_while_it_thrives() {
         let (mut game, now) = a_stripped_ledge();
         let mut events = Vec::new();
@@ -3729,6 +3822,7 @@ mod tests {
             assert_eq!((born.place(), born.life(), born.attribute(Attribute::Lineage).level()), (born.home(), 1, 0));
             assert_eq!(born.best_practised(), 0, "what was practised is theirs now, as a skill");
             assert!(SkillKind::ALL.iter().any(|&skill| born.skill(skill).level() == AFTERLIFE_LEVEL));
+            assert_eq!(born.bloodline(), game.zone_at(born.home()).bloodline(), "the unborn take the blood of the land they arise in");
             homes.push(born.home());
             now = then;
         }

@@ -73,6 +73,8 @@ pub struct You {
     pub health: u32,
     /// Which life this is, counting the first as 1.
     pub life: u32,
+    /// What their bloodline is called.
+    pub bloodline: String,
     /// Their body, if they have died and are walking as a spirit.
     pub body: Option<BodyView>,
     /// Their redemption, if they slept too long and are a forgotten
@@ -289,6 +291,7 @@ impl Scene {
             rite_waiting: place.deposit.and_then(|deposit| deposit.rite_open(now)).is_some_and(|beginner| beginner != viewer),
             health: character.health(),
             life: character.life(),
+            bloodline: game.bloodline_name(character.bloodline()).to_owned(),
             body: character.death().map(|death| body_view(game, death, here, now)),
             can_spar: character.is_spirit() && !character.is_dormant() && place.deposit.is_none(),
             afterlife: character

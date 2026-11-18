@@ -45,6 +45,9 @@ pub enum Action {
     NameLand(String),
     /// As a founder, give your house its name. It keeps it for good.
     NameHouse(String),
+    /// As a founder, give your bloodline its name. It keeps it for
+    /// good, in every land of that blood.
+    NameBloodline(String),
     /// As a founder, invite someone by name. Whoever joins the world
     /// under that name arrives in your land, as one of your house.
     Invite(String),
@@ -222,6 +225,11 @@ impl Command {
     /// `who`, a founder, deals with the land called `with`.
     pub fn deal(who: CharacterId, with: &str, dealing: Dealing) -> Self {
         Self { who, action: Action::Deal { with: with.into(), dealing } }
+    }
+
+    /// `who`, a founder, names their bloodline.
+    pub fn name_bloodline(who: CharacterId, name: &str) -> Self {
+        Self { who, action: Action::NameBloodline(name.into()) }
     }
 
     /// `who`, a founder, invites whoever will join as `name`.

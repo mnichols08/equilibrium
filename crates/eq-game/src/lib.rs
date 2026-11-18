@@ -30,6 +30,7 @@
 extern crate alloc;
 
 pub mod balance;
+pub mod bloodline;
 pub mod board;
 pub mod bots;
 mod character;

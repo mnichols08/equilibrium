@@ -12,6 +12,7 @@ use eq_clock::Tick;
 use eq_meter::Meter;
 use eq_world_graph::{Graph, PlaceId};
 
+use crate::bloodline::Bloodline;
 use crate::board::Board;
 use crate::character::CharacterId;
 use crate::content::{CORRUPTION_FADES_EVERY, VITALITY_BANDS};
@@ -59,6 +60,8 @@ pub struct Zone {
     pub(crate) name: Option<String>,
     /// What its founder called their house, which those they invite share.
     pub(crate) house: Option<String>,
+    /// The bloodline of those first born here.
+    pub(crate) bloodline: Bloodline,
     /// Where its house stands, once its founder has raised it. The
     /// land's own people cannot be struck or robbed there.
     pub(crate) hall: Option<PlaceId>,
@@ -82,6 +85,7 @@ impl Zone {
             founder,
             name: None,
             house: None,
+            bloodline: Bloodline::Tidal,
             hall: None,
             invited: Vec::new(),
         }
@@ -136,6 +140,11 @@ impl Zone {
     /// What the founder called the land, once they have.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// The bloodline of those first born in this land.
+    pub const fn bloodline(&self) -> Bloodline {
+        self.bloodline
     }
 
     /// Where the land's house stands, once it has been raised.
