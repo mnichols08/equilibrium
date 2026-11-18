@@ -2,7 +2,7 @@
   Where you are and how you, the land and the world are doing.
   @prop {string} world - One line about the wider world: the land, its house, the era, the mood, your bloodline. Empty hides it.
   @prop {{ name: string, marked: boolean, asleep: boolean }[]} company - Everyone else standing where you are.
-  @prop {{ place_name: string, description: string, health: number, life: number, ectoplasm: number, spirit_tier: string, body: null | { place_name: string, state: string, can_return: boolean, held_for: number, lost_in: number }, forgotten: null | { unborn: boolean, dormant: boolean, memories: number, needed: number, time_left: number }, afterlife: null | { level: number, needed: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
+  @prop {{ place_name: string, description: string, health: number, life: number, ectoplasm: number, spirit_tier: string, body: null | { state: string }, forgotten: null | { unborn: boolean, dormant: boolean, memories: number, needed: number, time_left: number }, afterlife: null | { level: number, needed: number }, rested: number, taint: number, marked: boolean, skills: { name: string, level: number }[], attributes: { name: string, level: number }[], pack: { name: string, amount: number }[] }} you - Your character.
 -->
 <script>
   const emptyYou = { place_name: '', description: '', health: 100, life: 1, ectoplasm: 0, spirit_tier: 'Lost Shade', body: null, forgotten: null, afterlife: null, rested: 100, taint: 0, marked: false, skills: [], attributes: [], pack: [] }
@@ -13,14 +13,8 @@
   const found = you.afterlife ? `Practised to level ${you.afterlife.level} of the ${you.afterlife.needed} that bring you back.` : ''
   const bodyLine = (body) =>
     body.state === 'buried'
-      ? `You are a spirit. Your body is buried at ${body.place_name}: your next life will remember this one.`
-      : body.state === 'risen'
-        ? `You are a spirit. Your body has risen at ${body.place_name} and is yours no longer.`
-        : [
-            `You are a spirit. Your body lies at ${body.place_name}.`,
-            body.held_for > 0 ? `Something holds you back for ${minutes(body.held_for)}.` : '',
-            `It is lost in ${minutes(body.lost_in)}.`,
-          ].filter(Boolean).join(' ')
+      ? 'You are a spirit. Someone has buried the body you left: your next life will remember this one.'
+      : 'You are a spirit. That life is over, and there is no going back to the body you left.'
   const forgottenLine = (forgotten) =>
     forgotten.unborn
       ? 'You have not lived yet. Practise where the living would work, and be born where the world needs people.'

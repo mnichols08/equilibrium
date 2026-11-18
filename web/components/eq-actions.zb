@@ -1,11 +1,11 @@
 <!--
   What you can do right now: walk out by an exit, gather, pick things up, challenge someone, or let time pass.
-  A spirit can only walk, draw ectoplasm, return to its body while it still lies there, or practise where the living would work until it lives again.
+  A spirit can only walk, draw ectoplasm, fight shades, or practise where the living would work until it lives again. There is no going back into a body.
   @prop {{ label: string, to: number, to_name: string, open: boolean }[]} exits - The ways out of where you stand.
   @prop {{ name: string }[]} targets - Everyone here you may attack right now.
   @prop {{ name: string }[]} sleepers - Everyone asleep here whose pack you may go through.
   @prop {{ name: string, word: string, health: number }[]} foes - The creatures here, which you may strike.
-  @prop {null | { place_name: string, state: string, can_return: boolean }} body - Your body, if you have died and walk as a spirit. `state` is "lying", "risen" or "buried".
+  @prop {null | { state: string }} body - Set if you have died and walk as a spirit. `state` is what became of the body: "lying", "risen" or "buried".
   @prop {null | { dormant: boolean, unborn: boolean, can_seek: boolean, memories: number, needed: number }} forgotten - Set if you slept too long and are a forgotten spirit, or have not lived yet.
   @prop {null | { level: number, needed: number }} afterlife - How far you have practised in the afterlife, if you are a spirit.
   @prop {boolean} canSpar - Whether you are a spirit standing where a shade can be fought for practice.
@@ -26,8 +26,6 @@
   ]
   const spirit = Boolean(body) || Boolean(forgotten)
   const dormant = Boolean(forgotten) && forgotten.dormant
-  const lying = Boolean(body) && body.state === 'lying'
-  const canReturn = lying && body.can_return
 </script>
 <style>
   :host { display: block; }
@@ -45,10 +43,6 @@
 <eq-actions exits={[]} can-spar={false} can-gather={false} can-take={false} targets={[]} sleepers={[]} foes={[]} burials={[]} body={null} forgotten={null} afterlife={null} asleep={false} online={false} can-rite={false} rite-waiting={false}>
   <div zb-if={spirit} role="group" aria-label="Your way back">
     <button zb-if={dormant} type="button" class="primary" onclick={() => emit('command', 'wake')}>Wake</button>
-    <button zb-if={lying} type="button" class="primary" disabled={!canReturn} onclick={() => emit('command', 'return')}>
-      Return to your body
-      <small>{canReturn ? "it lies here" : body.place_name}</small>
-    </button>
     <button zb-if={forgotten && !forgotten.unborn && !dormant} type="button" class="primary" disabled={!forgotten.can_seek} onclick={() => emit('command', 'seek')}>
       Seek a memory
       <small>{forgotten.memories} of {forgotten.needed} found</small>

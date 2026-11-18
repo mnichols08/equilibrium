@@ -32,20 +32,11 @@ pub enum Refusal {
 /// Why a spirit could not return to its body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReturnRefusal {
-    /// The spirit is not where its body lies.
-    NotAtBody,
-    /// The spirit is held back until this tick.
-    TooSoon(eq_clock::Tick),
-    /// There is no body: it died in its sleep and is gone.
-    NoBody,
-    /// The body was left too long and has risen as a Body Guard.
-    Risen,
-    /// The body has been buried.
-    Buried,
-    /// Whoever, or whatever, did the killing still stands over the body.
-    KillerNear,
-    /// There is no giving up and starting again: the way back to the
-    /// living is through the afterlife, memory by memory.
+    /// There is no going back into a body, ever: the dead go on to the
+    /// afterlife, and come back somewhere else as someone new.
+    NoWayBack,
+    /// There is no giving up and starting again either: the way back
+    /// to the living is through the afterlife.
     Unredeemed,
 }
 

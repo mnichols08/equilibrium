@@ -15,7 +15,7 @@ use eq_nodes::Quality;
 use eq_world_graph::PlaceId;
 
 use crate::content::{CIRCUIT, DEPOSIT_ROUTES, FULL_REST, MIN_WORKABLE_STOCK};
-use crate::{Character, CharacterId, Command, Death, Event, Game, Outcome, Safety, Standing};
+use crate::{Character, CharacterId, Command, Event, Game, Outcome, Safety, Standing};
 
 /// A warden with less health than this leaves fighting to others.
 const HEALTH_TO_FIGHT: u32 = 40;
@@ -268,11 +268,7 @@ impl Bots {
             self.bots[index].life = me.life();
             self.bots[index].step = 0;
         }
-        if let Some(death) = me.death().copied() {
-            return self.haunt(index, &death, session, events, now);
-        }
-        // A spirit with no body to go back to (unborn, or forgotten)
-        // has only the afterlife to get through.
+        // A spirit has only the afterlife to get through.
         if me.is_spirit() {
             let command = if me.is_dormant() { Some(Command::wake(who)) } else { afterlife(session.world(), who) };
             events.extend(command.map(|command| session.submit(now, command)).transpose()?.unwrap_or_default());
@@ -309,42 +305,6 @@ impl Bots {
         };
         events.extend(session.submit(now, command)?);
         self.bots[index].free_at = busy_until(session, who, now).max(now + pause);
-        Ok(())
-    }
-
-    /// A dead bot makes for its body by the shortest way and returns to
-    /// it as soon as it may. If it is too late, or the body is in the
-    /// ground, it practises in the afterlife until it lives again.
-    fn haunt(&mut self, index: usize, death: &Death, session: &mut Session<Game>, events: &mut Events<Game>, now: Tick) -> Result<(), OutOfOrder> {
-        let who = self.bots[index].who;
-        let world = session.world();
-        let here = world.character(who).map(Character::place);
-        let command = if death.risen || death.buried {
-            // No body to go back to: the way to the living is the afterlife.
-            afterlife(world, who)
-        } else if here == Some(death.body) {
-            if now < death.ready_at {
-                self.bots[index].free_at = death.ready_at;
-                return Ok(());
-            }
-            // No use trying while what did the killing stands over the body.
-            if world.can_return(who, now).is_err() {
-                self.bots[index].free_at = now + IDLE;
-                return Ok(());
-            }
-            Some(Command::return_to_body(who))
-        } else {
-            // Water is nothing to a spirit, so every exit will do.
-            let step = here.and_then(|place| world.map().first_step(place, death.body, |_| true));
-            step.map(|exit| Command::go(who, &exit.label))
-        };
-        match command {
-            Some(command) => {
-                events.extend(session.submit(now, command)?);
-                self.bots[index].free_at = busy_until(session, who, now).max(now + PAUSE);
-            }
-            None => self.bots[index].free_at = now + IDLE,
-        }
         Ok(())
     }
 
@@ -759,19 +719,17 @@ mod tests {
     }
 
     #[test]
-    fn a_dead_bot_does_not_climb_back_into_its_body_under_its_killers_feet() {
+    fn a_dead_bot_leaves_its_body_where_it_fell_and_takes_the_afterlife() {
         let mut session = session(&["Ash", "Bryn"]);
         let ledge = DEPOSIT_ROUTES[0];
         let mut bots = Bots::new([
             (ASH, Plan::camp(Policy::Careful, ledge).as_warden()),
             (BRYN, Plan::camp(Policy::Greedy, ledge)),
         ]);
-        // The warden camps on the ledge, so Bryn's spirit walks back and
-        // finds it standing there. It waits, the body rises, and the only
-        // way left is the afterlife.
+        // Bryn's spirit is carried off. It does not go looking for the
+        // body, which rises as a guard in its own time.
         let events = bots.run(&mut session, Tick::new(6_000)).unwrap();
         assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Died { .. } })));
-        assert!(!happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::Returned })));
         assert!(!happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::CannotReturn { .. } })), "it does not even try");
         assert!(happened(&events, |event| matches!(event, Event::Character { who: BRYN, outcome: Outcome::BodyRose })));
         let died = events.iter().filter(|stamped| matches!(stamped.value, Event::Character { who: BRYN, outcome: Outcome::Died { .. } })).count();

@@ -165,22 +165,12 @@ pub struct DepositView {
     pub pressure: u32,
 }
 
-/// The viewer's own body, lying where they died.
+/// What has become of the body the viewer left. It does not say where:
+/// there is no going back to it, and nobody is told where they fell.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct BodyView {
-    /// The id of the place it lies in.
-    pub place: u64,
-    /// That place's name.
-    pub place_name: &'static str,
     /// `"lying"` where it fell, `"risen"` as a guard, or `"buried"`.
-    /// Only a body that is lying can be returned to.
     pub state: &'static str,
-    /// Whether the spirit may return to it right now.
-    pub can_return: bool,
-    /// Seconds until the spirit is free to return, 0 once it is.
-    pub held_for: u64,
-    /// Seconds until the body is lost and the spirit is reborn.
-    pub lost_in: u64,
 }
 
 /// A creature standing in a place.
@@ -292,7 +282,7 @@ impl Scene {
             health: character.health(),
             life: character.life(),
             bloodline: game.bloodline_name(character.bloodline()).to_owned(),
-            body: character.death().map(|death| body_view(game, death, game.can_return(viewer, now).is_ok(), now)),
+            body: character.death().map(body_view),
             can_spar: character.is_spirit() && !character.is_dormant() && place.deposit.is_none(),
             afterlife: character
                 .is_spirit()
@@ -353,21 +343,13 @@ impl Scene {
     }
 }
 
-fn body_view(game: &Game, death: &Death, can_return: bool, now: Tick) -> BodyView {
-    let held_for = death.ready_at.get().saturating_sub(now.get());
+fn body_view(death: &Death) -> BodyView {
     let state = match (death.buried, death.risen) {
         (true, _) => "buried",
         (false, true) => "risen",
         (false, false) => "lying",
     };
-    BodyView {
-        state,
-        place: death.body.get(),
-        place_name: game.map().place(death.body).map_or("", |place| place.name),
-        can_return,
-        held_for,
-        lost_in: death.lost_at.get().saturating_sub(now.get()),
-    }
+    BodyView { state }
 }
 
 
@@ -523,7 +505,8 @@ mod tests {
     #[test]
     fn the_dead_see_their_body_and_the_living_see_only_the_body() {
         use eq_events::World;
-        use eq_game::content::{ATTACK_TIME, CORPSE_TIME, GATHER_TIME, TETHERED_WAIT};
+        use eq_clock::Duration;
+        use eq_game::content::{ATTACK_TIME, GATHER_TIME};
         use eq_game::Command;
 
         let (ash, bryn) = (CharacterId::new(0), CharacterId::new(1));
@@ -550,29 +533,24 @@ mod tests {
         assert!(here.spoils);
         assert_eq!((killer.you.can_bury.clone(), killer.you.afterlife.clone()), (vec!["Bryn".to_owned()], None));
 
-        // Nobody else stood by, so Bryn was pulled back to camp.
+        // Bryn's spirit was carried off to camp. The scene says what has
+        // become of the body, and not where it is.
         let spirit = Scene::of(&game, bryn, died).unwrap();
         assert_eq!(spirit.you.place_name, "Tidewatch Camp");
-        let body = spirit.you.body.clone().unwrap();
-        assert_eq!(body.place, here.id);
-        assert_eq!((body.can_return, body.held_for, body.lost_in), (false, 0, CORPSE_TIME.as_ticks()));
+        assert_eq!(spirit.you.body, Some(BodyView { state: "lying" }));
         assert_eq!(spirit.you.afterlife, Some(AfterlifeView { level: 0, needed: 15 }));
         assert!(spirit.you.can_spar && !spirit.you.can_gather && !killer.you.can_spar, "camp has shades, for spirits");
         assert!(spirit.you.can_bury.is_empty(), "spirits bury nobody");
 
+        let later = died + Duration::minutes(1);
         game.apply(&Command::go(bryn, "north"), died, &mut events);
-        let back = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap();
+        let back = Scene::of(&game, bryn, later).unwrap();
         assert!(back.you.can_gather && !back.you.can_spar, "the ledge is somewhere to practise the work");
-        assert!(!back.you.body.unwrap().can_return, "not while Ash, who did it, stands over the body");
-        let mut alone = game.clone();
-        alone.apply(&Command::go(ash, "north"), died + TETHERED_WAIT, &mut events);
-        assert!(Scene::of(&alone, bryn, died + TETHERED_WAIT).unwrap().you.body.unwrap().can_return);
 
-        // Buried, there is no body to go back to, and nothing left to take.
-        game.apply(&Command::bury(ash, bryn), died + TETHERED_WAIT, &mut events);
-        let buried = Scene::of(&game, bryn, died + TETHERED_WAIT).unwrap().you.body.unwrap();
-        assert_eq!((buried.state, buried.can_return), ("buried", false));
-        let after = Scene::of(&game, ash, died + TETHERED_WAIT).unwrap();
+        // Buried, there is nothing left to take.
+        game.apply(&Command::bury(ash, bryn), later, &mut events);
+        assert_eq!(Scene::of(&game, bryn, later).unwrap().you.body, Some(BodyView { state: "buried" }));
+        let after = Scene::of(&game, ash, later).unwrap();
         assert!(after.you.can_bury.is_empty() && !after.you.can_take);
         assert_eq!(back.company.len(), 1, "spirits see the living");
     }
