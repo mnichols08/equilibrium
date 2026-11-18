@@ -11,7 +11,7 @@ use eq_world_graph::PlaceId;
 
 use crate::content::{
     AFFINITY_XP_PER_WASTED_LEVEL, ATTRIBUTE_RULES, ATTRIBUTE_XP_PER_UNIT, DEATH_PLACE_CARRYOVER_TIMES, HEALTH_ON_RETURN,
-    AFTERLIFE_LEVEL, BLOODLINE_LEARNING_PERCENT, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
+    AFTERLIFE_LEVEL, AFTERLIFE_LEVEL_PER_DEATH, MOST_AFTERLIFE_LEVEL, BLOODLINE_LEARNING_PERCENT, FIGHTING_XP_PER_BLOW, NEWCOMER_BELOW_LEVEL, SHADE_HEALTH, LINEAGE_XP_PER_LIFE, MOST_ECTOPLASM, MAX_HEALTH, MEMORIES_TO_REDEEM, MOST_DEGRADATION, SKILL_RULES,
     SKILL_XP_PER_UNIT, STANDING_BANDS, TIERS_PER_WHOLE,
 };
 use crate::bloodline::Bloodline;
@@ -418,6 +418,15 @@ impl Character {
         &self.practised[skill.index()]
     }
 
+    /// The level this spirit must reach in one skill before it lives
+    /// again. Someone who has never lived is asked the least; every
+    /// death after that asks more.
+    pub fn afterlife_goal(&self) -> u32 {
+        let unborn = self.forgotten.as_ref().is_some_and(|forgotten| forgotten.unborn);
+        let deaths = if unborn { 0 } else { self.life };
+        (AFTERLIFE_LEVEL + AFTERLIFE_LEVEL_PER_DEATH * deaths).min(MOST_AFTERLIFE_LEVEL)
+    }
+
     /// The best the spirit has done in any one skill in the afterlife.
     pub fn best_practised(&self) -> u32 {
         self.practised.iter().map(Proficiency::level).max().unwrap_or(0)
@@ -429,7 +438,9 @@ impl Character {
     pub(crate) fn practise(&mut self, skill: SkillKind, xp: u64, outcomes: &mut Vec<Outcome>) -> u32 {
         let progress = &mut self.practised[skill.index()];
         if progress.practice(xp, &SKILL_RULES).levels_gained > 0 {
-            outcomes.push(Outcome::Practised { skill, level: progress.level(), needed: AFTERLIFE_LEVEL });
+            let level = progress.level();
+            outcomes.push(Outcome::Practised { skill, level, needed: self.afterlife_goal() });
+            return level;
         }
         progress.level()
     }
@@ -502,7 +513,9 @@ impl Character {
             self.bloodline = rebirth.bloodline;
         }
         self.health.set(MAX_HEALTH);
-        self.rested.set(i64::from(FULLY_RESTED));
+        // A first body wakes fresh. One come back from the dead wakes
+        // weary, and has to sleep before it is at its best.
+        self.rested.set(if unborn { i64::from(FULLY_RESTED) } else { 0 });
         let favoured = rebirth.favoured.map(Attribute::index);
         let carry = |known: &Proficiency, percent: u32| {
             if remembered {
@@ -621,7 +634,7 @@ mod tests {
     fn miner() -> Character {
         let mut miner = Character::new("Ash", CAMP);
         let mut outcomes = Vec::new();
-        for _ in 0..400 {
+        for _ in 0..2_000 {
             miner.train(Resource::Ore, 12, &mut outcomes);
         }
         miner

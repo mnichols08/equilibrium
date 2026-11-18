@@ -36,7 +36,8 @@ Commands:
   return               as a spirit, go back into your body
   bury <name>          lay someone's body in the ground where it lies
   gather               as a spirit, practise where the living would work:
-                       reach level 10 in a skill there and you live again
+                       go far enough in one skill and you live again
+                       (look says how far; each death asks more)
   attack shade         as a spirit, fight a shade where the living do not
                        work: it never strikes back, and it counts the same
   seek                 as a forgotten spirit, search here for a memory
@@ -85,9 +86,11 @@ Get back to it within ten minutes and return. Leave it longer and it
 rises as a guard over what you dropped. Then, or if someone buries it,
 the only way back to the living is through the afterlife. Nothing can
 hurt you there, so it is the place to practise: gather where the living
-would work, learning each skill as if for the first time. Reach level
-10 in one and you arise in whichever land has fewest people, starting
-with whatever you practised.
+would work, or fight the shades where they do not, learning each skill
+as if for the first time. Go far enough in one and you arise in
+whichever land has fewest people, weary, and starting with whatever you
+practised. Each death asks more of you than the last (10 before a first
+life, then 15, 20 and so on), and so sends you back knowing more.
 
 Death itself gives you nothing. But if nobody took what lay beside
 your body, or someone buried it, your next life remembers the last:
@@ -240,7 +243,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             capitalise(&being_name(game, *by, viewer)),
         ),
         Outcome::BodyRose => {
-            "You left it too long. Your body has risen without you and stands guard over what you dropped. The way back to the living is through the afterlife now: gather where the living would work, until you reach level 10 in a skill.".into()
+            "You left it too long. Your body has risen without you and stands guard over what you dropped. The way back to the living is through the afterlife now: gather where the living would work, or fight the shades where they do not, until you have come far enough in one skill. Each death asks a little more of you than the last, and sends you back knowing more.".into()
         }
         Outcome::RelicSealed => {
             "The relic here is sealed. It opens for its owner, or once the body it belongs to is gone or brought down.".into()
@@ -257,7 +260,7 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
             "Your body is in the ground. There is no going back into it. Practise in the afterlife to live again.".into()
         }
         Outcome::CannotReturn { why: ReturnRefusal::Unredeemed } => {
-            "There is no giving up and starting again. Return to your body if you still can, or practise in the afterlife: gather where the living would work until you reach level 10 in a skill.".into()
+            "There is no giving up and starting again. Return to your body if you still can, or practise in the afterlife: gather where the living would work, or fight the shades where they do not, until you have come far enough in one skill (look says how far).".into()
         }
         Outcome::Unborn => "You have not lived yet. Every land was founded before you came, and nobody sent for you, so you begin as a spirit. Nothing can hurt you here, so practise: gather where the living would work. Reach level 10 in a skill and you will be born wherever the world has most need of people, already knowing it.".into(),
         Outcome::Practised { skill, level, needed } => {
@@ -499,7 +502,7 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         lines.push("You are a spirit. The living cannot see you, and the tide is nothing to you.".into());
     }
     let needed = crate::content::MEMORIES_TO_REDEEM;
-    let practised = format!("Practised in the afterlife: level {} of {}.", character.best_practised(), crate::content::AFTERLIFE_LEVEL);
+    let practised = format!("Practised in the afterlife: level {} of {}.", character.best_practised(), character.afterlife_goal());
     match character.forgotten() {
         Some(forgotten) if forgotten.unborn => lines.push(format!("You have not lived yet. {practised}")),
         Some(forgotten) => lines.push(format!(

@@ -9,7 +9,7 @@
 //! perceive from where they stand is a later rule.
 
 use eq_clock::Tick;
-use eq_game::content::{AFTERLIFE_LEVEL, LOW_TIDE, MEMORIES_TO_REDEEM, REDEMPTION_CLOCK, TIDE};
+use eq_game::content::{LOW_TIDE, MEMORIES_TO_REDEEM, REDEMPTION_CLOCK, TIDE};
 use eq_game::{
     narrate, pressure_percent, Attribute, CharacterId, Creature, Death, Deposit, Game, Resource, SkillKind, Standing,
 };
@@ -296,7 +296,7 @@ impl Scene {
             can_spar: character.is_spirit() && !character.is_dormant() && place.deposit.is_none(),
             afterlife: character
                 .is_spirit()
-                .then(|| AfterlifeView { level: character.best_practised(), needed: AFTERLIFE_LEVEL }),
+                .then(|| AfterlifeView { level: character.best_practised(), needed: character.afterlife_goal() }),
             can_bury: if character.is_spirit() {
                 Vec::new()
             } else {
@@ -556,7 +556,7 @@ mod tests {
         let body = spirit.you.body.clone().unwrap();
         assert_eq!(body.place, here.id);
         assert_eq!((body.can_return, body.held_for, body.lost_in), (false, 0, CORPSE_TIME.as_ticks()));
-        assert_eq!(spirit.you.afterlife, Some(AfterlifeView { level: 0, needed: 10 }));
+        assert_eq!(spirit.you.afterlife, Some(AfterlifeView { level: 0, needed: 15 }));
         assert!(spirit.you.can_spar && !spirit.you.can_gather && !killer.you.can_spar, "camp has shades, for spirits");
         assert!(spirit.you.can_bury.is_empty(), "spirits bury nobody");
 

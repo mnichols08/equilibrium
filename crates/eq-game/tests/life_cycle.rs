@@ -79,10 +79,13 @@ fn a_life_ends_in_the_grotto_and_the_spirit_buys_a_better_next_one() {
     assert_eq!(you(&solo).place(), solo.game().anchor(), "alone in the world, so home is where they arise");
 
     let next = you(&solo);
-    assert_eq!((next.life(), next.kept(), next.ectoplasm()), (2, 5, 15), "death keeps nothing; 100 ectoplasm buys five percent");
-    assert_eq!(next.skill(SkillKind::Mining).level(), mining * 5 / 100);
+    assert_eq!((next.life(), next.kept(), next.ectoplasm()), (2, 8, 19), "death keeps nothing; 160 ectoplasm buys eight percent");
+    // (Working the grotto to death taught a little more mining on the way.)
+    let kept = next.skill(SkillKind::Mining).level();
+    assert!((mining * 8 / 100..=(mining + 2) * 8 / 100).contains(&kept), "{kept} of {mining}");
     assert!(next.skill(SkillKind::Mining).peak() >= mining, "nobody disturbed the body, so the old life is remembered");
-    assert_eq!(next.skill(SkillKind::Foraging).level(), 10, "what was practised in the afterlife comes back whole");
+    assert_eq!(next.skill(SkillKind::Foraging).level(), 15, "what a first death asks, practised in the afterlife, comes back whole");
+    assert_eq!(next.rested(), 0, "a body come back from the dead wakes weary");
     assert!(next.attribute(Attribute::Lineage).level() > 0);
     assert!(solo.replays_identically());
 }

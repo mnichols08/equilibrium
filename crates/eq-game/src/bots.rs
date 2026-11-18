@@ -473,8 +473,14 @@ fn warden_duty(game: &Game, bot: &Bot) -> Option<Command> {
     let fit_to_fight = me.health() >= HEALTH_TO_FIGHT;
     // The marked, and anyone with a price on their head who is not so
     // new that taking it would mark the taker.
+    // The mark weakens an arm; a price does not. A warden takes on the
+    // priced but unmarked only when it is at least their match.
+    let might = |character: &Character| {
+        character.attribute(crate::Attribute::Vigor).level() + character.attribute(crate::Attribute::Resilience).level()
+    };
     let fair_game = |other: CharacterId, character: &Character| {
-        character.standing() == Standing::Marked || (game.is_hunted(other) && !character.is_newcomer())
+        character.standing() == Standing::Marked
+            || (game.is_hunted(other) && !character.is_newcomer() && might(me) >= might(character))
     };
     let marked = game.occupants(me.place()).iter().copied().find(|&other| {
         game.character(other).is_some_and(|character| fair_game(other, character)) && game.can_attack(bot.who, other).is_ok()
