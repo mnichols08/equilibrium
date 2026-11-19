@@ -714,15 +714,31 @@ fn burial_duty(game: &Game, bot: &Bot) -> Option<Command> {
 }
 
 /// A bot whose land is at war goes for any of the enemy it finds
-/// itself standing with, if it is fit to and the place allows it.
+/// itself standing with, if it is fit to and the place allows it. In an
+/// era whose borders are open, a warden at home does the same to
+/// strangers who are not allies and are no stronger than it.
 fn enemy_duty(game: &Game, bot: &Bot) -> Option<Command> {
     let me = game.character(bot.who)?;
     if me.health() < HEALTH_TO_FIGHT {
         return None;
     }
     let at_war = |other: &Character| game.pact(me.home(), other.home()) == Some(crate::pact::Pact::War);
+    // In a hard era a warden also sees off strangers in its own land who
+    // are not allies, if it is at least their match.
+    let might = |character: &Character| {
+        character.attribute(crate::Attribute::Vigor).level() + character.attribute(crate::Attribute::Resilience).level()
+    };
+    let at_home = game.zone_at(me.home()).contains(me.place());
+    let intruder = |other: &Character| {
+        bot.plan.warden
+            && at_home
+            && game.era().borders_open()
+            && game.is_abroad(other)
+            && game.pact(me.home(), other.home()) != Some(crate::pact::Pact::Alliance)
+            && might(me) >= might(other)
+    };
     let enemy = game.occupants(me.place()).iter().copied().find(|&other| {
-        game.character(other).is_some_and(at_war) && game.can_attack(bot.who, other).is_ok()
+        game.character(other).is_some_and(|other| at_war(other) || intruder(other)) && game.can_attack(bot.who, other).is_ok()
     })?;
     Some(Command::attack(bot.who, enemy))
 }

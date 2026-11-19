@@ -37,6 +37,8 @@ use crate::zone::{Epitaph, Weather, Zone};
 use crate::faction::Factions;
 
 mod factions;
+#[cfg(test)]
+mod eras;
 
 /// How often the world looks for sleepers whose time has run out.
 const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
@@ -824,17 +826,34 @@ impl Game {
         if self.is_sheltered(victim) || self.at_own_keep(target) {
             return Err(Refusal::Haven);
         }
-        let safety = self.place_of(attacker).map_or(Safety::Haven, |place| place.safety);
+        let safety = self.safety_for(victim);
         // War opens the wilderness: an enemy needs no mark to be struck.
-        // So does a price on someone's head, and so does turning your
-        // back on those you were sworn to.
+        // So does a price on someone's head, turning your back on those
+        // you were sworn to, and, in a hard era, being abroad.
         let open = self.pact_between(aggressor, victim) == Some(Pact::War)
             || self.is_hunted(target)
-            || self.factions.wronged(target, attacker);
+            || self.factions.wronged(target, attacker)
+            || (self.era.borders_open() && self.is_abroad(victim));
         if safety != Safety::Haven && open {
             return Ok(());
         }
         may_attack(safety, victim.standing())
+    }
+
+    /// Whether `character` is outside the land they belong to.
+    pub fn is_abroad(&self, character: &Character) -> bool {
+        !self.zone_at(character.place()).contains(character.home())
+    }
+
+    /// How safe the place `victim` stands in is for them. In the Void a
+    /// haven shelters only the people of its own land.
+    fn safety_for(&self, victim: &Character) -> Safety {
+        let safety = self.map.place(victim.place()).map_or(Safety::Haven, |place| place.safety);
+        if safety == Safety::Haven && self.era.havens_shrink() && self.is_abroad(victim) {
+            Safety::Buffer
+        } else {
+            safety
+        }
     }
 
     /// Whether `robber` may go through `target`'s pack at `now`.
@@ -856,8 +875,7 @@ impl Game {
         if self.is_sheltered(victim) || self.factions.holds_for(target, victim.place()) {
             return Err(RobRefusal::Haven);
         }
-        let safety = self.place_of(robber).map_or(Safety::Haven, |place| place.safety);
-        may_rob(safety)?;
+        may_rob(self.safety_for(victim))?;
         if victim.carried_total() == 0 {
             return Err(RobRefusal::NothingToSteal);
         }
@@ -1431,11 +1449,19 @@ impl Game {
         }
         buyer.stow(contract.give.resource, contract.give.amount);
         buyer.busy_until = now + BOARD_TIME;
+        // The land's founder takes a share of what the poster earns:
+        // more in peace, when trade is worth more. Nobody taxes themself.
+        let founder = self.zone_of_index(index).founder().filter(|&founder| founder != contract.by);
+        let tax = if founder.is_some() { contract.want.amount * self.era.trade_tax_percent() / 100 } else { 0 };
+        let earned = Lot { resource: contract.want.resource, amount: contract.want.amount - tax };
         let board = &mut self.zone_of_index_mut(index).board;
         board.take_down(id);
-        board.hold_for(contract.by, contract.want);
+        board.hold_for(contract.by, earned);
+        if let (Some(founder), true) = (founder, tax > 0) {
+            board.hold_for(founder, Lot { resource: contract.want.resource, amount: tax });
+        }
         outcomes.push(Outcome::Accepted { id, paid: contract.want, got: contract.give });
-        events.push(Event::Character { who: contract.by, outcome: Outcome::Filled { id, by: who, earned: contract.want } });
+        events.push(Event::Character { who: contract.by, outcome: Outcome::Filled { id, by: who, earned } });
     }
 
     /// Takes down a contract of one's own and has back what it held.
