@@ -34,6 +34,7 @@ pub struct Lot {
 }
 
 /// An offer pinned to the board.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contract {
     /// Its number on the board.
@@ -47,6 +48,7 @@ pub struct Contract {
 }
 
 /// Why a trade at the board was not allowed.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TradeRefusal {
     /// The board is at the zone's anchor, and they are not.
@@ -79,6 +81,7 @@ pub enum TradeRefusal {
 
 /// A price on someone's head. The board holds the reward for whoever
 /// kills them.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bounty {
     /// Whose death it pays for.
@@ -91,6 +94,7 @@ pub struct Bounty {
 
 /// Every open contract, and what the board holds for those whose
 /// contracts were accepted.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Board {
     contracts: Vec<Contract>,

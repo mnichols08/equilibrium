@@ -28,6 +28,7 @@ eq_ids::define_id!(
 crate::wire::as_number!(CreatureId);
 
 /// What sort of creature something is.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CreatureKind {
     /// A thing that lives in the deep places and goes for anyone it finds.
@@ -63,6 +64,7 @@ impl CreatureKind {
 }
 
 /// What the whole world hears of the Behemoth.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BehemothNews {
     /// One has risen.
@@ -75,6 +77,7 @@ pub enum BehemothNews {
 
 /// Enough to name a creature after it is gone: what it was and, for a
 /// Body Guard, whose body.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Being {
     /// What sort of creature.
@@ -84,6 +87,7 @@ pub struct Being {
 }
 
 /// A hostile creature in the world.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Creature {
     /// Its id.
@@ -199,6 +203,7 @@ impl Creature {
 
 /// How much a relic is worth, which decides who can open it and how
 /// long it lasts.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RelicTier {
     /// Common things only. Anyone can pick it up at once.
@@ -239,6 +244,7 @@ impl RelicTier {
 }
 
 /// What someone dropped when they died, lying where they fell.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Relic {
     /// Whose it was.
@@ -255,6 +261,7 @@ pub struct Relic {
 /// stays for good, and is the tie between the life that ended there
 /// and its owner's next one. Whoever digs it up has what is in it, and
 /// breaks that tie.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Grave {
     /// Who lies in it.

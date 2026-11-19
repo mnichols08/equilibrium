@@ -19,6 +19,7 @@ const FELT_AT: i64 = 20;
 const WORST_AT: i64 = 60;
 
 /// What the world is like to live in.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mood {
     /// Too much peace, for too long. Nothing grows back.
@@ -128,6 +129,7 @@ impl Mood {
 
 /// How far the world leans: below zero toward stillness, above toward
 /// fury.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Balance {
     lean: i64,

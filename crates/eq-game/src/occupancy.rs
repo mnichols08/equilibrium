@@ -10,6 +10,7 @@ use eq_world_graph::PlaceId;
 use crate::character::CharacterId;
 
 /// The characters in each place, kept in id order.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Occupancy {
     by_place: Vec<Vec<CharacterId>>,

@@ -78,6 +78,9 @@ dependencies = [
 [[package]]
 name = "eq-clock"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "eq-curve"
@@ -119,6 +122,9 @@ version = "0.1.0"
 [[package]]
 name = "eq-meter"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "eq-naming"
@@ -129,6 +135,7 @@ name = "eq-nodes"
 version = "0.1.0"
 dependencies = [
  "eq-meter",
+ "serde",
 ]
 
 [[package]]
@@ -142,6 +149,9 @@ dependencies = [
 [[package]]
 name = "eq-rng"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "eq-scene"
@@ -180,6 +190,7 @@ name = "eq-skills"
 version = "0.1.0"
 dependencies = [
  "eq-curve",
+ "serde",
 ]
 
 [[package]]
@@ -206,6 +217,7 @@ version = "0.1.0"
 dependencies = [
  "eq-clock",
  "eq-ids",
+ "serde",
 ]
 
 [[package]]

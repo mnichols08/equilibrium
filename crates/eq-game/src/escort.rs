@@ -13,6 +13,7 @@ use crate::board::Lot;
 use crate::character::CharacterId;
 
 /// One escort: who is going where, for what, and who is seeing them there.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Escort {
     /// Who is paying to be seen safely there.
@@ -29,6 +30,7 @@ pub struct Escort {
 }
 
 /// Every escort that is wanted or under way.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Escorts {
     jobs: Vec<Escort>,

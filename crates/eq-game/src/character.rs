@@ -30,6 +30,7 @@ crate::wire::as_number!(CharacterId);
 
 /// A death: where the body lies and how long the spirit has to get back
 /// to it.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Death {
     /// Where the body lies.
@@ -62,6 +63,7 @@ impl Death {
 
 /// A spirit whose body died in its sleep. It has no body to return to
 /// and a limited time awake in which to redeem itself.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Forgotten {
     /// Time spent awake as a forgotten spirit. Dormant time is not counted.
@@ -89,6 +91,7 @@ impl Forgotten {
 }
 
 /// What a bloodline's wound does while it is open.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wounded {
     /// Brine in the blood: they lose health where they would mend.
@@ -98,6 +101,7 @@ pub enum Wounded {
 }
 
 /// One character in the world.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Character {
     name: String,
@@ -144,6 +148,7 @@ pub struct Character {
 }
 
 /// How a new life begins.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Rebirth {
     /// The share of the old life kept before Lineage and ectoplasm.

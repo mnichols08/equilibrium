@@ -21,6 +21,7 @@ use crate::haul::pressure_percent;
 use crate::types::{Health, Place};
 
 /// A name cut in a shrine's stones: someone who faded.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Epitaph {
     /// Who they were.
@@ -32,6 +33,7 @@ pub struct Epitaph {
 }
 
 /// Something worth remembering in a land's history.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Chronicle {
     /// Its house was raised, by its founder.
@@ -61,6 +63,7 @@ pub enum Chronicle {
 }
 
 /// One line of a land's history.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
     /// When.
@@ -70,6 +73,7 @@ pub struct Entry {
 }
 
 /// What the world at large does to every land's deposits this tick.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Weather {
     /// How much of their usual regrowth deposits get, as a percentage.
@@ -80,6 +84,7 @@ pub(crate) struct Weather {
 }
 
 /// One territory of the world, with its own ecology.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Zone {
     /// The first of its places on the world's map.

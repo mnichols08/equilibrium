@@ -11,6 +11,7 @@
 use alloc::vec::Vec;
 
 /// How two lands stand to each other.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pact {
     /// They stand together.
@@ -33,6 +34,7 @@ pub enum Dealing {
 }
 
 /// What came of a dealing.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dealt {
     /// The offer stands until the other side makes the same one.
@@ -48,6 +50,7 @@ pub enum Dealt {
 }
 
 /// Why a dealing came to nothing.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PactRefusal {
     /// Only the founder of a land speaks for it.
@@ -69,6 +72,7 @@ pub enum PactRefusal {
 }
 
 /// Every pact in the world, and every offer waiting for an answer.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pacts {
     /// Each pair of lands with a pact, lower number first.

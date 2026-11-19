@@ -23,6 +23,7 @@
 #![no_std]
 
 /// A value held between a minimum and a maximum, both included.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Meter {
     min: i64,
@@ -99,6 +100,7 @@ const fn clamp(value: i64, min: i64, max: i64) -> i64 {
 }
 
 /// What a meter held before and after an update.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Change {
     /// The value before the update.
