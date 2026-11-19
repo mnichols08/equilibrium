@@ -425,7 +425,8 @@ impl Errand {
             Some(ground) if abroad => ground,
             // A traveller with the price of a guard goes to the board to hire one.
             _ if wants_to_hire(game, bot).is_some() => land.anchor(),
-            _ if worn_out => land.anchor(),
+            // Worn out: home to sleep, under the land's own roof if it has one.
+            _ if worn_out => land.hall().unwrap_or(land.anchor()),
             _ => keep.or_else(|| rounds.get(turn % rounds.len().max(1)).copied()).unwrap_or(land.anchor()),
         };
         if here == goal {
@@ -488,7 +489,8 @@ fn sleep_duty(game: &Game, bot: &Bot, now: Tick) -> Sleep {
     if me.rested() > 0 {
         return Sleep::NotNow;
     }
-    let in_haven = game.place_of(bot.who).is_some_and(|place| place.safety == Safety::Haven);
+    // Their own house is as good as a haven, and keeps it standing.
+    let in_haven = game.place_of(bot.who).is_some_and(|place| place.safety == Safety::Haven) || game.is_sheltered(me);
     let camps = bot.plan.circuit.is_empty() && bot.step >= bot.plan.approach.len();
     // A traveller on the Meeting Ground has nowhere safer to go.
     let settled = bot.plan.traveller && game.meeting_ground() == Some(me.place());

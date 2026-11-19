@@ -39,6 +39,7 @@ use crate::faction::Factions;
 mod behemoth;
 mod blood;
 mod resonance;
+mod ruins;
 mod factions;
 #[cfg(test)]
 mod eras;
@@ -485,6 +486,8 @@ impl Game {
                 }
                 founder.busy_until = now + content::RAISE_TIME;
                 self.zones[zone].hall = Some(here);
+                self.zones[zone].tended_at = now;
+                self.zones[zone].record(now, crate::zone::Chronicle::Raised);
                 // A house stands on ground that could have been worked:
                 // whatever this place gave, it gives no more.
                 if let Some(site) = self.map.place_mut(here) {
@@ -913,6 +916,11 @@ impl Game {
             }
             // Everyone sworn to it hears, wherever they are.
             Event::Faction { members, .. } => members.clone(),
+            // Its land's people hear, wherever they are.
+            Event::HouseRuined { anchor, .. } => {
+                let land = self.zone_index(*anchor);
+                self.characters().filter(|(_, character)| self.land_of(character) == land).map(|(id, _)| id).collect()
+            }
             // Everyone standing in that territory feels it.
             Event::VitalityChanged { anchor, .. } => {
                 let zone = self.zone_at(*anchor);
@@ -1549,9 +1557,12 @@ impl Game {
         self.occupancy.enter(home, who);
         character.be_reborn(home, now, Rebirth { base, favoured, spend_ectoplasm, bloodline });
         character.arrived_at = now;
+        let life = character.life();
+        let land = self.zone_index(home);
+        self.zones[land].record(now, crate::zone::Chronicle::Born { who, life });
         self.dead.retain(|&spirit| spirit != who);
         self.forgotten.retain(|&spirit| spirit != who);
-        character.life()
+        life
     }
 
     /// Settles down. Sleep begins after a short while if nothing disturbs it.
@@ -1675,6 +1686,7 @@ impl Game {
                 self.zones[land].mourn(corruption);
             }
         }
+        self.zones[home].record(now, crate::zone::Chronicle::Died { who, by });
         self.dead.push(who);
         // Cinder Renewal, for an Ash killer and for an Ash who falls.
         if let Cause::Character(killer) = by {
@@ -1982,6 +1994,7 @@ impl Game {
             let epitaph = Epitaph { name: character.name().into(), life: character.life(), at: now };
             let zone = self.zone_index(character.home());
             self.zones[zone].shrine.push(epitaph);
+            self.zones[zone].record(now, crate::zone::Chronicle::Faded { who: id_at(index) });
             let life = self.begin_life(index, now, FADED_CARRYOVER_PERCENT, false);
             events.push(Event::Character { who: id_at(index), outcome: Outcome::Faded { life } });
         }
@@ -2144,6 +2157,7 @@ impl World for Game {
         self.settle_factions(now, events);
         self.tend_behemoth(now, events);
         self.feed_wards(now);
+        self.tend_houses(now, events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {

@@ -52,6 +52,8 @@ pub enum Input {
     Board,
     /// How your faction stands.
     Faction,
+    /// Your land's history.
+    History,
     /// Describe the current place.
     Look,
     /// Examine the deposit here and the zone's health.
@@ -127,6 +129,7 @@ pub fn parse(line: &str) -> Input {
         },
         "board" | "contracts" => Input::Board,
         "faction" | "oath" => Input::Faction,
+        "history" | "chronicle" => Input::History,
         "charter" | "sign" if given.is_empty() => {
             Input::Unknown(alloc::format!("{verb} what? Give the charter's name: \"{verb} Saltward\"."))
         }
@@ -385,6 +388,7 @@ mod tests {
         assert_eq!(parse("forsake"), Input::Do(Action::Forsake));
         assert_eq!(parse("break"), Input::Do(Action::Break));
         assert_eq!(parse("faction"), Input::Faction);
+        assert_eq!(parse("history"), Input::History);
     }
 
     #[test]

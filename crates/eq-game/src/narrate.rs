@@ -88,6 +88,7 @@ Commands:
   break                break the marker of a faction not yours, where you
                        stand: ten minutes, and the land marks you for it
   faction              how your faction stands
+  history              your land's history
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
   stats                show your skills and attributes
   pack (i)             show what you carry
@@ -144,6 +145,9 @@ harder and are slower to leave. Covenant and Lunar in a house ward it,
 for everyone in it, at a cost of the Lunar's ectoplasm. Ash and Nomadic
 in the wild leave it faster, and burn some of what they leave.
 
+A house nobody of its land sets foot in for a week falls to ruin: it
+shelters nobody, and half of what built it lies there for anyone.
+
 A faction is sworn at a house, its keep, by five people of at least
 three bloodlines. Its members are warned when anyone from another land
 walks onto ground it holds, cannot be robbed asleep there, travel out of it twice
@@ -178,6 +182,10 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::Pact { by, with, dealt } => Some(pact_news(game, *by, *with, *dealt)),
         Event::Faction { name, news, .. } => faction_news(game, name, *news, viewer),
         Event::Behemoth { place, news } => Some(behemoth_news(game, *place, *news)),
+        Event::HouseRuined { place, .. } => Some(format!(
+            "Nobody of your land has set foot in its house for a week, and it has fallen to ruin at {}. What is left of it lies there for anyone to take.",
+            place_name(game, *place)
+        )),
         Event::DepositChanged { place, resource, from, to } if *place == here => {
             Some(deposit_changed(*resource, *from, *to))
         }
@@ -1113,6 +1121,38 @@ fn faction_news(game: &Game, faction: &str, news: FactionNews, viewer: Character
             who(by)
         ),
     })
+}
+
+/// The most lines of a land's history the `history` view shows.
+const HISTORY_SHOWN: usize = 20;
+
+/// The latest of the viewer's land's history.
+pub fn history(game: &Game, viewer: CharacterId) -> String {
+    use crate::zone::Chronicle;
+    let Some(character) = game.character(viewer) else { return NOBODY.into() };
+    let land = game.zone_at(character.home());
+    let entries = land.history();
+    if entries.is_empty() {
+        return "Nothing has happened in your land yet that anyone remembers.".into();
+    }
+    let skip = entries.len().saturating_sub(HISTORY_SHOWN);
+    let mut lines = alloc::vec![format!("The history of {}:", land_name(game, land.anchor()))];
+    for entry in &entries[skip..] {
+        let line = match entry.what {
+            Chronicle::Raised => "the house was raised".into(),
+            Chronicle::Ruined => "the house fell to ruin, forgotten".into(),
+            Chronicle::Born { who, life: 1 } => format!("{} was born", name_of(game, who)),
+            Chronicle::Born { who, life } => format!("{} was born again, life {life}", name_of(game, who)),
+            Chronicle::Died { who, by: Cause::Character(killer) } => format!("{} was killed by {}", name_of(game, who), name_of(game, killer)),
+            Chronicle::Died { who, by: Cause::Creature(being) } => {
+                format!("{} was killed by {}", name_of(game, who), being_name(game, being, viewer))
+            }
+            Chronicle::Died { who, by: Cause::LongSleep } => format!("{} slept too long and did not wake", name_of(game, who)),
+            Chronicle::Faded { who } => format!("{} faded, and their name is on the shrine", name_of(game, who)),
+        };
+        lines.push(format!("  {}: {line}", clock(entry.at)));
+    }
+    lines.join("\n")
 }
 
 /// How a faction stands, as one of its members sees it.
