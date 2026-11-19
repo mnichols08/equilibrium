@@ -441,7 +441,7 @@ impl Errand {
         let passable = |place: PlaceId| {
             abroad || away || to_keep_abroad || game.map().place(place).is_some_and(|data| data.lair.is_none())
         };
-        let safe = |exit: &eq_world_graph::Exit| exit.passage.is_open(now) && (exit.to == goal || passable(exit.to));
+        let safe = |exit: &eq_world_graph::Exit| game.is_passable(&exit.passage, now) && (exit.to == goal || passable(exit.to));
         Some(game.map().first_step(here, goal, safe).map_or(Self::Blocked, |exit| Self::step(game, me, exit)))
     }
 
@@ -640,7 +640,7 @@ fn escort_errand(game: &Game, who: CharacterId, now: Tick) -> Option<Errand> {
         false if here == job.to || client_at != here => return Some(Errand::Arrived { stays: true }),
         false => job.to,
     };
-    let open = |exit: &eq_world_graph::Exit| exit.passage.is_open(now);
+    let open = |exit: &eq_world_graph::Exit| game.is_passable(&exit.passage, now);
     let me = game.character(who)?;
     Some(game.map().first_step(here, goal, open).map_or(Errand::Blocked, |exit| Errand::step(game, me, exit)))
 }
