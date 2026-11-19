@@ -389,6 +389,24 @@ pub const NOMADIC_TRAVEL_PERCENT: u64 = 80;
 /// stops mending them any faster than the wild.
 pub const RESTLESS_AFTER: Duration = Duration::minutes(5);
 
+/// Silt-Forming: how hard the blows of the Tidal and the Stone land
+/// where they stand together, in percent.
+pub const SILT_PERCENT: u32 = 115;
+
+/// Silt-Forming: how long the way out takes them, in percent.
+pub const SILT_SLOWS_PERCENT: u64 = 150;
+
+/// Wildfire Trail: how long the way out of the wild takes the Ash and
+/// the Nomadic together, in percent.
+pub const WILDFIRE_TRAVEL_PERCENT: u64 = 67;
+
+/// Wildfire Trail: how much of the deposit they leave behind burns, in
+/// percent of its stock.
+pub const WILDFIRE_SCORCH_PERCENT: u32 = 5;
+
+/// Glyph Ward: how often it takes one ectoplasm from a Lunar in it.
+pub const GLYPH_WARD_FEEDS_EVERY: Duration = Duration::minutes(1);
+
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 

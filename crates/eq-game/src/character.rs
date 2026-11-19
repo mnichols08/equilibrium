@@ -363,6 +363,11 @@ impl Character {
         self.health.adjust(points);
     }
 
+    /// Spends `amount` of the ectoplasm they hold, as far as it goes.
+    pub(crate) fn spend_ectoplasm(&mut self, amount: u64) {
+        self.ectoplasm = self.ectoplasm.saturating_sub(amount);
+    }
+
     /// Scatters `percent` of the ectoplasm they hold.
     pub(crate) fn scatter_ectoplasm(&mut self, percent: u64) {
         self.ectoplasm -= self.ectoplasm * percent / 100;
