@@ -312,6 +312,40 @@ pub const HOUSE_COST: [(Resource, u64); 2] = [(Resource::Driftwood, 40), (Resour
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 
+/// How many must sign a charter before it becomes a faction.
+pub const CHARTER_SIGNATORIES: usize = 5;
+
+/// How many different bloodlines must be among those who sign it.
+pub const CHARTER_BLOODLINES: usize = 3;
+
+/// How long signing a charter, or giving to a vault, takes.
+pub const SIGN_TIME: Duration = Duration::seconds(10);
+
+/// What a boundary marker costs the vault to set.
+pub const MARKER_COST: (Resource, u64) = (Resource::Ore, 20);
+
+/// How long setting a boundary marker takes.
+pub const CLAIM_TIME: Duration = Duration::minutes(1);
+
+/// What each marker costs the vault, every [`UPKEEP_EVERY`]. A vault
+/// that cannot pay for all of them ends the faction.
+pub const UPKEEP_PER_CLAIM: (Resource, u64) = (Resource::Ore, 10);
+
+/// How often a faction's vault pays for its markers.
+pub const UPKEEP_EVERY: Duration = Duration::days(1);
+
+/// How long breaking a marker takes. The breaker is marked by the land
+/// the moment they begin, and every member is warned.
+pub const BREAK_TIME: Duration = Duration::minutes(10);
+
+/// How long an oathbreaker waits before anyone will take their oath
+/// again, and those they turned their back on may strike them.
+pub const OATHBREAKER_LASTS: Duration = Duration::days(7);
+
+/// How much of the vault spills at the keep when a faction ends. The
+/// rest is lost.
+pub const VAULT_SPILLS_PERCENT: u64 = 50;
+
 /// The health of a shade: what a spirit can fight for practice where
 /// the living do not work. Another takes its place as it falls.
 pub const SHADE_HEALTH: u32 = 40;

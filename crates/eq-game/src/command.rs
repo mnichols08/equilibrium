@@ -112,6 +112,23 @@ pub enum Action {
     Withdraw(ContractId),
     /// At the board, take what your accepted contracts earned.
     Collect,
+    /// At a house, open a charter of this name and sign it first. It
+    /// becomes a faction once enough of enough bloodlines have signed.
+    Charter(String),
+    /// At its keep, sign the charter of this name: before it is formed
+    /// as one of its signatories, after as a member.
+    Sign(String),
+    /// At your faction's keep, put this into its vault.
+    Give(Lot),
+    /// Set your faction's boundary marker where you stand. The vault
+    /// pays for it, and for its upkeep every day.
+    Claim,
+    /// Break your oath to your faction, or take back your signature
+    /// from a charter not yet formed.
+    Forsake,
+    /// Break the marker of a faction you are not sworn to, where you
+    /// stand. It takes time, and marks you from the start.
+    Break,
 }
 
 /// An action and the character asked to take it.
@@ -194,6 +211,36 @@ impl Command {
     /// `who`, a founder, names their land.
     pub fn name_land(who: CharacterId, name: &str) -> Self {
         Self { who, action: Action::NameLand(name.into()) }
+    }
+
+    /// `who` opens a charter called `name`.
+    pub fn charter(who: CharacterId, name: &str) -> Self {
+        Self { who, action: Action::Charter(name.into()) }
+    }
+
+    /// `who` signs the charter called `name`.
+    pub fn sign(who: CharacterId, name: &str) -> Self {
+        Self { who, action: Action::Sign(name.into()) }
+    }
+
+    /// `who` puts `lot` into their faction's vault.
+    pub const fn give(who: CharacterId, lot: Lot) -> Self {
+        Self { who, action: Action::Give(lot) }
+    }
+
+    /// `who` sets their faction's marker where they stand.
+    pub const fn claim(who: CharacterId) -> Self {
+        Self { who, action: Action::Claim }
+    }
+
+    /// `who` breaks their oath.
+    pub const fn forsake(who: CharacterId) -> Self {
+        Self { who, action: Action::Forsake }
+    }
+
+    /// `who` sets to breaking the marker where they stand.
+    pub const fn break_marker(who: CharacterId) -> Self {
+        Self { who, action: Action::Break }
     }
 
     /// `who`, a founder, names their house.

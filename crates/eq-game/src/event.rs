@@ -12,6 +12,7 @@ use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefus
 use crate::balance::Mood;
 use crate::creature::Being;
 use crate::era::Era;
+use crate::faction::{FactionNews, FactionRefusal};
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::spirit::SpiritTier;
 use crate::types::{Attribute, Cause, Health, Passing, Resource, SkillKind, Standing};
@@ -511,6 +512,55 @@ pub enum Outcome {
         /// Their standing now.
         to: Standing,
     },
+    /// A charter, an oath or a marker could not be dealt with.
+    CannotSwear {
+        /// Why not.
+        why: FactionRefusal,
+    },
+    /// They opened a charter here and signed it first.
+    CharterOpened {
+        /// What it is called.
+        name: String,
+    },
+    /// They signed a charter: as one of its signatories while it is
+    /// unformed, as a member once it is.
+    Signed {
+        /// What it is called.
+        name: String,
+        /// How many have signed it before it was formed, them included.
+        signatories: usize,
+        /// How many bloodlines are among them.
+        bloodlines: usize,
+    },
+    /// They put this into their faction's vault.
+    Gave {
+        /// What.
+        lot: Lot,
+    },
+    /// They set their faction's marker where they stand.
+    Claimed,
+    /// They broke their oath, or took back their signature.
+    Forsook {
+        /// What they turned their back on.
+        name: String,
+        /// Whether it had been formed: only a formed faction makes an
+        /// oathbreaker.
+        formed: bool,
+    },
+    /// They set to breaking a faction's marker.
+    BeganBreaking {
+        /// Whose.
+        faction: String,
+        /// When it will give, if they are still at it.
+        done_at: Tick,
+    },
+    /// They broke a faction's marker, and the ore that went into it is theirs.
+    BrokeMarker {
+        /// Whose it was.
+        faction: String,
+        /// What came out of it.
+        spoils: Lot,
+    },
 }
 
 /// Something that happened in the world.
@@ -550,6 +600,16 @@ pub enum Event {
     },
     /// A storm tore at everything that can be worked. Everyone feels it.
     Storm,
+    /// Something happened to a faction. Everyone sworn to it hears,
+    /// wherever they are.
+    Faction {
+        /// What it is called.
+        name: String,
+        /// Who was sworn to it when it happened.
+        members: alloc::vec::Vec<CharacterId>,
+        /// What happened.
+        news: FactionNews,
+    },
     /// A command named a character who does not exist.
     UnknownCharacter {
         /// The id that was asked for.

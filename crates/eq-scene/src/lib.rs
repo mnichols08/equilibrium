@@ -140,6 +140,8 @@ pub struct PlaceView {
     pub hall: bool,
     /// The names of those buried here.
     pub graves: Vec<String>,
+    /// The faction whose marker stands here, if any.
+    pub held_by: Option<String>,
     /// Whether the viewer is here.
     pub here: bool,
     /// What can be gathered here, if anything.
@@ -394,6 +396,7 @@ fn places(game: &Game, viewer: CharacterId, here: PlaceId, now: Tick) -> Vec<Pla
             people: people(game, viewer, id, now),
             hall: game.zone_at(id).hall() == Some(id),
             graves: game.graves_at(id).filter_map(|grave| game.character(grave.owner)).map(|owner| owner.name().to_owned()).collect(),
+            held_by: game.factions().holding(id).map(|faction| faction.name.clone()),
             bodies: game.bodies_at(id).map(|(_, body)| body.name().to_owned()).collect(),
             spoils: game.relics_at(id).next().is_some(),
             creatures: game.creatures_at(id).map(|creature| foe_view(game, creature)).collect(),
