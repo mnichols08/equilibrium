@@ -1268,7 +1268,11 @@ impl Game {
             return outcomes.push(Outcome::CannotTend { target, why });
         }
         let Some(sleeper) = self.index_of(target) else { return };
-        let vigil = self.characters[sleeper].tend(VIGIL_PER_TENDING, MOST_VIGIL);
+        // Kin keep the better vigil: someone of the sleeper's own land
+        // buys them twice what a stranger does.
+        let kin = self.land_of(&self.characters[index]) == self.land_of(&self.characters[sleeper]);
+        let more = Duration::ticks(VIGIL_PER_TENDING.as_ticks() * if kin { content::KIN_VIGIL_TIMES } else { 1 });
+        let vigil = self.characters[sleeper].tend(more, MOST_VIGIL);
         self.characters[index].busy_until = now + TEND_TIME;
         outcomes.push(Outcome::Tended { target, vigil });
     }
@@ -3753,7 +3757,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tended_sleeper_outlasts_the_long_sleep_by_a_day_for_each_tending() {
+    fn a_tended_sleeper_outlasts_the_long_sleep_by_two_days_for_each_tending_by_kin() {
         let mut game = Game::new(1, &["Ash", "Bryn"]);
         let mut events = Vec::new();
         game.apply(&Command::tend(BRYN, ASH), Tick::new(0), &mut events);
@@ -3765,13 +3769,13 @@ mod tests {
         let asleep = SETTLE_TIME.as_ticks();
         game.apply(&Command::tend(BRYN, ASH), Tick::new(asleep), &mut events);
         game.apply(&Command::tend(BRYN, ASH), Tick::new(asleep + TEND_TIME.as_ticks()), &mut events);
-        assert_eq!(outcome(&events), Some(&Outcome::Tended { target: ASH, vigil: Duration::days(2) }));
+        assert_eq!(outcome(&events), Some(&Outcome::Tended { target: ASH, vigil: Duration::days(4) }));
 
-        // Fourteen days would have killed Ash. Sixteen do.
+        // Fourteen days would have killed Ash. Eighteen do.
         let untended = asleep + LONG_SLEEP.as_ticks() + 120;
         ticks(&mut game, 1, untended);
         assert!(game.character(ASH).unwrap().is_asleep(Tick::new(untended)));
-        ticks(&mut game, untended + 1, untended + Duration::days(2).as_ticks());
+        ticks(&mut game, untended + 1, untended + Duration::days(4).as_ticks());
         assert!(game.character(ASH).unwrap().forgotten().is_some());
     }
 

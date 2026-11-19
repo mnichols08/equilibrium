@@ -153,6 +153,10 @@ pub const VIGIL_PER_TENDING: Duration = Duration::days(1);
 /// is looked after lasts four weeks, not two.
 pub const MOST_VIGIL: Duration = Duration::days(14);
 
+/// How many times over a tending by someone of the sleeper's own land
+/// counts.
+pub const KIN_VIGIL_TIMES: u64 = 2;
+
 /// How long it takes to bury a body.
 pub const BURY_TIME: Duration = Duration::minutes(1);
 

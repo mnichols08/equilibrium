@@ -152,3 +152,30 @@ fn in_the_void_the_veil_is_thin_the_dead_are_seen_and_learn_fast_and_the_land_pa
     assert_eq!(learned_in_void, learned * 2, "practice counts double");
     assert_eq!(taken_in_void, crate::content::VOID_DRAW_TAKES, "and the land pays for it");
 }
+
+#[test]
+fn kin_keep_a_better_vigil_than_strangers() {
+    use crate::content::{SETTLE_TIME, TEND_TIME};
+    use crate::Outcome;
+    use eq_clock::Duration;
+    // Cole is Ash's kin; Bryn is of another land.
+    let mut game = two_lands();
+    let haven = game.character(ASH).unwrap().home();
+    for who in [ASH, BRYN, COLE] {
+        put(&mut game, who, haven);
+    }
+    let mut events = Vec::new();
+    game.apply(&Command::rest(ASH), Tick::ZERO, &mut events);
+    let asleep = SETTLE_TIME.as_ticks();
+    let tended = |events: &[Event]| {
+        events.iter().rev().find_map(|event| match event {
+            Event::Character { outcome: Outcome::Tended { vigil, .. }, .. } => Some(*vigil),
+            _ => None,
+        })
+    };
+    let mut events = Vec::new();
+    game.apply(&Command::tend(BRYN, ASH), Tick::new(asleep), &mut events);
+    assert_eq!(tended(&events), Some(Duration::days(1)), "a stranger: a day");
+    game.apply(&Command::tend(COLE, ASH), Tick::new(asleep + TEND_TIME.as_ticks()), &mut events);
+    assert_eq!(tended(&events), Some(Duration::days(3)), "kin: two more");
+}

@@ -66,6 +66,7 @@ Commands:
   rite                 begin a Restoration Rite over the deposit here, or
                        answer one someone else has begun
   tend <name>          look after someone asleep here, so they last longer
+                       (a day each time, two from their own land's people)
   board                at camp, read the Contract Board and its bounties
   hire 40 ore to <land>   at camp, pay to be seen safely to another land,
                        or: hire 40 ore to ground (the Meeting Ground)
