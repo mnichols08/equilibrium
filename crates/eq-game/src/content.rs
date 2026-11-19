@@ -347,6 +347,48 @@ pub const BEHEMOTH_FEEDS_PERCENT: i64 = 10;
 /// How much tide-glass it leaves when it falls.
 pub const BEHEMOTH_SHARDS: u64 = 100;
 
+/// A blow that takes this much or more is a heavy one, and opens a
+/// bloodline's wound.
+pub const HEAVY_BLOW: u32 = 20;
+
+/// Tidal, Ebb and Flow: how hard their blows land while the tide is in,
+/// in percent.
+pub const TIDAL_HIGH_TIDE_PERCENT: u32 = 115;
+
+/// Tidal, Brine Corruption: how long a heavy blow leaves them bleeding.
+pub const BLEED_LASTS: Duration = Duration::minutes(1);
+
+/// Covenant, Structural Integrity: how hard blows land on them in a
+/// house, in percent.
+pub const COVENANT_IN_HOUSE_PERCENT: u32 = 90;
+
+/// Covenant, Petrifying Stasis: at or below this health their limbs
+/// stiffen and every way takes twice as long.
+pub const STASIS_AT_HEALTH: u32 = 20;
+
+/// Ash, Cinder Renewal: how much of what they are missing allies mend
+/// when one of the Ash line kills or is killed beside them, in percent.
+pub const CINDER_RENEWAL_PERCENT: u32 = 8;
+
+/// Stone, Earthen Mass: their blows count this share of their
+/// Resilience as Vigor (one part in this many).
+pub const EARTHEN_MASS_DIVISOR: u32 = 4;
+
+/// Stone, Fissure Cracks: how long a heavy blow stops all mending.
+pub const CRACKS_LAST: Duration = Duration::minutes(2);
+
+/// Lunar, Fragile Focus: how much of their ectoplasm a heavy blow
+/// scatters, in percent.
+pub const FRAGILE_FOCUS_PERCENT: u64 = 20;
+
+/// Nomadic, Endless Horizon: how long a way out of the wild takes them,
+/// in percent of the usual.
+pub const NOMADIC_TRAVEL_PERCENT: u64 = 80;
+
+/// Nomadic, Restless Soul: how long they can stay in a haven before it
+/// stops mending them any faster than the wild.
+pub const RESTLESS_AFTER: Duration = Duration::minutes(5);
+
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 

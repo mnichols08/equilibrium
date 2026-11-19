@@ -131,6 +131,14 @@ eases, it is brought back to half full, and for fifteen minutes it is
 warded: it yields only while it is
 pristine and at least half full. The land will not answer the marked.
 
+Every bloodline has a gift and a wound (stats says which). The Tidal
+strike harder at high tide and bleed after a heavy blow; the Covenant
+take less in a house and stiffen near death; the Ash mend their allies
+when they kill or fall and tire fast; the Stone hit with their
+Resilience and crack under heavy blows; the Lunar see spirits and lose
+ectoplasm to heavy blows; the Nomadic leave the wild quickly and tire
+of havens.
+
 A faction is sworn at a house, its keep, by five people of at least
 three bloodlines. Its members are warned when anyone from another land
 walks onto ground it holds, cannot be robbed asleep there, travel out of it twice
@@ -757,6 +765,9 @@ pub fn stats(game: &Game, viewer: CharacterId) -> String {
         first.name(),
         second.name(),
     ));
+    let ((gift, gives), (wound, costs)) = (character.bloodline().passive(), character.bloodline().wound());
+    lines.push(format!("Gift         {gift}: {gives}"));
+    lines.push(format!("Wound        {wound}: {costs}"));
     lines.push(format!("Life         {:>3}{began}", character.life()));
     lines.push(format!("Ectoplasm    {:>3}  ({})", character.ectoplasm(), character.spirit_tier().name()));
     lines.push(format!("Health       {:>3}", character.health()));

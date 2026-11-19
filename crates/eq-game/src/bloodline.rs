@@ -64,6 +64,30 @@ impl Bloodline {
         }
     }
 
+    /// What it is gifted with: a name and what it does.
+    pub const fn passive(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Tidal => ("Ebb and Flow", "blows land 15% harder while the tide is in"),
+            Self::Covenant => ("Structural Integrity", "blows land 10% softer on them in any house"),
+            Self::Ash => ("Cinder Renewal", "when they kill or are killed, allies standing by mend 8% of what they are missing"),
+            Self::Stone => ("Earthen Mass", "a quarter of their Resilience goes into every blow"),
+            Self::Lunar => ("Lunar Sight", "alive, they see spirits"),
+            Self::Nomadic => ("Endless Horizon", "every way out of the wild takes them a fifth less time"),
+        }
+    }
+
+    /// What it is wounded by: a name and what it does.
+    pub const fn wound(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Tidal => ("Brine Corruption", "a heavy blow leaves them bleeding for a minute instead of mending"),
+            Self::Covenant => ("Petrifying Stasis", "at 20 health or less every way takes them twice as long"),
+            Self::Ash => ("Ashen Lungs", "the rested bonus burns away half again as fast"),
+            Self::Stone => ("Fissure Cracks", "a heavy blow stops all mending for two minutes"),
+            Self::Lunar => ("Fragile Focus", "a heavy blow scatters a fifth of their ectoplasm"),
+            Self::Nomadic => ("Restless Soul", "after five minutes in a haven it mends them no faster than the wild"),
+        }
+    }
+
     /// Whether those born to it learn `attribute` faster.
     pub fn leans_to(self, attribute: Attribute) -> bool {
         self.leanings().contains(&attribute)

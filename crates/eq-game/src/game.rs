@@ -37,6 +37,7 @@ use crate::zone::{Epitaph, Weather, Zone};
 use crate::faction::Factions;
 
 mod behemoth;
+mod blood;
 mod factions;
 #[cfg(test)]
 mod eras;
@@ -191,7 +192,7 @@ impl Game {
 
     /// Brings a newcomer into the world at the anchor, if the command
     /// was for the next free id.
-    fn join(&mut self, who: CharacterId, name: &str, events: &mut Vec<Event>) {
+    fn join(&mut self, who: CharacterId, name: &str, now: Tick, events: &mut Vec<Event>) {
         if who != self.next_id() {
             return events.push(Event::UnknownCharacter { who });
         }
@@ -205,6 +206,7 @@ impl Game {
         let anchor = self.river.filter(|_| unborn).unwrap_or_else(|| self.zones[zone].anchor());
         let mut newcomer = Character::new(name, anchor);
         newcomer.bloodline = self.zones[zone].bloodline();
+        newcomer.arrived_at = now;
         if unborn {
             newcomer.be_unborn();
             self.forgotten.push(who);
@@ -793,7 +795,7 @@ impl Game {
     /// spirits see everyone.
     pub fn can_see(&self, viewer: CharacterId, other: CharacterId) -> bool {
         let is_spirit = |who| self.character(who).is_some_and(Character::is_spirit);
-        viewer == other || !is_spirit(other) || is_spirit(viewer)
+        viewer == other || !is_spirit(other) || is_spirit(viewer) || self.lunar_sight(viewer)
     }
 
     /// The first territory.
@@ -1545,6 +1547,7 @@ impl Game {
         self.occupancy.leave(character.place(), who);
         self.occupancy.enter(home, who);
         character.be_reborn(home, now, Rebirth { base, favoured, spend_ectoplasm, bloodline });
+        character.arrived_at = now;
         self.dead.retain(|&spirit| spirit != who);
         self.forgotten.retain(|&spirit| spirit != who);
         character.life()
@@ -1598,7 +1601,7 @@ impl Game {
         self.characters[index].busy_until = now + ATTACK_TIME;
 
         let caught_lying = self.characters[victim].is_lying_down();
-        let (damage, health) = self.strike(index, victim);
+        let (damage, health) = self.strike(index, victim, now);
         outcomes.push(Outcome::Struck { target, damage });
         self.characters[index].learn_from_blow(self.era.fighting_xp_percent(), outcomes);
         events.push(Event::Character { who: target, outcome: Outcome::Hurt { by: attacker, damage, health } });
@@ -1614,7 +1617,7 @@ impl Game {
             return;
         }
 
-        let (damage, health) = self.strike(victim, index);
+        let (damage, health) = self.strike(victim, index, now);
         events.push(Event::Character { who: target, outcome: Outcome::Struck { target: attacker, damage } });
         outcomes.push(Outcome::Hurt { by: target, damage, health });
         if health == 0 {
@@ -1623,18 +1626,20 @@ impl Game {
     }
 
     /// Lands one blow and returns the damage done and the health left.
-    fn strike(&mut self, striker: usize, struck: usize) -> (u32, u32) {
+    fn strike(&mut self, striker: usize, struck: usize, now: Tick) -> (u32, u32) {
         // DAMAGE_SPREAD is tiny, so the cast cannot truncate.
         let roll = self.rng.below(DAMAGE_SPREAD) as u32;
         let blow = Blow {
             roll,
-            vigor: self.characters[striker].attribute(Attribute::Vigor).level(),
+            vigor: self.striking_vigor(striker),
             fighting: self.characters[striker].skill(SkillKind::Fighting).level(),
             taint: self.characters[striker].taint(),
             resilience: self.characters[struck].attribute(Attribute::Resilience).level(),
         };
-        let damage = blow.damage();
-        (damage, self.characters[struck].hurt(damage))
+        let damage = self.landing(Some(striker), Some(struck), blow.damage(), now);
+        let health = self.characters[struck].hurt(damage);
+        self.after_blow(struck, damage, now);
+        (damage, health)
     }
 
     /// Kills a character. The body stays where it fell with everything
@@ -1670,6 +1675,11 @@ impl Game {
             }
         }
         self.dead.push(who);
+        // Cinder Renewal, for an Ash killer and for an Ash who falls.
+        if let Cause::Character(killer) = by {
+            self.cinder_renewal(killer, body);
+        }
+        self.cinder_renewal(who, body);
         self.pay_bounties(who, by, innocent, events);
         events.push(Event::Character { who, outcome: Outcome::Died { by, place: body, passing, lost_at } });
         events.extend(cleansed.map(|outcome| Event::Character { who, outcome }));
@@ -1738,10 +1748,13 @@ impl Game {
         let roll = self.rng.below(DAMAGE_SPREAD) as u32;
         let striker = &mut self.characters[index];
         striker.busy_until = now + ATTACK_TIME;
+        let vigor = self.striking_vigor(index);
+        let tidal = self.landing(Some(index), None, 100, now);
+        let striker = &mut self.characters[index];
         let creature = &mut self.creatures[slot];
         let blow = Blow {
             roll,
-            vigor: striker.attribute(Attribute::Vigor).level(),
+            vigor,
             fighting: striker.skill(SkillKind::Fighting).level(),
             taint: striker.taint(),
             resilience: creature.resilience,
@@ -1749,7 +1762,7 @@ impl Game {
         striker.learn_from_blow(self.era.fighting_xp_percent(), outcomes);
         // Only many bloodlines together can bring the Behemoth down.
         let landing = if creature.being.kind == CreatureKind::Behemoth { creature.share_landing(striker.bloodline(), now) } else { 100 };
-        let (damage, left) = creature.hurt(blow.damage() * landing / 100);
+        let (damage, left) = creature.hurt(blow.damage() * tidal / 100 * landing / 100);
         creature.provoke(who);
         let being = creature.being;
         outcomes.push(Outcome::HitCreature { being, damage, left });
@@ -1809,9 +1822,12 @@ impl Game {
                 taint: 0,
                 resilience: struck.attribute(Attribute::Resilience).level(),
             };
-            let (being, damage) = (creature.being, blow.damage());
+            let being = creature.being;
+            let damage = self.landing(None, Some(victim), blow.damage(), now);
+            let struck = &mut self.characters[victim];
             let caught_lying = struck.is_lying_down();
             let health = struck.hurt(damage);
+            self.after_blow(victim, damage, now);
             events.push(Event::Character { who: id_at(victim), outcome: Outcome::Mauled { by: being, damage, health } });
             self.rouse(victim, now, events);
             if health == 0 {
@@ -1889,8 +1905,13 @@ impl Game {
             return;
         }
         let up_and_about = |character: &&mut Character| !character.is_lying_down() && !character.is_spirit();
+        // Ashen Lungs: the Ash line burn through rest half again as fast.
+        let ashen = (now.get() / every).is_multiple_of(2);
         for character in self.characters.iter_mut().filter(up_and_about) {
             character.tire();
+            if ashen && character.bloodline() == crate::bloodline::Bloodline::Ash {
+                character.tire();
+            }
         }
     }
 
@@ -1900,11 +1921,14 @@ impl Game {
         if !now.get().is_multiple_of(HEALTH_MENDS_EVERY.as_ticks()) {
             return;
         }
-        let map = &self.map;
-        for character in self.characters.iter_mut().filter(|character| !character.is_spirit()) {
-            let in_haven = map.place(character.place()).is_some_and(|place| place.safety == Safety::Haven);
-            let mending_well = in_haven || character.is_asleep(now);
-            character.mend(if mending_well { HAVEN_MENDING } else { MENDING });
+        for index in 0..self.characters.len() {
+            if self.characters[index].is_spirit() {
+                continue;
+            }
+            let in_haven = self.map.place(self.characters[index].place()).is_some_and(|place| place.safety == Safety::Haven);
+            let mending_well = in_haven || self.characters[index].is_asleep(now);
+            let points = self.mending(index, if mending_well { HAVEN_MENDING } else { MENDING }, in_haven, now);
+            self.characters[index].mend(points);
         }
     }
 
@@ -2007,8 +2031,11 @@ impl Game {
         } else {
             1
         };
+        let blood = if arrives_living { self.travel_percent(index, from) } else { 100 };
+        let character = &mut self.characters[index];
         character.place = exit.to;
-        character.busy_until = now + Duration::ticks(TRAVEL_TIME.as_ticks() / pace);
+        character.arrived_at = now;
+        character.busy_until = now + Duration::ticks(TRAVEL_TIME.as_ticks() / pace * blood / 100);
         // Whatever lives there needs a moment to notice a newcomer.
         if arrives_living {
             let noticed_at = now + TRAVEL_TIME + CREATURE_BLOW_EVERY;
@@ -2117,7 +2144,7 @@ impl World for Game {
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
         let who = command.who;
         if let Action::Join(name) = &command.action {
-            return self.join(who, name, events);
+            return self.join(who, name, now, events);
         }
         let Some(index) = self.index_of(who) else {
             events.push(Event::UnknownCharacter { who });
