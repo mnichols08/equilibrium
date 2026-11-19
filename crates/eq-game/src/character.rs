@@ -88,6 +88,15 @@ impl Forgotten {
     }
 }
 
+/// What a bloodline's wound does while it is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wounded {
+    /// Brine in the blood: they lose health where they would mend.
+    Bleeding,
+    /// Cracked like stone: they do not mend at all.
+    Cracked,
+}
+
 /// One character in the world.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Character {
@@ -105,6 +114,10 @@ pub struct Character {
     taint: Meter,
     /// Where they have been gathering lately, and how worked out they are there.
     pub(crate) worked: crate::worked::Worked,
+    /// A bloodline's wound, opened by a heavy blow, and when it closes.
+    pub(crate) wound: Option<(Wounded, Tick)>,
+    /// When they came to where they stand.
+    pub(crate) arrived_at: Tick,
     health: Meter,
     death: Option<Death>,
     forgotten: Option<Forgotten>,
@@ -161,6 +174,8 @@ impl Character {
             pack: [0; Resource::ALL.len()],
             taint: Meter::empty(0, 100),
             worked: crate::worked::Worked::new(),
+            wound: None,
+            arrived_at: Tick::ZERO,
             health: Meter::full(0, MAX_HEALTH),
             death: None,
             forgotten: None,
@@ -346,6 +361,11 @@ impl Character {
     /// Restores up to `points` of health.
     pub(crate) fn mend(&mut self, points: i64) {
         self.health.adjust(points);
+    }
+
+    /// Scatters `percent` of the ectoplasm they hold.
+    pub(crate) fn scatter_ectoplasm(&mut self, percent: u64) {
+        self.ectoplasm -= self.ectoplasm * percent / 100;
     }
 
     /// Dies, dropping everything carried and paying off all taint.
@@ -564,6 +584,12 @@ impl Character {
     /// An attribute's progress.
     pub const fn attribute(&self, attribute: Attribute) -> &Proficiency {
         &self.attributes[attribute.index()]
+    }
+
+    /// Sets the ectoplasm held, for tests.
+    #[cfg(test)]
+    pub(crate) fn ectoplasm_for_test(&mut self, ectoplasm: u64) {
+        self.ectoplasm = ectoplasm;
     }
 
     /// Sets health, for tests.

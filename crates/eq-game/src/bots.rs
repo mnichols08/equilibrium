@@ -414,7 +414,13 @@ impl Errand {
         let worn_out = me.rested() == 0;
         // A keep to sign at, or to carry ore to.
         let keep = faction_errand(game, bot);
+        // While the Behemoth walks its land, a bot shelters in the haven,
+        // where it cannot come.
+        let beast_at_home = land.place_ids().any(|place| {
+            game.creatures_at(place).any(|creature| creature.being.kind == crate::CreatureKind::Behemoth)
+        });
         let goal = match game.meeting_ground() {
+            _ if beast_at_home && land.contains(here) => land.anchor(),
             // A founder with dealings to make, and the strength for the pass, goes out.
             Some(ground) if abroad => ground,
             // A traveller with the price of a guard goes to the board to hire one.
@@ -443,7 +449,9 @@ impl Errand {
     /// stands where it is and mends first.
     fn step(game: &Game, me: &Character, exit: &eq_world_graph::Exit) -> Self {
         let barred = game.creatures_at(exit.to).any(|creature| creature.being.kind.is_aggressive());
-        if barred && me.health() < HEALTH_TO_GO_IN {
+        // Nobody walks in on the Behemoth: it moves on in its own time.
+        let behemoth = game.creatures_at(exit.to).any(|creature| creature.being.kind == crate::CreatureKind::Behemoth);
+        if behemoth || (barred && me.health() < HEALTH_TO_GO_IN) {
             Self::Arrived { stays: true }
         } else {
             Self::Go(exit.label.clone())
