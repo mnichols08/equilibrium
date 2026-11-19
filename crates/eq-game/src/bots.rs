@@ -17,6 +17,9 @@ use eq_world_graph::PlaceId;
 use crate::content::{CIRCUIT, DEPOSIT_ROUTES, FULL_REST, MIN_WORKABLE_STOCK};
 use crate::{Character, CharacterId, Command, Event, Game, Outcome, Safety, Standing};
 
+mod factions;
+use factions::{faction_duty, faction_errand};
+
 /// A warden with less health than this leaves fighting to others.
 const HEALTH_TO_FIGHT: u32 = 40;
 
@@ -288,6 +291,7 @@ impl Bots {
             Sleep::NotNow => beast_duty(world, bot)
                 .or_else(|| founder_duty(world, bot))
                 .or_else(|| enemy_duty(world, bot))
+                .or_else(|| faction_duty(world, bot))
                 .or_else(|| burial_duty(world, bot))
                 .or_else(|| escort_duty(world, bot))
                 .or_else(|| board_duty(world, bot))
@@ -393,13 +397,15 @@ impl Errand {
         // Each camper has its own spot; a roamer's moves on with its steps.
         let turn = if camps { bot.who.get() as usize } else { bot.step };
         let worn_out = me.rested() == 0;
+        // A keep to sign at, or to carry ore to.
+        let keep = faction_errand(game, bot);
         let goal = match game.meeting_ground() {
             // A founder with dealings to make, and the strength for the pass, goes out.
             Some(ground) if abroad => ground,
             // A traveller with the price of a guard goes to the board to hire one.
             _ if wants_to_hire(game, bot).is_some() => land.anchor(),
-            _ if worn_out || rounds.is_empty() => land.anchor(),
-            _ => rounds[turn % rounds.len()],
+            _ if worn_out => land.anchor(),
+            _ => keep.or_else(|| rounds.get(turn % rounds.len().max(1)).copied()).unwrap_or(land.anchor()),
         };
         if here == goal {
             return Some(Self::Arrived { stays: camps || rounds.is_empty() });
@@ -408,7 +414,11 @@ impl Errand {
         // bot is on its way out and strong enough to fight its way through.
         // The same goes for coming home again.
         let away = !land.contains(here) && strong_enough(me);
-        let passable = |place: PlaceId| abroad || away || game.map().place(place).is_some_and(|data| data.lair.is_none());
+        // Only the strong are ever sent to a keep in another land.
+        let to_keep_abroad = keep.is_some_and(|keep| keep == goal && !land.contains(keep));
+        let passable = |place: PlaceId| {
+            abroad || away || to_keep_abroad || game.map().place(place).is_some_and(|data| data.lair.is_none())
+        };
         let safe = |exit: &eq_world_graph::Exit| exit.passage.is_open(now) && (exit.to == goal || passable(exit.to));
         Some(game.map().first_step(here, goal, safe).map_or(Self::Blocked, |exit| Self::step(game, me, exit)))
     }

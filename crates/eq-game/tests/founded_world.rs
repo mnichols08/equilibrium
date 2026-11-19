@@ -9,6 +9,7 @@
 use eq_clock::Tick;
 use eq_events::Session;
 use eq_game::bots::{Bots, Plan, Policy, Stance};
+use eq_game::faction::FactionNews;
 use eq_game::pact::Pact;
 use eq_game::{CharacterId, Command, Event, Game, Outcome};
 
@@ -38,6 +39,7 @@ struct Report {
     /// How many times each character died, in the order they joined.
     died: [usize; 12],
     news: Vec<String>,
+    factions: FactionCount,
 }
 
 fn play(seed: u64, days: u64) -> Report {
@@ -69,6 +71,7 @@ fn play(seed: u64, days: u64) -> Report {
     // Wanted, taken, paid.
     let mut escorts = (0, 0, 0);
     let mut burials = 0;
+    let mut factions = FactionCount::default();
     let mut collapses = 0;
     let mut died = [0usize; 12];
     for day in 1..=days {
@@ -98,6 +101,37 @@ fn play(seed: u64, days: u64) -> Report {
                     news.push(format!("hour {hour}: {name}'s escort is over, {}", if *paid { "paid" } else { "unpaid" }));
                 }
                 Event::Character { outcome: Outcome::Buried { .. }, .. } => burials += 1,
+                Event::Character { who, outcome: Outcome::CharterOpened { name } } => {
+                    news.push(format!("hour {hour}: {} opens the charter of {name}", session.world().character(*who).unwrap().name()));
+                }
+                Event::Faction { name, news: what, members } => {
+                    let line = match what {
+                        FactionNews::Formed => Some(format!("{name} is formed by {}", members.len())),
+                        FactionNews::Joined(_) => {
+                            factions.joined += 1;
+                            None
+                        }
+                        FactionNews::Claimed(_) => {
+                            factions.claimed += 1;
+                            None
+                        }
+                        FactionNews::Trespass { .. } => {
+                            factions.trespasses += 1;
+                            None
+                        }
+                        FactionNews::Breaking { .. } => {
+                            factions.breakings += 1;
+                            None
+                        }
+                        FactionNews::MarkerBroken { .. } => {
+                            factions.broken += 1;
+                            None
+                        }
+                        FactionNews::Dissolved(how) => Some(format!("{name} is no more: {how:?}")),
+                        FactionNews::Left(_) | FactionNews::UpkeepPaid { .. } => None,
+                    };
+                    news.extend(line.map(|line| format!("hour {hour}: {line}")));
+                }
                 Event::Character { outcome: Outcome::BountyPosted { .. }, .. } => bounties.0 += 1,
                 Event::Character { outcome: Outcome::BountyEarned { .. }, .. } => bounties.1 += 1,
                 Event::Character { outcome: Outcome::Collected { .. }, .. } => bounties.2 += 1,
@@ -114,7 +148,17 @@ fn play(seed: u64, days: u64) -> Report {
             news.push(format!("day {day}: vitality {vitality:?}, deaths so far {deaths}"));
         }
     }
-    Report { game: session.world().clone(), deaths, storms, bounties, escorts, burials, collapses, died, news }
+    Report { game: session.world().clone(), deaths, storms, bounties, escorts, burials, collapses, died, news, factions }
+}
+
+/// What the factions did over the run.
+#[derive(Debug, Default)]
+struct FactionCount {
+    joined: usize,
+    claimed: usize,
+    trespasses: usize,
+    breakings: usize,
+    broken: usize,
 }
 
 fn people_of(game: &Game, founder: CharacterId) -> usize {
@@ -131,6 +175,19 @@ fn four_founders_of_different_temper_make_a_world() {
     println!("bounties posted {}, earned {}, collected {}", report.bounties.0, report.bounties.1, report.bounties.2);
     println!("escorts wanted {}, taken {}, paid {}", report.escorts.0, report.escorts.1, report.escorts.2);
     println!("burials {}", report.burials);
+    println!("factions {:?}", report.factions);
+    for faction in report.game.factions().all() {
+        let names: Vec<&str> = faction.members.iter().map(|&member| report.game.character(member).unwrap().name()).collect();
+        println!(
+            "  {}: formed {}, {} bloodlines, sworn {:?}, holds {}, vault ore {}",
+            faction.name,
+            faction.is_formed(),
+            faction.bloodlines(),
+            names,
+            faction.claims.len(),
+            faction.held(eq_game::Resource::Ore)
+        );
+    }
     println!("collapses {}, deaths each {:?}", report.collapses, report.died);
     let greedy = game.character(id(7)).unwrap();
     println!("the greedy one is in life {} and the afterlife now asks level {} of them", greedy.life(), greedy.afterlife_goal());
@@ -169,6 +226,12 @@ fn four_founders_of_different_temper_make_a_world() {
     // The greedy one was marked, priced, hunted and paid for, over and over.
     assert!(report.bounties.0 > 0 && report.bounties.1 > 0 && report.bounties.2 > 0);
     assert!(report.died[7] > report.deaths / 2, "most of the dying was the greedy one's");
+    // The two peaceful founders' people, and the strong of other lands
+    // not at war with them, swear to one faction of three bloodlines; it
+    // holds ground in their lands, and some of its markers are broken.
+    let formed: Vec<_> = game.factions().all().iter().filter(|faction| faction.is_formed()).collect();
+    assert!(formed.iter().any(|faction| faction.bloodlines() >= 3 && faction.claims.len() > 1), "{:?}", report.factions);
+    assert!(report.factions.broken > 0, "{:?}", report.factions);
 }
 
 #[test]

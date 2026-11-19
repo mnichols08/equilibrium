@@ -127,8 +127,8 @@ warded: it yields only while it is
 pristine and at least half full. The land will not answer the marked.
 
 A faction is sworn at a house, its keep, by five people of at least
-three bloodlines. Its members are warned when anyone else walks onto
-ground it holds, cannot be robbed asleep there, travel out of it twice
+three bloodlines. Its members are warned when anyone from another land
+walks onto ground it holds, cannot be robbed asleep there, travel out of it twice
 as fast, and cannot be struck or robbed at the keep. Every marker costs
 the vault every day; a vault that cannot pay ends the faction. So does
 one of the five forsaking it, or the marker at the keep being broken.
