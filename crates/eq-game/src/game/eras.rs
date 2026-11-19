@@ -150,5 +150,5 @@ fn in_the_void_the_veil_is_thin_the_dead_are_seen_and_learn_fast_and_the_land_pa
     let (seen_in_void, learned_in_void, taken_in_void) = draw(Era::VoidConsumption);
     assert!(seen_in_void, "the living see the dead");
     assert_eq!(learned_in_void, learned * 2, "practice counts double");
-    assert_eq!(taken_in_void, u32::from(crate::content::VOID_DRAW_TAKES), "and the land pays for it");
+    assert_eq!(taken_in_void, crate::content::VOID_DRAW_TAKES, "and the land pays for it");
 }
