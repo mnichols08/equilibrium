@@ -41,6 +41,8 @@ Commands:
                        and moves 5 levels from their strongest of Vigor,
                        Finesse and Resilience into Attunement.
   bury <name>          lay someone's body in the ground where it lies
+  tap                  draw ectoplasm from the deposit here while alive:
+                       the land pays as for a haul
   gather               as a spirit, practise where the living would work:
                        go far enough in one skill and you live again
                        (look says how far; each death asks more)
