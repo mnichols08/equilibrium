@@ -23,6 +23,7 @@ const fn mix(mut z: u64) -> u64 {
 }
 
 /// A deterministic random source (SplitMix64).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rng {
     state: u64,

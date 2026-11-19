@@ -24,7 +24,7 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 
 [features]
 # Lets commands be saved and sent: `Command` and `Action` read and write with serde.
-serde = ["dep:serde"]
+serde = ["dep:serde", "eq-clock/serde", "eq-meter/serde", "eq-nodes/serde", "eq-skills/serde", "eq-world-graph/serde", "eq-rng/serde"]
 
 [dev-dependencies]
 eq-rng = { path = "../eq-rng" }

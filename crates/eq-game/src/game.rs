@@ -55,6 +55,7 @@ const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
 const UPKEEP_EVERY: Duration = Duration::seconds(10);
 
 /// The whole world: its territories and the characters in them.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     rng: Rng,

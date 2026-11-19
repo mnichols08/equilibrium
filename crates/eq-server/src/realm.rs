@@ -32,6 +32,14 @@ const BOT_NAMES: [&str; 24] = [
 /// restart would wind the clock back to the last command.
 const CLOCK_SAVED_EVERY: u64 = 60;
 
+/// How often, in ticks, the whole world is saved, so a restart replays
+/// at most this much: an hour.
+const SNAPSHOT_EVERY: u64 = 3_600;
+
+/// How many commands a segment of the log holds before the next is begun:
+/// with twenty bots, about a day and a half.
+const SEGMENT_HOLDS: usize = 100_000;
+
 /// How often a player who asked for scenes is sent a fresh one even
 /// though nothing was said to them: the clock and the tide move, and
 /// others come and go out of earshot.
@@ -158,6 +166,15 @@ pub struct Realm {
     keys: BTreeMap<String, String>,
     keys_path: Option<PathBuf>,
     clock_path: Option<PathBuf>,
+    /// Where the world is saved whole now and then, so a restart need
+    /// not replay every command since the world began.
+    snapshot_path: Option<PathBuf>,
+    /// Where the realm is saved.
+    data: Option<PathBuf>,
+    /// Which segment of the command log is being written.
+    segment: u64,
+    /// How many commands that segment holds.
+    in_segment: usize,
     online: BTreeSet<CharacterId>,
     /// The connected players whose clients draw scenes.
     watching: BTreeSet<CharacterId>,
@@ -188,21 +205,41 @@ impl Realm {
         };
         let keys_path = data.join("keys.json");
         let keys = read_json(&keys_path)?.unwrap_or_default();
-        let (store, commands) = LogFile::open(&data.join("commands.log"))?;
-
         let clock_path = data.join("clock.json");
         let clock = read_json::<u64>(&clock_path)?.unwrap_or(0);
+        let segments = log_segments(data)?;
+        let current = segments.last().copied().unwrap_or(0);
+        let snapshot_path = data.join("snapshot.json");
+        // A snapshot is good if the segment it names is there and holds at
+        // least the commands it counts; otherwise replay from the start.
+        let snapshot = read_json::<Snapshot>(&snapshot_path)?.filter(|snapshot| {
+            segments.contains(&snapshot.segment)
+                && eq_store::read::<Command>(&segment_path(data, snapshot.segment)).is_ok_and(|held| held.len() >= snapshot.commands)
+        });
+        let (from_segment, skip) = snapshot.as_ref().map_or((segments.first().copied().unwrap_or(0), 0), |snapshot| (snapshot.segment, snapshot.commands));
+
+        let (store, latest) = LogFile::open(&segment_path(data, current))?;
+        let in_segment = latest.len();
         let mut realm = Self::found(founding, Some(store), Some(keys_path), keys);
         realm.clock_path = Some(clock_path);
-        if !commands.is_empty() {
-            realm.session = Session::new(fresh_world(&founding));
-            for (tick, command) in commands {
+        realm.snapshot_path = Some(snapshot_path);
+        realm.data = Some(data.clone());
+        realm.segment = current;
+        realm.in_segment = in_segment;
+        if let Some(snapshot) = snapshot {
+            realm.session = Session::resume(snapshot.world, Tick::new(snapshot.tick));
+        }
+        let mut latest = Some(latest);
+        for &segment in segments.iter().filter(|&&segment| segment >= from_segment) {
+            let commands = if segment == current { latest.take().unwrap_or_default() } else { eq_store::read(&segment_path(data, segment))? };
+            let skipped = if segment == from_segment { skip } else { 0 };
+            for (tick, command) in commands.into_iter().skip(skipped) {
                 realm.session.submit(Tick::new(tick), command).map_err(|_| {
-                    RealmError::Corrupt(format!("a command at tick {tick} is out of order in commands.log"))
+                    RealmError::Corrupt(format!("a command at tick {tick} is out of order in log segment {segment}"))
                 })?;
             }
-            realm.saved = realm.session.log().len();
         }
+        realm.saved = realm.session.log().len();
         // Quiet ticks since the last command are not in the log.
         if Tick::new(clock) > realm.now() {
             realm.session.advance_to(Tick::new(clock)).expect("the saved clock is ahead of the world");
@@ -224,6 +261,10 @@ impl Realm {
             keys,
             keys_path,
             clock_path: None,
+            snapshot_path: None,
+            data: None,
+            segment: 0,
+            in_segment: 0,
             online: BTreeSet::new(),
             watching: BTreeSet::new(),
             leaving: Vec::new(),
@@ -242,6 +283,7 @@ impl Realm {
     pub fn close(&mut self) {
         self.persist();
         self.save_clock();
+        self.save_snapshot();
     }
 
     /// The world as it stands.
@@ -336,6 +378,9 @@ impl Realm {
         if self.now().get().is_multiple_of(CLOCK_SAVED_EVERY) {
             self.save_clock();
         }
+        if self.now().get().is_multiple_of(SNAPSHOT_EVERY) {
+            self.save_snapshot();
+        }
         let mut deliveries = self.told(&events);
         if self.now().get().is_multiple_of(SCENE_EVERY) {
             for &watcher in &self.watching {
@@ -397,8 +442,36 @@ impl Realm {
         for entry in &entries[self.saved..] {
             store.append(entry.tick.get(), &entry.value)?;
         }
+        self.in_segment += entries.len() - self.saved;
         self.saved = entries.len();
         Ok(())
+    }
+
+    /// Saves the whole world as it stands, with how many of the logged
+    /// commands it already holds. Written beside the old one and then put
+    /// in its place, so a crash midway leaves the old one whole.
+    ///
+    /// Once the segment of the log being written is long enough, a new one
+    /// is begun and the snapshot written again to name it. A crash between
+    /// the two leaves a snapshot naming the old segment, and a restart
+    /// replays on through every segment after it, so nothing is lost.
+    fn save_snapshot(&mut self) {
+        let (Some(path), Some(data)) = (self.snapshot_path.clone(), self.data.clone()) else { return };
+        self.write_snapshot(&path);
+        if self.in_segment < SEGMENT_HOLDS {
+            return;
+        }
+        self.segment += 1;
+        let (store, _) = LogFile::open(&segment_path(&data, self.segment)).expect("the realm could not begin a new log segment");
+        self.store = Some(store);
+        self.in_segment = 0;
+        self.write_snapshot(&path);
+    }
+
+    fn write_snapshot(&self, path: &Path) {
+        let snapshot = SnapshotRef { tick: self.now().get(), segment: self.segment, commands: self.in_segment, world: self.game() };
+        let fresh = path.with_extension("json.new");
+        write_json(&fresh, &snapshot).and_then(|()| fs::rename(&fresh, path)).expect("the realm could not save a snapshot");
     }
 
     fn save_clock(&self) {
@@ -482,6 +555,49 @@ fn roman(mut n: usize) -> String {
     }
     letters.reverse();
     String::from_utf8(letters).expect("only letters were pushed")
+}
+
+/// The whole world at a tick, and how far into the log it reaches: the
+/// segment, and how many of its commands it already holds.
+#[derive(Deserialize)]
+struct Snapshot {
+    tick: u64,
+    segment: u64,
+    commands: usize,
+    world: Game,
+}
+
+/// The same, for writing without copying the world.
+#[derive(Serialize)]
+struct SnapshotRef<'a> {
+    tick: u64,
+    segment: u64,
+    commands: usize,
+    world: &'a Game,
+}
+
+/// Where segment `n` of the command log is kept.
+fn segment_path(data: &Path, n: u64) -> PathBuf {
+    data.join(format!("commands.{n}.log"))
+}
+
+/// The segments of the command log saved in `data`, in order. A realm
+/// saved before the log was split has one file, `commands.log`: it
+/// becomes the first segment.
+fn log_segments(data: &Path) -> Result<Vec<u64>, std::io::Error> {
+    let old = data.join("commands.log");
+    if old.exists() && !segment_path(data, 0).exists() {
+        fs::rename(&old, segment_path(data, 0))?;
+    }
+    let mut segments: Vec<u64> = fs::read_dir(data)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            name.strip_prefix("commands.")?.strip_suffix(".log")?.parse().ok()
+        })
+        .collect();
+    segments.sort_unstable();
+    Ok(segments)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, RealmError> {

@@ -12,6 +12,7 @@ use crate::content::{
 };
 
 /// How far a spirit has come, from all the ectoplasm it has ever drawn.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpiritTier {
     /// The base form: slow and of little account.
@@ -60,6 +61,7 @@ pub const fn ectoplasm_per_draw(attunement: u32) -> u64 {
 }
 
 /// What a new life keeps of the old.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Inheritance {
     /// The share of each skill and attribute kept, as a percentage.

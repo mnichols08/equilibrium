@@ -14,6 +14,7 @@ const VOID_BELOW: i64 = 20;
 const CONFLICT_BELOW: i64 = 50;
 
 /// The era the world is in.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Era {
     /// The lands are well and nobody is at war. Building is cheap, and

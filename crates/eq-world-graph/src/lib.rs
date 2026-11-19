@@ -40,7 +40,22 @@ eq_ids::define_id!(
     PlaceId
 );
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for PlaceId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.get())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for PlaceId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <u64 as serde::Deserialize>::deserialize(deserializer).map(Self::new)
+    }
+}
+
 /// When an exit can be used.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Passage {
     /// Always usable.
@@ -65,6 +80,7 @@ impl Passage {
 }
 
 /// A one-way link out of a place.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Exit {
     /// What the exit is called from this side, such as `"north"`.
@@ -76,6 +92,7 @@ pub struct Exit {
 }
 
 /// Returned when an id does not belong to the graph.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnknownPlace(pub PlaceId);
 
@@ -87,6 +104,7 @@ impl fmt::Display for UnknownPlace {
 
 impl core::error::Error for UnknownPlace {}
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry<P> {
     data: P,
@@ -94,6 +112,7 @@ struct Entry<P> {
 }
 
 /// A set of places and the exits between them.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Graph<P> {
     entries: Vec<Entry<P>>,

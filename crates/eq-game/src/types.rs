@@ -37,6 +37,7 @@ impl Resource {
 }
 
 /// A skill trained by use.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SkillKind {
     /// Breaking rock.
@@ -67,6 +68,7 @@ impl SkillKind {
 }
 
 /// One of the six core attributes.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Attribute {
     /// Strength and stamina.
@@ -108,6 +110,7 @@ impl Attribute {
 
 /// How safe a place is. Nothing reads this until sleeping and combat
 /// arrive; it is recorded now so places never need reshaping.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Safety {
     /// No harm can come to anyone here.
@@ -130,6 +133,7 @@ impl Safety {
 }
 
 /// The state of the zone as a whole, from its vitality.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Health {
     /// Vitality 0 to 30.
@@ -141,6 +145,7 @@ pub enum Health {
 }
 
 /// How the land regards a character, from their taint.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Standing {
     /// Little or no taint. Cannot be attacked outside contested places.
@@ -150,6 +155,7 @@ pub enum Standing {
 }
 
 /// How a spirit stands to the body it left, decided at the moment of death.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Passing {
     /// Someone else was near. The spirit stays by the body and can soon
@@ -167,6 +173,7 @@ pub enum Passing {
 }
 
 /// What killed someone.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cause {
     /// Another character.
@@ -178,6 +185,7 @@ pub enum Cause {
 }
 
 /// A resource node and what it gives.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deposit {
     /// What is gathered here.
@@ -218,6 +226,7 @@ impl Deposit {
 }
 
 /// One location on the map.
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Place {
     /// Short name.

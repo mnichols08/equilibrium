@@ -114,7 +114,14 @@ fn write_line<C: Serialize>(out: &mut impl Write, tick: u64, command: &C) -> Res
     Ok(())
 }
 
-fn read<C: DeserializeOwned>(path: &Path) -> Result<Vec<(u64, C)>, StoreError> {
+/// Reads every command saved in the log at `path`, in order, without
+/// opening it for writing. A last line cut short is left out.
+///
+/// # Errors
+///
+/// If the file cannot be read, or a line before the last is not a saved
+/// command.
+pub fn read<C: DeserializeOwned>(path: &Path) -> Result<Vec<(u64, C)>, StoreError> {
     let lines: Vec<String> = BufReader::new(File::open(path)?).lines().collect::<Result<_, _>>()?;
     let mut saved = Vec::with_capacity(lines.len());
     for (index, text) in lines.iter().enumerate() {

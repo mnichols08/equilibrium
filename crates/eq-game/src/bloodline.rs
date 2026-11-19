@@ -8,6 +8,7 @@
 use crate::types::Attribute;
 
 /// One of the six bloodlines, in the order lands are founded for them.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Bloodline {
     /// Coastal ritualists, bound to the tides. The old shoreline's own.

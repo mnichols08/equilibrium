@@ -17,6 +17,7 @@ use eq_world_graph::PlaceId;
 use crate::content::{WORKED_OUT_FADES_EVERY, WORKED_OUT_FLOOR_PERCENT, WORKED_OUT_STEP_PERCENT};
 
 /// Where someone has been working lately, and how hard.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Worked {
     /// Each place, how many hauls' weariness it held, and when it last grew.

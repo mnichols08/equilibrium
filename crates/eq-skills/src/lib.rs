@@ -20,6 +20,7 @@
 use eq_curve::diminishing_returns;
 
 /// How a proficiency grows. Plain numbers, meant to be tuned.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rules {
     /// The highest level reachable.
@@ -32,6 +33,7 @@ pub struct Rules {
 }
 
 /// What one use earned.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Practice {
     /// Experience earned after diminishing returns.
@@ -41,6 +43,7 @@ pub struct Practice {
 }
 
 /// A level that rises with use.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Proficiency {
     level: u32,

@@ -46,6 +46,7 @@ const QUALITY: Bands<Quality, 3> = Bands::new(
 );
 
 /// How worn a node is.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Quality {
     /// Untouched or fully recovered.
@@ -81,6 +82,7 @@ impl Quality {
 }
 
 /// How a node behaves. Plain numbers, meant to be tuned.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NodeConfig {
     /// The most units the node can hold.
@@ -94,6 +96,7 @@ pub struct NodeConfig {
 }
 
 /// What a harvest took.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Harvest {
     /// Units removed from the node.
@@ -103,6 +106,7 @@ pub struct Harvest {
 }
 
 /// A source of one resource.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Node {
     config: NodeConfig,

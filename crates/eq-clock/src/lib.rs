@@ -17,6 +17,7 @@
 use core::ops::{Add, Sub};
 
 /// A span of time, in ticks. One tick is one second of world time.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Duration(u64);
 
@@ -70,6 +71,7 @@ impl Add for Duration {
 }
 
 /// A moment in world time, counted in ticks since the world began.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tick(u64);
 
@@ -116,6 +118,7 @@ impl Sub for Tick {
 }
 
 /// Something that repeats on a fixed period, such as a tide.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cycle {
     period: Duration,
@@ -164,6 +167,7 @@ impl Cycle {
 ///
 /// Used for clocks that only count some of the time, such as a timer that
 /// runs only while its owner is playing.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stopwatch {
     banked: Duration,

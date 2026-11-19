@@ -171,6 +171,13 @@ impl<W: World> Session<W> {
         Self { world, log: Log::new(), now: Tick::ZERO }
     }
 
+    /// Picks a world up again where it was saved: at `now`, with nothing
+    /// in the log yet. Everything done to it before is in whatever it was
+    /// saved from.
+    pub const fn resume(world: W, now: Tick) -> Self {
+        Self { world, log: Log::new(), now }
+    }
+
     /// The latest tick the world has reached.
     pub const fn now(&self) -> Tick {
         self.now

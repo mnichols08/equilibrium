@@ -26,6 +26,7 @@ use crate::types::Resource;
 pub const NOBODY: CharacterId = CharacterId::new(u64::MAX);
 
 /// Which faction, for as long as it lasts. Never reused.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FactionId(u64);
 
@@ -42,6 +43,7 @@ impl FactionId {
 }
 
 /// A place a faction holds, by the marker set there.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Claim {
     /// Where the marker stands.
@@ -51,6 +53,7 @@ pub struct Claim {
 }
 
 /// One charter, signed or still being signed.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Faction {
     /// Which faction.
@@ -117,6 +120,7 @@ impl Faction {
 }
 
 /// How a faction came to an end.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dissolution {
     /// The vault could not pay for its markers.
@@ -204,6 +208,7 @@ pub enum FactionNews {
 }
 
 /// Someone who broke an oath, or was sworn to a faction that failed.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Oathbreaker {
     /// Who.
@@ -216,6 +221,7 @@ pub struct Oathbreaker {
 }
 
 /// Every faction and every charter still being signed.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Factions {
     all: Vec<Faction>,

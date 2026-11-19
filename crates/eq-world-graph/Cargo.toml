@@ -6,9 +6,14 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# Lets its types be saved: they read and write with serde.
+serde = ["dep:serde", "eq-clock/serde"]
+
 [lints]
 workspace = true
 
 [dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 eq-clock = { path = "../eq-clock" }
 eq-ids = { path = "../eq-ids" }
