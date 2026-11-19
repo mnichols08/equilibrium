@@ -273,7 +273,9 @@ fn war_comes_first_and_the_void_follows() {
     show(&report, WAR_FIRST);
     let game = &report.game;
     let home = |index: usize| game.character(id(index)).unwrap().home();
-    assert!((0..4).all(|index| game.zone_at(home(index)).hall().is_some()));
+    // Every founder raised a house.
+    let raised = |index: usize| game.zone_at(home(index)).history().iter().any(|entry| entry.what == eq_game::Chronicle::Raised);
+    assert!((0..4).all(raised));
     // Dara, of the Stone line, breaks out first and declares war on every land.
     assert!([0, 1, 2].into_iter().all(|other| game.pact(home(3), home(other)) == Some(Pact::War)));
     // The aloof one dealt with nobody, and was dealt with anyway.
@@ -283,8 +285,10 @@ fn war_comes_first_and_the_void_follows() {
     assert!(game.balance().lean() > 0);
     assert_eq!(game.era(), eq_game::era::Era::VoidConsumption);
     assert!(report.news.iter().any(|line| line.ends_with("the Behemoth rises")));
-    // Bots shelter from it rather than feed it.
+    // Bots shelter from it rather than feed it, and while they keep to
+    // the haven nobody tends their house, which falls to ruin.
     assert!(report.behemoth_fed <= 5, "the Behemoth ended {} lives", report.behemoth_fed);
+    assert!((0..4).any(|index| game.zone_at(home(index)).ruin().is_some()));
     assert!(report.bounties.0 > 0 && report.bounties.1 > 0 && report.bounties.2 > 0);
 }
 

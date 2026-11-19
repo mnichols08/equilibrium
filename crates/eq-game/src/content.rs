@@ -407,6 +407,13 @@ pub const WILDFIRE_SCORCH_PERCENT: u32 = 5;
 /// Glyph Ward: how often it takes one ectoplasm from a Lunar in it.
 pub const GLYPH_WARD_FEEDS_EVERY: Duration = Duration::minutes(1);
 
+/// How long a house can stand with nobody of its land setting foot in
+/// it before it falls to ruin.
+pub const HOUSE_ABANDONED_AFTER: Duration = Duration::days(7);
+
+/// How much of what built a house lies in its ruins, in percent.
+pub const RUIN_SALVAGE_PERCENT: u64 = 50;
+
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 

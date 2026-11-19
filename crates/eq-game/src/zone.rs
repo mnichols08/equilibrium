@@ -31,6 +31,44 @@ pub struct Epitaph {
     pub at: Tick,
 }
 
+/// Something worth remembering in a land's history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Chronicle {
+    /// Its house was raised, by its founder.
+    Raised,
+    /// Its house fell to ruin, nobody of the land having set foot in it
+    /// for too long.
+    Ruined,
+    /// Someone was born into the land: a first life, or a new one.
+    Born {
+        /// Who.
+        who: CharacterId,
+        /// Which life.
+        life: u32,
+    },
+    /// One of its people died.
+    Died {
+        /// Who.
+        who: CharacterId,
+        /// What killed them.
+        by: crate::types::Cause,
+    },
+    /// One of its people faded, unredeemed.
+    Faded {
+        /// Who.
+        who: CharacterId,
+    },
+}
+
+/// One line of a land's history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// When.
+    pub at: Tick,
+    /// What.
+    pub what: Chronicle,
+}
+
 /// What the world at large does to every land's deposits this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Weather {
@@ -68,6 +106,12 @@ pub struct Zone {
     /// Names its founder has invited, lower-cased. Whoever joins the
     /// world under one of them arrives here.
     pub(crate) invited: Vec<String>,
+    /// Its history, oldest first.
+    pub(crate) history: Vec<Entry>,
+    /// When someone of the land last stood in its house.
+    pub(crate) tended_at: Tick,
+    /// Where its last house stands in ruins, if it fell.
+    pub(crate) ruin: Option<PlaceId>,
 }
 
 impl Zone {
@@ -88,6 +132,9 @@ impl Zone {
             bloodline: Bloodline::Tidal,
             hall: None,
             invited: Vec::new(),
+            history: Vec::new(),
+            tended_at: Tick::ZERO,
+            ruin: None,
         }
     }
 
@@ -161,6 +208,21 @@ impl Zone {
     pub(crate) fn cleanse(&mut self) {
         let all = self.corruption.value();
         self.corruption.adjust(-all);
+    }
+
+    /// Its history, oldest first.
+    pub fn history(&self) -> &[Entry] {
+        &self.history
+    }
+
+    /// Where its last house stands in ruins, if it fell.
+    pub const fn ruin(&self) -> Option<PlaceId> {
+        self.ruin
+    }
+
+    /// Writes `what` into its history.
+    pub(crate) fn record(&mut self, at: Tick, what: Chronicle) {
+        self.history.push(Entry { at, what });
     }
 
     /// Records a death in the zone, which costs it `corruption` vitality.

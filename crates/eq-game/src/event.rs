@@ -603,6 +603,13 @@ pub enum Event {
     },
     /// A storm tore at everything that can be worked. Everyone feels it.
     Storm,
+    /// A land's house fell to ruin. Its people hear of it, wherever they are.
+    HouseRuined {
+        /// The land's haven.
+        anchor: PlaceId,
+        /// Where the house stood.
+        place: PlaceId,
+    },
     /// The Behemoth rose, fed or fell. Everyone hears of it.
     Behemoth {
         /// Where.

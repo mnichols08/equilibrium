@@ -68,4 +68,4 @@ pub use game::Game;
 pub use haul::{pressure_percent, Haul};
 pub use solo::{Reply, Solo};
 pub use types::{Attribute, Cause, Deposit, Health, Passing, Place, Resource, Safety, SkillKind, Standing};
-pub use zone::Zone;
+pub use zone::{Chronicle, Entry, Zone};
