@@ -422,6 +422,9 @@ pub const TIDE_CRASH_HARM: u32 = 10;
 /// the Spirit Layer bleeds into the world in the Void.
 pub const VOID_DRAW_TAKES: u32 = 5;
 
+/// How much a living tap of the leylines takes from the deposit.
+pub const TAP_TAKES: u32 = 10;
+
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 

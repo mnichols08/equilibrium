@@ -38,6 +38,7 @@ use crate::faction::Factions;
 
 mod behemoth;
 mod blood;
+mod leylines;
 mod resonance;
 mod ruins;
 #[cfg(test)]
@@ -1073,6 +1074,7 @@ impl Game {
             Action::Claim => self.claim(index, now, outcomes, events),
             Action::Forsake => self.forsake(index, now, outcomes, events),
             Action::Break => self.begin_breaking(index, now, outcomes, events),
+            Action::Tap => self.tap(index, now, outcomes),
             Action::Wake | Action::Return | Action::Relinquish | Action::Seek | Action::Spar | Action::Join(_) => {}
         }
     }

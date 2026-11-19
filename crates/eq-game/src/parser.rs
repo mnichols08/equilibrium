@@ -140,6 +140,7 @@ pub fn parse(line: &str) -> Input {
             _ => Input::Unknown("Give what to the vault? Try \"give 20 ore\".".into()),
         },
         "claim" => Input::Do(Action::Claim),
+        "tap" | "harness" => Input::Do(Action::Tap),
         "forsake" | "betray" => Input::Do(Action::Forsake),
         "break" | "topple" => Input::Do(Action::Break),
         "post" | "offer" => match offer(rest, words) {
@@ -389,6 +390,7 @@ mod tests {
         assert_eq!(parse("break"), Input::Do(Action::Break));
         assert_eq!(parse("faction"), Input::Faction);
         assert_eq!(parse("history"), Input::History);
+        assert_eq!(parse("tap"), Input::Do(Action::Tap));
     }
 
     #[test]

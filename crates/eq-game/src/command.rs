@@ -129,6 +129,9 @@ pub enum Action {
     /// Break the marker of a faction you are not sworn to, where you
     /// stand. It takes time, and marks you from the start.
     Break,
+    /// Living, tap the deposit where you stand for ectoplasm. The land
+    /// pays as for a haul.
+    Tap,
 }
 
 /// An action and the character asked to take it.
@@ -236,6 +239,11 @@ impl Command {
     /// `who` breaks their oath.
     pub const fn forsake(who: CharacterId) -> Self {
         Self { who, action: Action::Forsake }
+    }
+
+    /// `who` taps the leylines where they stand.
+    pub const fn tap(who: CharacterId) -> Self {
+        Self { who, action: Action::Tap }
     }
 
     /// `who` sets to breaking the marker where they stand.
