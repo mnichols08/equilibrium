@@ -111,13 +111,15 @@ fn a_careful_crowd_holds_peak_and_takes_far_more_than_a_greedy_one() {
 
 #[test]
 fn the_zone_feeds_a_fixed_total_so_more_heads_means_less_each() {
-    // One roamer cannot reach everything the zone offers; from two up, the
-    // zone is the limit.
-    const HEADS: [usize; 3] = [2, 4, 8];
+    // Each deposit pays well for only a few hauls at a time, so one or
+    // two people cannot reach everything the zone offers; from four up,
+    // the zone is the limit.
+    const HEADS: [usize; 4] = [1, 2, 4, 8];
     let totals: Vec<u64> = HEADS.into_iter().map(|heads| roamers(Policy::Careful, heads).carried_by_all()).collect();
 
-    let (least, most) = (*totals.iter().min().unwrap(), *totals.iter().max().unwrap());
-    assert!(most * 9 <= least * 10, "totals should sit within a tenth of each other: {totals:?}");
+    assert!(totals.windows(2).all(|pair| pair[0] < pair[1]), "more hands reach more of it: {totals:?}");
+    assert!(totals[0] * 2 < totals[2], "one alone gets less than half what four do: {totals:?}");
+    assert!(totals[3] * 9 <= totals[2] * 10, "four and eight are both at the zone's limit: {totals:?}");
 
     let per_head: Vec<u64> = totals.iter().zip(HEADS).map(|(total, heads)| total / heads as u64).collect();
     assert!(per_head.windows(2).all(|pair| pair[0] > pair[1]), "{per_head:?}");
@@ -252,3 +254,4 @@ fn rites_do_nothing_for_a_zone_with_nobody_careful_in_it() {
     let crowd = roamers(Policy::Greedy, 4);
     assert!(collapsed_samples(&crowd) * 2 > crowd.samples.len());
 }
+

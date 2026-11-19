@@ -691,7 +691,8 @@ mod tests {
         assert!(deposit.stock_percent < 70);
         assert_ne!(deposit.quality, "pristine");
         assert_eq!(scene.you.pack.len(), 1);
-        assert!(scene.you.pack[0].amount > 100);
+        // Twenty hauls in one place: the first few pay in full, the rest ever less.
+        assert!((40..200).contains(&scene.you.pack[0].amount), "{}", scene.you.pack[0].amount);
         assert!(scene.you.skills.iter().any(|skill| skill.name == "mining" && skill.level >= 1));
     }
 

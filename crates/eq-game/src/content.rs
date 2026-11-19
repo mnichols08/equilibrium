@@ -22,6 +22,16 @@ pub const GATHER_TIME: Duration = Duration::seconds(5);
 /// Units one gathering action tries to take, before the random extra.
 pub const BASE_EFFORT: u32 = 10;
 
+/// How much less each haul at the same deposit gives its gatherer, in
+/// percent of a full one, for every haul they took there lately.
+pub const WORKED_OUT_STEP_PERCENT: u32 = 15;
+
+/// The least a haul gives however worked out the gatherer is.
+pub const WORKED_OUT_FLOOR_PERCENT: u32 = 10;
+
+/// How long away from a deposit takes one haul's weariness off it.
+pub const WORKED_OUT_FADES_EVERY: Duration = Duration::minutes(1);
+
 /// A gathering action takes `BASE_EFFORT` plus `0..EFFORT_SPREAD` units.
 pub const EFFORT_SPREAD: u64 = 3;
 

@@ -95,6 +95,10 @@ Commands:
 Nobody can be harmed in a haven. In the wilderness only those the land
 has marked can be attacked. In contested places, anyone can.
 
+Every haul you take from one deposit gives you less than the last, down
+to a tenth. It wears off a haul's worth for every minute you spend
+elsewhere, so whoever moves between deposits gathers at full pace.
+
 Sleep keeps you rested, and the rested learn faster. It is only safe in
 a haven: anywhere else a sleeper can be robbed. Sleep for more than a
 few days and the body starts to waste.
@@ -245,6 +249,10 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Gathered { resource, amount: 0, .. } => {
             format!("You work at the {} but come away with nothing worth keeping.", resource.name())
         }
+        Outcome::Gathered { resource, amount, returns, .. } if *returns < 50 => format!(
+            "You gather {amount} {}. You have worked this deposit hard: somewhere fresh would give more.",
+            resource.name()
+        ),
         Outcome::Gathered { resource, amount, .. } => format!("You gather {amount} {}.", resource.name()),
         Outcome::SkillRose { skill, level } => format!("Your {} improves to {level}.", skill.name()),
         Outcome::AttributeRose { attribute, level } => {
@@ -1293,7 +1301,7 @@ mod tests {
     fn an_empty_haul_is_not_reported_as_zero() {
         let haul = Event::Character {
             who: ASH,
-            outcome: Outcome::Gathered { resource: Resource::Kelp, amount: 0, quality: Quality::Depleted },
+            outcome: Outcome::Gathered { resource: Resource::Kelp, amount: 0, quality: Quality::Depleted, returns: 100 },
         };
         assert!(event(&haul, &Game::new(1, &["Ash"]), ASH).unwrap().contains("nothing worth keeping"));
     }
