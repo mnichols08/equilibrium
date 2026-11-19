@@ -566,6 +566,20 @@ impl Character {
         &self.attributes[attribute.index()]
     }
 
+    /// Sets health, for tests.
+    #[cfg(test)]
+    pub(crate) fn health_for_test(&mut self, health: u32) {
+        self.health.set(i64::from(health));
+    }
+
+    /// Raises an attribute to at least `level`, for tests that need
+    /// someone strong without weeks of work.
+    #[cfg(test)]
+    pub(crate) fn strengthen(&mut self, attribute: Attribute, level: u32) {
+        let known = &mut self.attributes[attribute.index()];
+        *known = known.at_least(level);
+    }
+
     /// Where they have been gathering lately, and how worked out they are there.
     pub const fn worked(&self) -> &crate::worked::Worked {
         &self.worked

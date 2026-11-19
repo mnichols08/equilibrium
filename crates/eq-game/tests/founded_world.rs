@@ -9,6 +9,7 @@
 use eq_clock::Tick;
 use eq_events::Session;
 use eq_game::bots::{Bots, Plan, Policy, Stance};
+use eq_game::BehemothNews;
 use eq_game::faction::FactionNews;
 use eq_game::pact::Pact;
 use eq_game::{CharacterId, Command, Event, Game, Outcome};
@@ -71,6 +72,7 @@ fn play(seed: u64, days: u64) -> Report {
     // Wanted, taken, paid.
     let mut escorts = (0, 0, 0);
     let mut burials = 0;
+    let mut behemoth_fed = 0;
     let mut factions = FactionCount::default();
     let mut collapses = 0;
     let mut died = [0usize; 12];
@@ -83,6 +85,19 @@ fn play(seed: u64, days: u64) -> Report {
                     died[who.get() as usize] += 1;
                 }
                 Event::Storm => storms += 1,
+                Event::Behemoth { news: what, .. } => {
+                    let line = match what {
+                        BehemothNews::Risen => "the Behemoth rises",
+                        BehemothNews::Fed => {
+                            behemoth_fed += 1;
+                            ""
+                        }
+                        BehemothNews::Fell => "the Behemoth falls",
+                    };
+                    if !line.is_empty() {
+                        news.push(format!("hour {hour}: {line}"));
+                    }
+                }
                 Event::Pact { dealt, .. } => news.push(format!("hour {hour}: {dealt:?}")),
                 Event::MoodChanged { to, .. } => news.push(format!("hour {hour}: the world is {}", to.name())),
                 Event::EraChanged { to, .. } => news.push(format!("hour {hour}: {}", to.name())),
@@ -148,6 +163,7 @@ fn play(seed: u64, days: u64) -> Report {
             news.push(format!("day {day}: vitality {vitality:?}, deaths so far {deaths}"));
         }
     }
+    news.push(format!("the Behemoth ended {behemoth_fed} lives"));
     Report { game: session.world().clone(), deaths, storms, bounties, escorts, burials, collapses, died, news, factions }
 }
 
@@ -232,6 +248,8 @@ fn four_founders_of_different_temper_make_a_world() {
     let formed: Vec<_> = game.factions().all().iter().filter(|faction| faction.is_formed()).collect();
     assert!(formed.iter().any(|faction| faction.bloodlines() >= 3 && faction.claims.len() > 1), "{:?}", report.factions);
     assert!(report.factions.broken > 0, "{:?}", report.factions);
+    // The Void raises a Behemoth.
+    assert!(report.news.iter().any(|line| line.ends_with("the Behemoth rises")));
 }
 
 #[test]

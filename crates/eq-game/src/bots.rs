@@ -31,6 +31,9 @@ const HEALTH_TO_GO_IN: u32 = 95;
 /// working a deposit for.
 const LEAST_RETURNS: u32 = 50;
 
+/// How many bloodlines must stand together before bots take on the Behemoth.
+const BLOODLINES_FOR_BEHEMOTH: usize = 3;
+
 /// How long a bot stands idle when there is nothing it wants to do.
 const IDLE: Duration = Duration::seconds(5);
 
@@ -751,7 +754,18 @@ fn beast_duty(game: &Game, bot: &Bot) -> Option<Command> {
     if me.health() < HEALTH_TO_FIGHT && !strong_enough(me) {
         return None;
     }
-    let beast = game.creatures_at(me.place()).find(|creature| creature.being.kind.is_aggressive())?;
+    // Nobody takes on the Behemoth without people of other bloodlines
+    // beside them: alone, a blow barely scratches it, and a death feeds it.
+    let mut bloods: Vec<crate::bloodline::Bloodline> = Vec::new();
+    for &other in game.occupants(me.place()) {
+        if let Some(other) = game.character(other).filter(|other| !other.is_spirit() && !other.is_lying_down()) {
+            if !bloods.contains(&other.bloodline()) {
+                bloods.push(other.bloodline());
+            }
+        }
+    }
+    let worth_it = |kind: crate::CreatureKind| kind != crate::CreatureKind::Behemoth || bloods.len() >= BLOODLINES_FOR_BEHEMOTH;
+    let beast = game.creatures_at(me.place()).find(|creature| creature.being.kind.is_aggressive() && worth_it(creature.being.kind))?;
     Some(Command::fight(bot.who, beast.id))
 }
 

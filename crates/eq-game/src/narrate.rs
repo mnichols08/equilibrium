@@ -17,7 +17,7 @@ use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::balance::Mood;
 use crate::era::Era;
 use crate::faction::{Dissolution, FactionNews, FactionRefusal, NOBODY as SPILT};
-use crate::creature::{Being, CreatureKind, RelicTier};
+use crate::creature::{BehemothNews, Being, CreatureKind, RelicTier};
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
 use crate::types::{Attribute, Cause, Health, Resource, SkillKind, Standing};
@@ -30,7 +30,8 @@ Commands:
   gather (g)           take from the deposit here
   inspect (x)          study the deposit and the health of the shoreline
   attack <name>        trade blows with someone here (see below), or
-                       strike a creature: attack lurker, attack guard
+                       strike a creature: attack lurker, attack guard,
+                       attack behemoth
   take                 open the relics here and take what is in them
   sleep [time]         sleep where you are: sleep, sleep 8h, sleep 4d
   rob <name>           go through the pack of someone asleep here
@@ -163,6 +164,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::Storm => Some("A storm comes through. The sea tears at the shore, and everything that can be worked is the poorer for it.".into()),
         Event::Pact { by, with, dealt } => Some(pact_news(game, *by, *with, *dealt)),
         Event::Faction { name, news, .. } => faction_news(game, name, *news, viewer),
+        Event::Behemoth { place, news } => Some(behemoth_news(game, *place, *news)),
         Event::DepositChanged { place, resource, from, to } if *place == here => {
             Some(deposit_changed(*resource, *from, *to))
         }
@@ -180,6 +182,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::CreatureAppeared { place, being } if *place == here => Some(match being.kind {
             CreatureKind::Lurker => "The black water stirs. A lurker has come back.".into(),
             CreatureKind::Sentinel => "Stone grinds on stone. A sentinel stands in the pass again.".into(),
+            CreatureKind::Behemoth => "The ground heaves. The Behemoth is here.".into(),
             CreatureKind::BodyGuard => {
                 format!("{} rises and stands guard over what it dropped.", capitalise(&being_name(game, *being, viewer)))
             }
@@ -289,6 +292,9 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         }
         Outcome::Slew { being: Being { kind: CreatureKind::Lurker, .. } } => {
             "The lurker sinks back into the black water. In time another will come.".into()
+        }
+        Outcome::Slew { being: Being { kind: CreatureKind::Behemoth, .. } } => {
+            "The Behemoth comes down, and the land it fell on breathes again. Shards of tide-glass lie where it fell, for anyone.".into()
         }
         Outcome::Slew { being: Being { kind: CreatureKind::Sentinel, .. } } => {
             "The sentinel breaks and falls. The pass is open, until another rises to bar it.".into()
@@ -666,6 +672,10 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         lines.push(match creature.being.kind {
             CreatureKind::Lurker => format!("A lurker waits here, half in the water ({} health).", creature.health()),
             CreatureKind::Sentinel => format!("A sentinel bars the pass, taller than you and in no hurry ({} health).", creature.health()),
+            CreatureKind::Behemoth => format!(
+                "The Behemoth is here, and it has seen you ({} health). Blows land for a quarter for each bloodline that has struck it lately.",
+                creature.health()
+            ),
             CreatureKind::BodyGuard => format!(
                 "{} stands guard here ({} health).",
                 capitalise(&being_name(game, creature.being, viewer)),
@@ -791,6 +801,7 @@ fn being_name(game: &Game, being: Being, viewer: CharacterId) -> String {
     match (being.kind, being.of) {
         (CreatureKind::Lurker, _) => "the lurker".into(),
         (CreatureKind::Sentinel, _) => "the sentinel".into(),
+        (CreatureKind::Behemoth, _) => "the Behemoth".into(),
         (CreatureKind::BodyGuard, Some(owner)) if owner == viewer => "your own body".into(),
         (CreatureKind::BodyGuard, Some(owner)) => format!("{}'s body", name_of(game, owner)),
         (CreatureKind::BodyGuard, None) => "a risen body".into(),
@@ -853,6 +864,19 @@ const fn era_changed(to: Era) -> &'static str {
         Era::Rebuilding => "The Era of Rebuilding begins. The lands are well and nobody is at war: what is built now costs a quarter less, and every founder takes twice the share of the trade at their board.",
         Era::Conflict => "The Era of Conflict begins. The lands are over-worked or at war. Every blow struck teaches twice what it did, and anyone outside their own land can be struck down anywhere but a haven.",
         Era::VoidConsumption => "The Void Consumption begins. The lands are failing everywhere. Whatever is put down in the wild is back before the blood is dry, anyone outside their own land is fair game, and a haven shelters only its own people.",
+    }
+}
+
+/// What everyone hears of the Behemoth.
+fn behemoth_news(game: &Game, place: PlaceId, news: BehemothNews) -> String {
+    let land = land_name(game, game.zone_at(place).anchor());
+    match news {
+        BehemothNews::Risen => format!(
+            "The Void has made a Behemoth. It walks {land}, near {}. It will take people of many bloodlines together to bring it down.",
+            place_name(game, place)
+        ),
+        BehemothNews::Fed => format!("The Behemoth has ended a life in {land}, and is the stronger for it. Every land feels it."),
+        BehemothNews::Fell => format!("The Behemoth has fallen in {land}, and that land breathes again."),
     }
 }
 

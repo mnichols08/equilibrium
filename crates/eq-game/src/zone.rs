@@ -157,6 +157,12 @@ impl Zone {
         self.house.as_deref()
     }
 
+    /// Lifts everything the dead have cost the zone.
+    pub(crate) fn cleanse(&mut self) {
+        let all = self.corruption.value();
+        self.corruption.adjust(-all);
+    }
+
     /// Records a death in the zone, which costs it `corruption` vitality.
     pub(crate) fn mourn(&mut self, corruption: i64) {
         self.corruption.adjust(corruption);

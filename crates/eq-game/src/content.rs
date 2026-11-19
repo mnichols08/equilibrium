@@ -319,6 +319,34 @@ pub const STORM_EVERY: Duration = Duration::minutes(20);
 /// What raising a land's house takes from its founder's pack.
 pub const HOUSE_COST: [(Resource, u64); 2] = [(Resource::Driftwood, 40), (Resource::Ore, 20)];
 
+/// The health of the Behemoth the Void makes.
+pub const BEHEMOTH_HEALTH: i64 = 6_000;
+
+/// How hard it hits, on the scale of Vigor.
+pub const BEHEMOTH_MIGHT: u32 = 80;
+
+/// How much it shrugs off, on the scale of Resilience.
+pub const BEHEMOTH_TOUGHNESS: u32 = 40;
+
+/// A blow worth this much or less glances off it: a quarter of a strong
+/// one does, half of one does not.
+pub const BEHEMOTH_HIDE: u32 = 8;
+
+/// How long the blows of a bloodline count toward bringing it down.
+pub const BLOODLINE_WINDOW: Duration = Duration::minutes(10);
+
+/// How often it moves on to a neighbouring place.
+pub const BEHEMOTH_ROAMS_EVERY: Duration = Duration::minutes(10);
+
+/// How long after one falls another can rise, while the Void lasts.
+pub const BEHEMOTH_RETURNS: Duration = Duration::hours(1);
+
+/// How much of its health it takes back from each life it ends.
+pub const BEHEMOTH_FEEDS_PERCENT: i64 = 10;
+
+/// How much tide-glass it leaves when it falls.
+pub const BEHEMOTH_SHARDS: u64 = 100;
+
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 
