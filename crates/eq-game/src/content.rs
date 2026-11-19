@@ -418,6 +418,10 @@ pub const RUIN_SALVAGE_PERCENT: u64 = 50;
 /// shore when it comes in, in a raging world. Never the last of it.
 pub const TIDE_CRASH_HARM: u32 = 10;
 
+/// How much a spirit's draw takes from the deposit it draws at, while
+/// the Spirit Layer bleeds into the world in the Void.
+pub const VOID_DRAW_TAKES: u32 = 5;
+
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 

@@ -815,7 +815,7 @@ impl Game {
     /// spirits see everyone.
     pub fn can_see(&self, viewer: CharacterId, other: CharacterId) -> bool {
         let is_spirit = |who| self.character(who).is_some_and(Character::is_spirit);
-        viewer == other || !is_spirit(other) || is_spirit(viewer) || self.lunar_sight(viewer)
+        viewer == other || !is_spirit(other) || is_spirit(viewer) || self.lunar_sight(viewer) || self.era.veil_thin()
     }
 
     /// The first territory.
@@ -1151,7 +1151,16 @@ impl Game {
         outcomes.push(Outcome::Drew { amount, held: character.ectoplasm() });
         outcomes.append(&mut risen);
         // The work is practice too, and enough practice is the way back.
-        if character.practise(deposit.resource.skill(), AFTERLIFE_XP_PER_DRAW, outcomes) >= character.afterlife_goal() {
+        // Where the veil is thin it counts double, and the land pays for it.
+        let xp = AFTERLIFE_XP_PER_DRAW * self.era.afterlife_percent() / 100;
+        let place = character.place();
+        let reached = character.practise(deposit.resource.skill(), xp, outcomes) >= character.afterlife_goal();
+        if self.era.veil_thin() {
+            if let Some(deposit) = self.map.place_mut(place).and_then(|data| data.deposit.as_mut()) {
+                deposit.node.harvest(content::VOID_DRAW_TAKES);
+            }
+        }
+        if reached {
             self.arise(index, now, outcomes);
         }
     }
@@ -1173,7 +1182,9 @@ impl Game {
         character.busy_until = now + ATTACK_TIME;
         let (damage, left) = (blow.damage(), character.hurt_shade(blow.damage()));
         outcomes.push(Outcome::Sparred { damage, left });
-        if character.practise(SkillKind::Fighting, FIGHTING_XP_PER_BLOW, outcomes) >= character.afterlife_goal() {
+        let xp = FIGHTING_XP_PER_BLOW * self.era.afterlife_percent() / 100;
+        let character = &mut self.characters[index];
+        if character.practise(SkillKind::Fighting, xp, outcomes) >= character.afterlife_goal() {
             self.arise(index, now, outcomes);
         }
     }
