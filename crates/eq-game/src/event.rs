@@ -10,7 +10,7 @@ use crate::character::CharacterId;
 use crate::board::{ContractId, Lot, TradeRefusal};
 use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefusal, RobRefusal, TendRefusal};
 use crate::balance::Mood;
-use crate::creature::Being;
+use crate::creature::{BehemothNews, Being};
 use crate::era::Era;
 use crate::faction::{FactionNews, FactionRefusal};
 use crate::pact::{Dealing, Dealt, PactRefusal};
@@ -603,6 +603,13 @@ pub enum Event {
     },
     /// A storm tore at everything that can be worked. Everyone feels it.
     Storm,
+    /// The Behemoth rose, fed or fell. Everyone hears of it.
+    Behemoth {
+        /// Where.
+        place: PlaceId,
+        /// What happened.
+        news: BehemothNews,
+    },
     /// Something happened to a faction. Everyone sworn to it hears,
     /// wherever they are.
     Faction {

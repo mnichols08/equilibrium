@@ -10,9 +10,11 @@ use eq_clock::{Duration, Tick};
 use eq_meter::Meter;
 use eq_world_graph::PlaceId;
 
+use crate::bloodline::Bloodline;
 use crate::character::{Character, CharacterId};
 use crate::content::{
-    GUARD_THREAT_PERCENT, LURKER_HEALTH, MAX_HEALTH, SENTINEL_HEALTH, SENTINEL_HIDE, SENTINEL_MIGHT, TAKE_TIME,
+    BEHEMOTH_HEALTH, BEHEMOTH_HIDE, BEHEMOTH_MIGHT, BEHEMOTH_TOUGHNESS, BLOODLINE_WINDOW, GUARD_THREAT_PERCENT, LURKER_HEALTH, MAX_HEALTH, SENTINEL_HEALTH,
+    SENTINEL_HIDE, SENTINEL_MIGHT, TAKE_TIME,
 };
 use crate::types::{Attribute, Resource};
 
@@ -36,13 +38,17 @@ pub enum CreatureKind {
     /// A body its spirit did not come back for. It keeps what its owner
     /// dropped and fights whoever troubles it.
     BodyGuard,
+    /// What the Void makes of a failing world: it roams the worst-off
+    /// land, goes for anyone it finds, and only many bloodlines
+    /// together can bring it down.
+    Behemoth,
 }
 
 impl CreatureKind {
     /// Whether it goes for anyone living it finds, or only for those
     /// who trouble it.
     pub const fn is_aggressive(self) -> bool {
-        matches!(self, Self::Lurker | Self::Sentinel)
+        matches!(self, Self::Lurker | Self::Sentinel | Self::Behemoth)
     }
 
     /// The one word a player can call it by.
@@ -51,8 +57,20 @@ impl CreatureKind {
             Self::Lurker => "lurker",
             Self::Sentinel => "sentinel",
             Self::BodyGuard => "guard",
+            Self::Behemoth => "behemoth",
         }
     }
+}
+
+/// What the whole world hears of the Behemoth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BehemothNews {
+    /// One has risen.
+    Risen,
+    /// One has ended a life, and is the stronger for it.
+    Fed,
+    /// One has been brought down.
+    Fell,
 }
 
 /// Enough to name a creature after it is gone: what it was and, for a
@@ -83,6 +101,8 @@ pub struct Creature {
     pub hide: u32,
     /// Everyone who has troubled it, oldest first.
     pub(crate) foes: Vec<CharacterId>,
+    /// The bloodline of each blow struck at it lately, and when.
+    pub(crate) blows_by_blood: Vec<(Bloodline, Tick)>,
     /// The earliest it will next strike.
     pub(crate) next_blow: Tick,
     /// When it leaves the world by itself, if it ever does.
@@ -93,19 +113,21 @@ impl Creature {
     /// A creature of the kind that makes its home in a place: a lurker
     /// or a sentinel. (A Body Guard is made from a body, not a lair.)
     pub(crate) fn native(kind: CreatureKind, id: CreatureId, place: PlaceId, now: Tick) -> Self {
-        let (health, might, hide) = match kind {
-            CreatureKind::Sentinel => (SENTINEL_HEALTH, SENTINEL_MIGHT, SENTINEL_HIDE),
-            CreatureKind::Lurker | CreatureKind::BodyGuard => (LURKER_HEALTH, 0, 0),
+        let (health, vigor, resilience, hide) = match kind {
+            CreatureKind::Sentinel => (SENTINEL_HEALTH, SENTINEL_MIGHT, SENTINEL_MIGHT, SENTINEL_HIDE),
+            CreatureKind::Behemoth => (BEHEMOTH_HEALTH, BEHEMOTH_MIGHT, BEHEMOTH_TOUGHNESS, BEHEMOTH_HIDE),
+            CreatureKind::Lurker | CreatureKind::BodyGuard => (LURKER_HEALTH, 0, 0, 0),
         };
         Self {
             id,
             being: Being { kind, of: None },
             place,
             health: Meter::full(0, health),
-            vigor: might,
-            resilience: might,
+            vigor,
+            resilience,
             hide,
             foes: Vec::new(),
+            blows_by_blood: Vec::new(),
             next_blow: now,
             gone_at: None,
         }
@@ -126,6 +148,7 @@ impl Creature {
             resilience: raised(body.attribute(Attribute::Resilience).level()),
             hide: 0,
             foes: Vec::new(),
+            blows_by_blood: Vec::new(),
             next_blow: now,
             gone_at: Some(gone_at),
         }
@@ -143,6 +166,27 @@ impl Creature {
         let taken = if damage <= self.hide { 0 } else { damage };
         self.health.adjust(-i64::from(taken));
         (taken, self.health())
+    }
+
+    /// Mends `percent` of its whole health.
+    pub(crate) fn heal(&mut self, percent: i64) {
+        self.health.adjust(self.health.max() * percent / 100);
+    }
+
+    /// Remembers a blow struck by someone of `blood` at `now`, and says
+    /// how much of a blow lands, in percent: a quarter for each
+    /// bloodline that has struck it within [`BLOODLINE_WINDOW`], up to
+    /// all of it.
+    pub(crate) fn share_landing(&mut self, blood: Bloodline, now: Tick) -> u32 {
+        self.blows_by_blood.retain(|&(_, at)| now < at + BLOODLINE_WINDOW);
+        self.blows_by_blood.push((blood, now));
+        let mut seen: Vec<Bloodline> = Vec::new();
+        for &(blood, _) in &self.blows_by_blood {
+            if !seen.contains(&blood) {
+                seen.push(blood);
+            }
+        }
+        (seen.len() as u32 * 25).min(100)
     }
 
     /// Remembers `who` as someone to go for.

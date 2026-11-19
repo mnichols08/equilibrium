@@ -36,6 +36,7 @@ use crate::escort::{Escort, Escorts};
 use crate::zone::{Epitaph, Weather, Zone};
 use crate::faction::Factions;
 
+mod behemoth;
 mod factions;
 #[cfg(test)]
 mod eras;
@@ -74,6 +75,8 @@ pub struct Game {
     escorts: Escorts,
     /// Every faction, and every charter still being signed.
     factions: Factions,
+    /// The earliest the Void may raise another Behemoth.
+    behemoth_due: Tick,
     /// Every place in the world. Each zone is a run of them.
     map: Graph<Place>,
     /// The world's territories, oldest first. There is always one.
@@ -126,6 +129,7 @@ impl Game {
             graves: Vec::new(),
             escorts: Escorts::new(),
             factions: Factions::new(),
+            behemoth_due: Tick::ZERO,
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
             characters,
@@ -896,7 +900,9 @@ impl Game {
             | Event::CreatureAppeared { place, .. }
             | Event::CreatureGone { place, .. } => self.occupants(*place).to_vec(),
             // The whole world feels it.
-            Event::MoodChanged { .. } | Event::EraChanged { .. } | Event::Storm => self.characters().map(|(id, _)| id).collect(),
+            Event::MoodChanged { .. } | Event::EraChanged { .. } | Event::Storm | Event::Behemoth { .. } => {
+                self.characters().map(|(id, _)| id).collect()
+            }
             // Everyone who belongs to either land hears of it.
             Event::Pact { by, with, .. } => {
                 let lands = [self.zone_index(*by), self.zone_index(*with)];
@@ -1011,7 +1017,7 @@ impl Game {
             }
             Action::Gather => self.gather(index, now, outcomes, events),
             Action::Attack(target) => self.attack(index, *target, now, outcomes, events),
-            Action::Fight(creature) => self.fight(index, *creature, now, outcomes),
+            Action::Fight(creature) => self.fight(index, *creature, now, outcomes, events),
             Action::Take => self.take(index, now, outcomes),
             Action::Rest => self.rest(index, now, outcomes),
             Action::Rob(target) => self.rob(index, *target, now, outcomes, events),
@@ -1722,7 +1728,7 @@ impl Game {
     }
 
     /// Strikes a creature. It will come for whoever struck it.
-    fn fight(&mut self, index: usize, target: CreatureId, now: Tick, outcomes: &mut Vec<Outcome>) {
+    fn fight(&mut self, index: usize, target: CreatureId, now: Tick, outcomes: &mut Vec<Outcome>, events: &mut Vec<Event>) {
         let who = id_at(index);
         let here = self.characters[index].place();
         let Some(slot) = self.creatures.iter().position(|creature| creature.id == target && creature.place == here) else {
@@ -1741,13 +1747,19 @@ impl Game {
             resilience: creature.resilience,
         };
         striker.learn_from_blow(self.era.fighting_xp_percent(), outcomes);
-        let (damage, left) = creature.hurt(blow.damage());
+        // Only many bloodlines together can bring the Behemoth down.
+        let landing = if creature.being.kind == CreatureKind::Behemoth { creature.share_landing(striker.bloodline(), now) } else { 100 };
+        let (damage, left) = creature.hurt(blow.damage() * landing / 100);
         creature.provoke(who);
         let being = creature.being;
         outcomes.push(Outcome::HitCreature { being, damage, left });
         if left == 0 {
             outcomes.push(Outcome::Slew { being });
+            let place = self.creatures[slot].place;
             self.remove_creature(slot, now);
+            if being.kind == CreatureKind::Behemoth {
+                self.behemoth_fell(place, now, events);
+            }
         }
     }
 
@@ -1771,6 +1783,8 @@ impl Game {
             // The spirit whose body it was is no nearer the living for
             // its fall: that way is through the afterlife.
             Being { kind: CreatureKind::BodyGuard, .. } => {}
+            // The Void sends another in its own time.
+            Being { kind: CreatureKind::Behemoth, .. } => {}
         }
     }
 
@@ -1803,6 +1817,9 @@ impl Game {
             if health == 0 {
                 let corruption = if caught_lying { CORRUPTION_PER_SLEEPER_DEATH } else { CORRUPTION_PER_DEATH };
                 self.fell(victim, Cause::Creature(being), corruption, now, events);
+                if being.kind == CreatureKind::Behemoth {
+                    self.behemoth_fed(slot, being, events);
+                }
             }
         }
     }
@@ -2094,6 +2111,7 @@ impl World for Game {
         self.upkeep(now, events);
         self.settle_escorts(events);
         self.settle_factions(now, events);
+        self.tend_behemoth(now, events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {
