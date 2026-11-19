@@ -1999,12 +1999,17 @@ impl Game {
 
         // EFFORT_SPREAD is tiny, so the cast cannot truncate.
         let effort = BASE_EFFORT + self.rng.below(EFFORT_SPREAD) as u32;
+        // The more of it someone has worked lately, the less of what they
+        // dig out is worth keeping. The deposit pays in full regardless.
+        let returns = character.worked.returns_percent(place, now);
+        character.worked.work(place, now);
         let pressure_before = pressure_percent(&deposit.node);
         let harvest = deposit.node.harvest(effort);
         let quality_after = deposit.node.quality();
 
+        let kept = harvest.taken * returns / 100;
         let haul = Haul {
-            taken: harvest.taken,
+            taken: kept,
             quality: harvest.quality,
             health,
             attribute_level: character.attribute(resource.attributes()[0]).level(),
@@ -2014,10 +2019,12 @@ impl Game {
         character.stow(resource, amount);
         character.busy_until = now + GATHER_TIME;
 
-        outcomes.push(Outcome::Gathered { resource, amount, quality: harvest.quality });
+        outcomes.push(Outcome::Gathered { resource, amount, quality: harvest.quality, returns });
         if quality_after != harvest.quality {
             events.push(Event::DepositChanged { place, resource, from: harvest.quality, to: quality_after });
         }
+        // The work teaches as much however little of it is kept: the
+        // pace of learning is set elsewhere.
         character.train(resource, harvest.taken, outcomes);
         // Working a deposit that was already under pressure taints the one
         // who does it. The haul that first pushes it over does not.

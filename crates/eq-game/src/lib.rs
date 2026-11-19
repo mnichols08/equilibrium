@@ -54,6 +54,7 @@ mod solo;
 pub mod spirit;
 pub mod territory;
 mod types;
+pub mod worked;
 #[cfg(feature = "serde")]
 mod wire;
 mod zone;

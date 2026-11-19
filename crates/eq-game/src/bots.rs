@@ -27,6 +27,10 @@ const HEALTH_TO_FIGHT: u32 = 40;
 /// that will go for it: it mends first.
 const HEALTH_TO_GO_IN: u32 = 95;
 
+/// The least share of a full haul, in percent, a careful bot will keep
+/// working a deposit for.
+const LEAST_RETURNS: u32 = 50;
+
 /// How long a bot stands idle when there is nothing it wants to do.
 const IDLE: Duration = Duration::seconds(5);
 
@@ -48,7 +52,7 @@ pub enum Policy {
 
 impl Policy {
     /// Whether a bot with this policy would gather where `who` stands.
-    pub fn wants_to_gather(self, game: &Game, who: CharacterId) -> bool {
+    pub fn wants_to_gather(self, game: &Game, who: CharacterId, now: Tick) -> bool {
         let Some(node) = game.place_of(who).and_then(|place| place.deposit).map(|deposit| deposit.node) else {
             return false;
         };
@@ -57,6 +61,14 @@ impl Policy {
             game.creatures_at(me.place()).any(|creature| creature.being.kind.is_aggressive())
         });
         if hunted {
+            return false;
+        }
+        // A careful bot does not keep at a deposit once it gives them
+        // less than half a haul: somewhere fresh pays better. A camper
+        // waits for it to come back; a roamer moves on. The greedy strip
+        // it regardless, for less and less.
+        let worked_out = game.character(who).is_some_and(|me| me.worked().returns_percent(me.place(), now) < LEAST_RETURNS);
+        if self == Self::Careful && worked_out {
             return false;
         }
         match self {
@@ -302,7 +314,7 @@ impl Bots {
                 // Nobody on the road with an escort stops to work.
                 .or_else(|| {
                     let free = on_the_road(world, who).is_none();
-                    (free && bot.plan.policy.wants_to_gather(world, who)).then(|| (Command::gather(who), IDLE))
+                    (free && bot.plan.policy.wants_to_gather(world, who, now)).then(|| (Command::gather(who), IDLE))
                 }),
         };
         let Some((command, pause)) = choice else {

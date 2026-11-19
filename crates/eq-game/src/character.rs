@@ -103,6 +103,8 @@ pub struct Character {
     attributes: [Proficiency; Attribute::ALL.len()],
     pack: [u64; Resource::ALL.len()],
     taint: Meter,
+    /// Where they have been gathering lately, and how worked out they are there.
+    pub(crate) worked: crate::worked::Worked,
     health: Meter,
     death: Option<Death>,
     forgotten: Option<Forgotten>,
@@ -158,6 +160,7 @@ impl Character {
             attributes: [Proficiency::new(); Attribute::ALL.len()],
             pack: [0; Resource::ALL.len()],
             taint: Meter::empty(0, 100),
+            worked: crate::worked::Worked::new(),
             health: Meter::full(0, MAX_HEALTH),
             death: None,
             forgotten: None,
@@ -561,6 +564,11 @@ impl Character {
     /// An attribute's progress.
     pub const fn attribute(&self, attribute: Attribute) -> &Proficiency {
         &self.attributes[attribute.index()]
+    }
+
+    /// Where they have been gathering lately, and how worked out they are there.
+    pub const fn worked(&self) -> &crate::worked::Worked {
+        &self.worked
     }
 
     /// How much of a resource the character carries.

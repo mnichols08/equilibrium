@@ -100,6 +100,9 @@ pub enum Outcome {
         amount: u64,
         /// The deposit's quality when the work began.
         quality: Quality,
+        /// How much of a full haul it was, in percent: less the more
+        /// they have worked this deposit lately.
+        returns: u32,
     },
     /// A skill reached a new level.
     SkillRose {
