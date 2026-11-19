@@ -850,9 +850,9 @@ fn pact_news(game: &Game, by: PlaceId, with: PlaceId, dealt: Dealt) -> String {
 /// What everyone is told when one era gives way to another.
 const fn era_changed(to: Era) -> &'static str {
     match to {
-        Era::Rebuilding => "The Era of Rebuilding begins. The lands are well and nobody is at war: what is built now costs a quarter less.",
-        Era::Conflict => "The Era of Conflict begins. The lands are over-worked or at war, and every blow struck teaches twice what it did.",
-        Era::VoidConsumption => "The Void Consumption begins. The lands are failing everywhere, and whatever is put down in the wild is back before the blood is dry.",
+        Era::Rebuilding => "The Era of Rebuilding begins. The lands are well and nobody is at war: what is built now costs a quarter less, and every founder takes twice the share of the trade at their board.",
+        Era::Conflict => "The Era of Conflict begins. The lands are over-worked or at war. Every blow struck teaches twice what it did, and anyone outside their own land can be struck down anywhere but a haven.",
+        Era::VoidConsumption => "The Void Consumption begins. The lands are failing everywhere. Whatever is put down in the wild is back before the blood is dry, anyone outside their own land is fair game, and a haven shelters only its own people.",
     }
 }
 

@@ -1,0 +1,120 @@
+//! What each era does to trade and to who may be struck where.
+
+use alloc::vec::Vec;
+
+use eq_clock::Tick;
+use eq_events::World;
+use eq_world_graph::PlaceId;
+
+use super::Game;
+use crate::board::{ContractId, Lot};
+use crate::character::CharacterId;
+use crate::combat::{Refusal, RobRefusal};
+use crate::command::Command;
+use crate::era::Era;
+use crate::event::Event;
+use crate::types::{Resource, Safety};
+
+const ASH: CharacterId = CharacterId::new(0);
+const BRYN: CharacterId = CharacterId::new(1);
+const COLE: CharacterId = CharacterId::new(2);
+const DOV: CharacterId = CharacterId::new(3);
+
+/// Ash and Bryn found a land each; Cole and Dov are of Ash's.
+fn two_lands() -> Game {
+    let mut game = Game::new_world(1, 2, &[]);
+    let mut events = Vec::new();
+    game.apply(&Command::join(ASH, "Ash"), Tick::ZERO, &mut events);
+    game.apply(&Command::join(BRYN, "Bryn"), Tick::ZERO, &mut events);
+    for (who, name) in [(COLE, "Cole"), (DOV, "Dov")] {
+        game.apply(&Command::invite(ASH, name), Tick::ZERO, &mut events);
+        game.apply(&Command::join(who, name), Tick::ZERO, &mut events);
+    }
+    game
+}
+
+fn put(game: &mut Game, who: CharacterId, place: PlaceId) {
+    let index = game.index_of(who).unwrap();
+    game.occupancy.leave(game.characters[index].place, who);
+    game.characters[index].place = place;
+    game.characters[index].busy_until = Tick::ZERO;
+    game.occupancy.enter(place, who);
+}
+
+/// A place in Ash's land that is neither a haven nor contested.
+fn wilds(game: &Game) -> PlaceId {
+    let land = game.zone_at(game.character(ASH).unwrap().home());
+    land.place_ids().find(|&place| game.map.place(place).is_some_and(|data| data.safety == Safety::Buffer)).unwrap()
+}
+
+/// `by` sells 10 ore for 50 kelp to `buyer` at the board where `by`
+/// stands. Returns the kelp waiting there for `by`, and for Ash.
+fn sell(game: &mut Game, by: CharacterId, buyer: CharacterId, now: u64) -> (u64, u64) {
+    let mut events = Vec::new();
+    let index = game.index_of(by).unwrap();
+    game.characters[index].stow(Resource::Ore, 10);
+    let buyer_index = game.index_of(buyer).unwrap();
+    game.characters[buyer_index].stow(Resource::Kelp, 50);
+    let ore = Lot { resource: Resource::Ore, amount: 10 };
+    let kelp = Lot { resource: Resource::Kelp, amount: 50 };
+    game.apply(&Command::post(by, ore, kelp), Tick::new(now), &mut events);
+    let id = game.zone_at(game.character(by).unwrap().place()).board().contracts().last().map_or(ContractId::new(0), |c| c.id);
+    game.apply(&Command::accept(buyer, id), Tick::new(now + 20), &mut events);
+    assert!(!events.iter().any(|event| matches!(event, Event::Character { outcome: crate::Outcome::CannotTrade { .. }, .. })), "{events:?}");
+    let board = game.zone_at(game.character(by).unwrap().place()).board();
+    (board.owed_to(by)[Resource::Kelp.index()], board.owed_to(ASH)[Resource::Kelp.index()])
+}
+
+#[test]
+fn the_founder_takes_a_share_of_trade_at_their_board_and_twice_as_much_in_peace() {
+    let mut game = two_lands();
+    assert_eq!(game.era, Era::Rebuilding);
+    // Cole sells to Dov at Ash's board: a fifth of the kelp is Ash's.
+    assert_eq!(sell(&mut game, COLE, DOV, 100), (40, 10));
+    game.era = Era::Conflict;
+    // A tenth in harder times, on top of what Cole had waiting.
+    assert_eq!(sell(&mut game, COLE, DOV, 200), (40 + 45, 10 + 5));
+    // Ash pays nobody on his own board.
+    let before = game.zone_at(game.character(ASH).unwrap().place()).board().owed_to(ASH)[Resource::Kelp.index()];
+    sell(&mut game, ASH, DOV, 300);
+    let after = game.zone_at(game.character(ASH).unwrap().place()).board().owed_to(ASH)[Resource::Kelp.index()];
+    assert_eq!(after - before, 50);
+}
+
+#[test]
+fn in_a_hard_era_anyone_abroad_may_be_struck_without_a_mark() {
+    let mut game = two_lands();
+    let wilds = wilds(&game);
+    put(&mut game, BRYN, wilds);
+    put(&mut game, COLE, wilds);
+    assert_eq!(game.can_attack(COLE, BRYN), Err(Refusal::Unmarked), "in peace a stranger is safe");
+    game.era = Era::Conflict;
+    assert_eq!(game.can_attack(COLE, BRYN), Ok(()), "abroad in a time of conflict");
+    assert_eq!(game.can_attack(BRYN, COLE), Err(Refusal::Unmarked), "at home is home");
+    // A haven still shelters everyone, until the Void.
+    let haven = game.character(ASH).unwrap().home();
+    put(&mut game, BRYN, haven);
+    put(&mut game, COLE, haven);
+    assert_eq!(game.can_attack(COLE, BRYN), Err(Refusal::Haven));
+}
+
+#[test]
+fn in_the_void_a_haven_shelters_only_its_own() {
+    let mut game = two_lands();
+    let haven = game.character(ASH).unwrap().home();
+    put(&mut game, BRYN, haven);
+    put(&mut game, COLE, haven);
+    game.era = Era::VoidConsumption;
+    assert_eq!(game.can_attack(COLE, BRYN), Ok(()));
+    assert_eq!(game.can_attack(BRYN, COLE), Err(Refusal::Haven));
+    // And a stranger asleep there can be robbed.
+    let (bryn, cole) = (game.index_of(BRYN).unwrap(), game.index_of(COLE).unwrap());
+    game.characters[bryn].stow(Resource::Kelp, 5);
+    game.characters[cole].stow(Resource::Kelp, 5);
+    let mut events = Vec::new();
+    game.apply(&Command::rest(BRYN), Tick::new(10), &mut events);
+    game.apply(&Command::rest(COLE), Tick::new(10), &mut events);
+    let asleep = Tick::new(100);
+    assert_eq!(game.can_rob(COLE, BRYN, asleep), Ok(()));
+    assert_eq!(game.can_rob(BRYN, COLE, asleep), Err(RobRefusal::Haven));
+}

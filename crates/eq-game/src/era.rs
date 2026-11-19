@@ -16,13 +16,16 @@ const CONFLICT_BELOW: i64 = 50;
 /// The era the world is in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Era {
-    /// The lands are well and nobody is at war. Building is cheap.
+    /// The lands are well and nobody is at war. Building is cheap, and
+    /// trade pays its land's founder double.
     #[default]
     Rebuilding,
-    /// The lands are over-worked, or at war. Fighting teaches twice as much.
+    /// The lands are over-worked, or at war. Fighting teaches twice as
+    /// much, and anyone abroad is fair game.
     Conflict,
     /// The lands are failing everywhere. What lives in the wild comes
-    /// back as fast as it is put down.
+    /// back as fast as it is put down, anyone abroad is fair game, and a
+    /// haven shelters only its own.
     VoidConsumption,
 }
 
@@ -68,6 +71,27 @@ impl Era {
     pub const fn lairs_never_rest(self) -> bool {
         matches!(self, Self::VoidConsumption)
     }
+
+    /// The share of what a filled contract earns, in percent, that goes
+    /// to the founder of the land whose board it hangs on. Peace makes
+    /// trade worth taxing.
+    pub const fn trade_tax_percent(self) -> u64 {
+        match self {
+            Self::Rebuilding => 20,
+            Self::Conflict | Self::VoidConsumption => 10,
+        }
+    }
+
+    /// Whether anyone outside their own land may be struck in the
+    /// wilderness without a mark: every border is a front.
+    pub const fn borders_open(self) -> bool {
+        matches!(self, Self::Conflict | Self::VoidConsumption)
+    }
+
+    /// Whether a haven shelters only the people of its own land.
+    pub const fn havens_shrink(self) -> bool {
+        matches!(self, Self::VoidConsumption)
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +114,8 @@ mod tests {
         assert_eq!((Era::Rebuilding.building_percent(), Era::Conflict.building_percent()), (75, 100));
         assert_eq!((Era::Rebuilding.fighting_xp_percent(), Era::Conflict.fighting_xp_percent()), (100, 200));
         assert!(Era::VoidConsumption.lairs_never_rest() && !Era::Conflict.lairs_never_rest());
+        assert_eq!((Era::Rebuilding.trade_tax_percent(), Era::Conflict.trade_tax_percent()), (20, 10));
+        assert!(!Era::Rebuilding.borders_open() && Era::Conflict.borders_open() && Era::VoidConsumption.borders_open());
+        assert!(Era::VoidConsumption.havens_shrink() && !Era::Conflict.havens_shrink());
     }
 }
