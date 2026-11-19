@@ -118,3 +118,37 @@ fn in_the_void_a_haven_shelters_only_its_own() {
     assert_eq!(game.can_rob(COLE, BRYN, asleep), Ok(()));
     assert_eq!(game.can_rob(BRYN, COLE, asleep), Err(RobRefusal::Haven));
 }
+
+#[test]
+fn in_the_void_the_veil_is_thin_the_dead_are_seen_and_learn_fast_and_the_land_pays() {
+    use crate::types::{Cause, SkillKind};
+    let draw = |era: Era| {
+        let mut game = Game::new(1, &["Ash", "Bryn"]);
+        game.era = era;
+        let ledge = game.map.exit(game.anchor(), "north").unwrap().to;
+        for index in 0..2 {
+            game.occupancy.leave(game.characters[index].place, super::id_at(index));
+            game.characters[index].place = ledge;
+            game.occupancy.enter(ledge, super::id_at(index));
+        }
+        game.characters[1].hurt(100);
+        game.fell(1, Cause::LongSleep, 0, Tick::new(1), &mut Vec::new());
+        // Carried off to camp; walk back to the ledge as a spirit.
+        game.occupancy.leave(game.characters[1].place, BRYN);
+        game.characters[1].place = ledge;
+        game.occupancy.enter(ledge, BRYN);
+        game.characters[1].busy_until = Tick::ZERO;
+        let stock = |game: &Game| game.map.place(ledge).unwrap().deposit.unwrap().node.stock();
+        let before = stock(&game);
+        let mut events = Vec::new();
+        game.apply(&Command::gather(BRYN), Tick::new(100), &mut events);
+        let practised = game.character(BRYN).unwrap().practised(SkillKind::Mining).progress();
+        (game.can_see(ASH, BRYN), practised, before - stock(&game))
+    };
+    let (seen, learned, taken) = draw(Era::Rebuilding);
+    assert_eq!((seen, taken), (false, 0));
+    let (seen_in_void, learned_in_void, taken_in_void) = draw(Era::VoidConsumption);
+    assert!(seen_in_void, "the living see the dead");
+    assert_eq!(learned_in_void, learned * 2, "practice counts double");
+    assert_eq!(taken_in_void, crate::content::VOID_DRAW_TAKES, "and the land pays for it");
+}

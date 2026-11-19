@@ -88,6 +88,18 @@ impl Era {
         matches!(self, Self::Conflict | Self::VoidConsumption)
     }
 
+    /// Whether the Spirit Layer bleeds into the world of the living: the
+    /// living see the dead, the dead practise twice as fast, and what the
+    /// dead draw is taken from the land.
+    pub const fn veil_thin(self) -> bool {
+        matches!(self, Self::VoidConsumption)
+    }
+
+    /// How much a spirit's practice counts, as a percentage of the usual.
+    pub const fn afterlife_percent(self) -> u64 {
+        if self.veil_thin() { 200 } else { 100 }
+    }
+
     /// Whether a haven shelters only the people of its own land.
     pub const fn havens_shrink(self) -> bool {
         matches!(self, Self::VoidConsumption)
@@ -117,5 +129,7 @@ mod tests {
         assert_eq!((Era::Rebuilding.trade_tax_percent(), Era::Conflict.trade_tax_percent()), (20, 10));
         assert!(!Era::Rebuilding.borders_open() && Era::Conflict.borders_open() && Era::VoidConsumption.borders_open());
         assert!(Era::VoidConsumption.havens_shrink() && !Era::Conflict.havens_shrink());
+        assert!(Era::VoidConsumption.veil_thin() && !Era::Conflict.veil_thin());
+        assert_eq!((Era::Rebuilding.afterlife_percent(), Era::VoidConsumption.afterlife_percent()), (100, 200));
     }
 }
