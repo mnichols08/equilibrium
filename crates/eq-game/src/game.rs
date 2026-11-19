@@ -40,6 +40,8 @@ mod behemoth;
 mod blood;
 mod resonance;
 mod ruins;
+#[cfg(test)]
+mod tides;
 mod factions;
 #[cfg(test)]
 mod eras;
@@ -567,8 +569,22 @@ impl Game {
     /// A storm takes `harm` health from everyone living who is caught
     /// outside a haven and their own house. It never takes the last of it.
     fn batter(&mut self, harm: u32, events: &mut Vec<Event>) {
+        self.batter_where(harm, events, |_| true);
+    }
+
+    /// Harms everyone at `place` the way a storm does.
+    fn batter_at(&mut self, place: PlaceId, harm: u32, events: &mut Vec<Event>) {
+        self.batter_where(harm, events, |character| character.place() == place);
+    }
+
+    /// Harms everyone `caught` who is out in the open, never taking the
+    /// last of anyone's health.
+    fn batter_where(&mut self, harm: u32, events: &mut Vec<Event>, caught: impl Fn(&Character) -> bool) {
         for index in 0..self.characters.len() {
             let character = &self.characters[index];
+            if !caught(character) {
+                continue;
+            }
             let sheltered = character.is_spirit()
                 || self.is_sheltered(character)
                 || self.map.place(character.place()).is_none_or(|place| place.safety == Safety::Haven);
@@ -1870,15 +1886,37 @@ impl Game {
     }
 
     /// Reports every tidal exit that opened or closed this tick.
-    fn report_passages(&self, now: Tick, events: &mut Vec<Event>) {
+    fn report_passages(&mut self, now: Tick, events: &mut Vec<Event>) {
         let Some(previous) = now.get().checked_sub(1).map(Tick::new) else { return };
+        let mut drowned = Vec::new();
         for (place, exit) in self.map.all_exits() {
             if matches!(exit.passage, Passage::Open) {
                 continue;
             }
-            let open = exit.passage.is_open(now);
-            if open != exit.passage.is_open(previous) {
+            let open = self.is_passable(&exit.passage, now);
+            if open != self.is_passable(&exit.passage, previous) {
                 events.push(Event::PassageChanged { place, label: exit.label.clone(), open });
+                if !open && !drowned.contains(&place) {
+                    drowned.push(place);
+                }
+            }
+        }
+        // In a raging world the tide comes in hard, and whoever is caught
+        // on the shore is thrown about by it.
+        if self.balance.mood().tide_crashes() {
+            for place in drowned {
+                self.batter_at(place, content::TIDE_CRASH_HARM, events);
+            }
+        }
+    }
+
+    /// Whether a way can be taken at `now`, given the tide and what the
+    /// world's mood has made of it.
+    pub fn is_passable(&self, passage: &Passage, now: Tick) -> bool {
+        match (*passage, self.balance.mood().tide_open_percent()) {
+            (Passage::Open, _) | (Passage::Cyclic { .. }, None) => true,
+            (Passage::Cyclic { cycle, open_for }, Some(percent)) => {
+                cycle.is_within(now, Duration::ticks(open_for.as_ticks() * percent / 100))
             }
         }
     }
@@ -2024,17 +2062,17 @@ impl Game {
     }
 
     fn go(&mut self, index: usize, label: &str, now: Tick, outcomes: &mut Vec<Outcome>) {
-        let character = &mut self.characters[index];
-        let from = character.place();
+        let from = self.characters[index].place();
         let Some(exit) = self.map.exit(from, label).cloned() else {
             outcomes.push(Outcome::NoSuchExit { label: label.into() });
             return;
         };
         // The tide is nothing to a spirit: water can be walked.
-        if !character.is_spirit() && !exit.passage.is_open(now) {
+        if !self.characters[index].is_spirit() && !self.is_passable(&exit.passage, now) {
             outcomes.push(Outcome::ExitClosed { label: label.into() });
             return;
         }
+        let character = &self.characters[index];
         let arrives_living = !character.is_spirit();
         // A spirit past its first tier crosses the Spirit Layer faster.
         // So does anyone leaving ground their own faction holds.

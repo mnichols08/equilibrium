@@ -414,6 +414,10 @@ pub const HOUSE_ABANDONED_AFTER: Duration = Duration::days(7);
 /// How much of what built a house lies in its ruins, in percent.
 pub const RUIN_SALVAGE_PERCENT: u64 = 50;
 
+/// How much health a crashing tide takes from anyone caught on the
+/// shore when it comes in, in a raging world. Never the last of it.
+pub const TIDE_CRASH_HARM: u32 = 10;
+
 /// How long raising a house takes.
 pub const RAISE_TIME: Duration = Duration::minutes(5);
 

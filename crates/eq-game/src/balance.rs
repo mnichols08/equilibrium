@@ -57,6 +57,25 @@ impl Mood {
 
     /// The share of what every deposit holds that each storm tears
     /// away, as a percentage.
+    /// How long a tidal way stays clear each tide, in percent of the
+    /// usual, or `None` if the water never comes in at all.
+    pub const fn tide_open_percent(self) -> Option<u64> {
+        match self {
+            Self::Parched => None,
+            Self::Dry => Some(150),
+            Self::Even => Some(100),
+            Self::Restless => Some(75),
+            Self::Raging => Some(50),
+        }
+    }
+
+    /// Whether the tide crashes in hard enough to hurt whoever is
+    /// caught on the shore when it comes.
+    pub const fn tide_crashes(self) -> bool {
+        matches!(self, Self::Raging)
+    }
+
+    /// How much a storm tears from every deposit, as a percentage.
     pub const fn storm_percent(self) -> u32 {
         match self {
             Self::Parched | Self::Dry | Self::Even => 0,

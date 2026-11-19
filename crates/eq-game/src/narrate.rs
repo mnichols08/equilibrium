@@ -726,7 +726,7 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
         .iter()
         .map(|exit| match exit.passage {
             Passage::Open => exit.label.clone(),
-            _ if exit.passage.is_open(now) => format!("{} (clear)", exit.label),
+            _ if game.is_passable(&exit.passage, now) => format!("{} (clear)", exit.label),
             _ => format!("{} (under water)", exit.label),
         })
         .collect();

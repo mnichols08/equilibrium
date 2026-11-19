@@ -450,7 +450,7 @@ fn links(game: &Game, here: PlaceId, now: Tick) -> Vec<LinkView> {
             from: from.get(),
             to: exit.to.get(),
             tidal: !matches!(exit.passage, Passage::Open),
-            open: exit.passage.is_open(now),
+            open: game.is_passable(&exit.passage, now),
         })
         .collect()
 }
@@ -463,7 +463,7 @@ fn exits(game: &Game, here: PlaceId, now: Tick) -> Vec<ExitView> {
             label: exit.label.clone(),
             to: exit.to.get(),
             to_name: game.map().place(exit.to).map_or("", |place| place.name),
-            open: exit.passage.is_open(now),
+            open: game.is_passable(&exit.passage, now),
         })
         .collect()
 }
