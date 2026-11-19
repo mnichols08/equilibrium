@@ -38,6 +38,7 @@ use crate::faction::Factions;
 
 mod behemoth;
 mod blood;
+mod resonance;
 mod factions;
 #[cfg(test)]
 mod eras;
@@ -829,7 +830,7 @@ impl Game {
         if aggressor.place() != victim.place() || victim.is_spirit() {
             return Err(Refusal::NotHere);
         }
-        if self.is_sheltered(victim) || self.at_own_keep(target) {
+        if self.is_sheltered(victim) || self.at_own_keep(target) || self.glyph_ward(victim.place()) {
             return Err(Refusal::Haven);
         }
         let safety = self.safety_for(victim);
@@ -878,7 +879,7 @@ impl Game {
         }
         // Nobody is robbed under their own roof, at their faction's
         // keep, or asleep on ground their faction holds.
-        if self.is_sheltered(victim) || self.factions.holds_for(target, victim.place()) {
+        if self.is_sheltered(victim) || self.factions.holds_for(target, victim.place()) || self.glyph_ward(victim.place()) {
             return Err(RobRefusal::Haven);
         }
         may_rob(self.safety_for(victim))?;
@@ -2012,7 +2013,7 @@ impl Game {
     fn go(&mut self, index: usize, label: &str, now: Tick, outcomes: &mut Vec<Outcome>) {
         let character = &mut self.characters[index];
         let from = character.place();
-        let Some(exit) = self.map.exit(from, label) else {
+        let Some(exit) = self.map.exit(from, label).cloned() else {
             outcomes.push(Outcome::NoSuchExit { label: label.into() });
             return;
         };
@@ -2032,6 +2033,9 @@ impl Game {
             1
         };
         let blood = if arrives_living { self.travel_percent(index, from) } else { 100 };
+        if arrives_living && self.on_wildfire(from, self.characters[index].bloodline()) {
+            self.scorch(from);
+        }
         let character = &mut self.characters[index];
         character.place = exit.to;
         character.arrived_at = now;
@@ -2139,6 +2143,7 @@ impl World for Game {
         self.settle_escorts(events);
         self.settle_factions(now, events);
         self.tend_behemoth(now, events);
+        self.feed_wards(now);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {

@@ -139,6 +139,11 @@ Resilience and crack under heavy blows; the Lunar see spirits and lose
 ectoplasm to heavy blows; the Nomadic leave the wild quickly and tire
 of havens.
 
+Some bloodlines resonate together. Tidal and Stone side by side strike
+harder and are slower to leave. Covenant and Lunar in a house ward it,
+for everyone in it, at a cost of the Lunar's ectoplasm. Ash and Nomadic
+in the wild leave it faster, and burn some of what they leave.
+
 A faction is sworn at a house, its keep, by five people of at least
 three bloodlines. Its members are warned when anyone from another land
 walks onto ground it holds, cannot be robbed asleep there, travel out of it twice

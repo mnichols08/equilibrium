@@ -42,6 +42,10 @@ impl Game {
         if striker.is_some_and(|index| self.characters[index].bloodline() == Bloodline::Tidal) && tide_in {
             damage = damage * TIDAL_HIGH_TIDE_PERCENT / 100;
         }
+        // Silt-Forming: the Tidal and the Stone together mire what they strike.
+        if striker.is_some_and(|index| self.in_silt(self.characters[index].place(), self.characters[index].bloodline())) {
+            damage = damage * crate::content::SILT_PERCENT / 100;
+        }
         if let Some(index) = struck {
             let character = &self.characters[index];
             let in_a_house = self.zones.iter().any(|zone| zone.hall() == Some(character.place()));
@@ -72,11 +76,21 @@ impl Game {
     pub(super) fn travel_percent(&self, index: usize, from: PlaceId) -> u64 {
         let character = &self.characters[index];
         let wild = self.map.place(from).is_some_and(|place| place.safety != crate::types::Safety::Haven);
-        match character.bloodline() {
+        let blood = character.bloodline();
+        let own = match blood {
             Bloodline::Nomadic if wild => crate::content::NOMADIC_TRAVEL_PERCENT,
             Bloodline::Covenant if character.health() <= STASIS_AT_HEALTH => 200,
             _ => 100,
-        }
+        };
+        // What two lines do together, on top of what each does alone.
+        let together = if self.in_silt(from, blood) {
+            crate::content::SILT_SLOWS_PERCENT
+        } else if self.on_wildfire(from, blood) {
+            crate::content::WILDFIRE_TRAVEL_PERCENT
+        } else {
+            100
+        };
+        own * together / 100
     }
 
     /// When someone of the Ash line kills or is killed at `place`,
