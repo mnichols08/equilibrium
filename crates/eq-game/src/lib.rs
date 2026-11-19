@@ -45,6 +45,7 @@ pub mod narrate;
 mod occupancy;
 pub mod era;
 pub mod escort;
+pub mod faction;
 pub mod pact;
 pub mod parser;
 pub mod rest;

@@ -34,6 +34,9 @@ use crate::balance::Balance;
 use crate::era::Era;
 use crate::escort::{Escort, Escorts};
 use crate::zone::{Epitaph, Weather, Zone};
+use crate::faction::Factions;
+
+mod factions;
 
 /// How often the world looks for sleepers whose time has run out.
 const LONG_SLEEP_CHECK: Duration = Duration::minutes(1);
@@ -67,6 +70,8 @@ pub struct Game {
     graves: Vec<Grave>,
     /// Who has paid to be seen safely somewhere, and by whom.
     escorts: Escorts,
+    /// Every faction, and every charter still being signed.
+    factions: Factions,
     /// Every place in the world. Each zone is a run of them.
     map: Graph<Place>,
     /// The world's territories, oldest first. There is always one.
@@ -118,6 +123,7 @@ impl Game {
             bloodline_names: [const { None }; Bloodline::ALL.len()],
             graves: Vec::new(),
             escorts: Escorts::new(),
+            factions: Factions::new(),
             zones: alloc::vec![Zone::new(PlaceId::new(0), map.len(), start, None)],
             map,
             characters,
@@ -815,13 +821,17 @@ impl Game {
         if aggressor.place() != victim.place() || victim.is_spirit() {
             return Err(Refusal::NotHere);
         }
-        if self.is_sheltered(victim) {
+        if self.is_sheltered(victim) || self.at_own_keep(target) {
             return Err(Refusal::Haven);
         }
         let safety = self.place_of(attacker).map_or(Safety::Haven, |place| place.safety);
         // War opens the wilderness: an enemy needs no mark to be struck.
-        // So does a price on someone's head.
-        if safety != Safety::Haven && (self.pact_between(aggressor, victim) == Some(Pact::War) || self.is_hunted(target)) {
+        // So does a price on someone's head, and so does turning your
+        // back on those you were sworn to.
+        let open = self.pact_between(aggressor, victim) == Some(Pact::War)
+            || self.is_hunted(target)
+            || self.factions.wronged(target, attacker);
+        if safety != Safety::Haven && open {
             return Ok(());
         }
         may_attack(safety, victim.standing())
@@ -841,7 +851,9 @@ impl Game {
         if !victim.is_asleep(now) {
             return Err(RobRefusal::Awake);
         }
-        if self.is_sheltered(victim) {
+        // Nobody is robbed under their own roof, at their faction's
+        // keep, or asleep on ground their faction holds.
+        if self.is_sheltered(victim) || self.factions.holds_for(target, victim.place()) {
             return Err(RobRefusal::Haven);
         }
         let safety = self.place_of(robber).map_or(Safety::Haven, |place| place.safety);
@@ -872,6 +884,8 @@ impl Game {
                 let lands = [self.zone_index(*by), self.zone_index(*with)];
                 self.characters().filter(|(_, character)| lands.contains(&self.land_of(character))).map(|(id, _)| id).collect()
             }
+            // Everyone sworn to it hears, wherever they are.
+            Event::Faction { members, .. } => members.clone(),
             // Everyone standing in that territory feels it.
             Event::VitalityChanged { anchor, .. } => {
                 let zone = self.zone_at(*anchor);
@@ -973,7 +987,10 @@ impl Game {
             return;
         }
         match action {
-            Action::Go(label) => self.go(index, label, now, outcomes),
+            Action::Go(label) => {
+                self.go(index, label, now, outcomes);
+                self.warn_of_trespass(index, outcomes, events);
+            }
             Action::Gather => self.gather(index, now, outcomes, events),
             Action::Attack(target) => self.attack(index, *target, now, outcomes, events),
             Action::Fight(creature) => self.fight(index, *creature, now, outcomes),
@@ -999,6 +1016,12 @@ impl Game {
             Action::Accept(id) => self.accept(index, *id, now, outcomes, events),
             Action::Withdraw(id) => self.withdraw(index, *id, now, outcomes),
             Action::Collect => self.collect(index, now, outcomes),
+            Action::Charter(name) => self.charter(index, name, now, outcomes),
+            Action::Sign(name) => self.sign(index, name, now, outcomes, events),
+            Action::Give(lot) => self.give(index, *lot, now, outcomes),
+            Action::Claim => self.claim(index, now, outcomes, events),
+            Action::Forsake => self.forsake(index, now, outcomes, events),
+            Action::Break => self.begin_breaking(index, now, outcomes, events),
             Action::Wake | Action::Return | Action::Relinquish | Action::Seek | Action::Spar | Action::Join(_) => {}
         }
     }
@@ -1933,7 +1956,14 @@ impl Game {
         }
         let arrives_living = !character.is_spirit();
         // A spirit past its first tier crosses the Spirit Layer faster.
-        let pace = if arrives_living { 1 } else { character.spirit_tier().pace() };
+        // So does anyone leaving ground their own faction holds.
+        let pace = if !arrives_living {
+            character.spirit_tier().pace()
+        } else if self.factions.holds_for(id_at(index), from) {
+            2
+        } else {
+            1
+        };
         character.place = exit.to;
         character.busy_until = now + Duration::ticks(TRAVEL_TIME.as_ticks() / pace);
         // Whatever lives there needs a moment to notice a newcomer.
@@ -2030,6 +2060,7 @@ impl World for Game {
         self.creatures_strike(now, events);
         self.upkeep(now, events);
         self.settle_escorts(events);
+        self.settle_factions(now, events);
     }
 
     fn apply(&mut self, command: &Command, now: Tick, events: &mut Vec<Event>) {

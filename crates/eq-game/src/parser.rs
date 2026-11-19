@@ -50,6 +50,8 @@ pub enum Input {
     Bounty(String, Lot),
     /// Read the Contract Board.
     Board,
+    /// How your faction stands.
+    Faction,
     /// Describe the current place.
     Look,
     /// Examine the deposit here and the zone's health.
@@ -124,6 +126,19 @@ pub fn parse(line: &str) -> Input {
             None => Input::Unknown("Tend whom? Try \"tend bryn\".".into()),
         },
         "board" | "contracts" => Input::Board,
+        "faction" | "oath" => Input::Faction,
+        "charter" | "sign" if given.is_empty() => {
+            Input::Unknown(alloc::format!("{verb} what? Give the charter's name: \"{verb} Saltward\"."))
+        }
+        "charter" => Input::Do(Action::Charter(given.into())),
+        "sign" | "swear" => Input::Do(Action::Sign(given.into())),
+        "give" | "pledge" => match rest.zip(words.next()).and_then(|(amount, resource)| lot(amount, resource)) {
+            Some(given) if given.amount > 0 => Input::Do(Action::Give(given)),
+            _ => Input::Unknown("Give what to the vault? Try \"give 20 ore\".".into()),
+        },
+        "claim" => Input::Do(Action::Claim),
+        "forsake" | "betray" => Input::Do(Action::Forsake),
+        "break" | "topple" => Input::Do(Action::Break),
         "post" | "offer" => match offer(rest, words) {
             Some((give, want)) => Input::Do(Action::Post { give, want }),
             None => Input::Unknown("Post what? Try \"post 10 ore for 30 kelp\".".into()),
@@ -354,6 +369,22 @@ mod tests {
         assert!(matches!(parse("accept three"), Input::Unknown(_)));
         assert_eq!(parse("collect"), Input::Do(Action::Collect));
         assert_eq!(parse("tend Bryn"), Input::Tend("bryn".into()));
+    }
+
+    #[test]
+    fn factions_have_their_own_words() {
+        assert_eq!(parse("charter The Saltward"), Input::Do(Action::Charter("The Saltward".into())));
+        assert_eq!(parse("sign the saltward"), Input::Do(Action::Sign("the saltward".into())));
+        assert!(matches!(parse("charter"), Input::Unknown(_)));
+        assert!(matches!(parse("sign  "), Input::Unknown(_)));
+        assert_eq!(parse("give 20 ore"), Input::Do(Action::Give(Lot { resource: Resource::Ore, amount: 20 })));
+        for nonsense in ["give", "give 20", "give 0 ore", "give twenty ore"] {
+            assert!(matches!(parse(nonsense), Input::Unknown(_)), "{nonsense}");
+        }
+        assert_eq!(parse("claim"), Input::Do(Action::Claim));
+        assert_eq!(parse("forsake"), Input::Do(Action::Forsake));
+        assert_eq!(parse("break"), Input::Do(Action::Break));
+        assert_eq!(parse("faction"), Input::Faction);
     }
 
     #[test]

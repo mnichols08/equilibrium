@@ -16,6 +16,7 @@ use crate::combat::{FoundRefusal, NameRefusal, Refusal, ReturnRefusal, RiteRefus
 use crate::content::{LOW_TIDE, MIN_WORKABLE_STOCK, REDEMPTION_CLOCK, TIDE};
 use crate::balance::Mood;
 use crate::era::Era;
+use crate::faction::{Dissolution, FactionNews, FactionRefusal, NOBODY as SPILT};
 use crate::creature::{Being, CreatureKind, RelicTier};
 use crate::pact::{Dealing, Dealt, PactRefusal};
 use crate::{pressure_percent, CharacterId, Event, Game, Outcome};
@@ -74,6 +75,18 @@ Commands:
   accept <number>      at camp, pay a contract's price and take what it holds
   withdraw <number>    at camp, take your own contract down
   collect              at camp, take what your contracts have earned
+  charter <name>       in a house, open a charter and sign it first
+  sign <name>          at its keep, sign a charter: five of three
+                       bloodlines make it a faction, and after that
+                       anyone may sign to join
+  give 20 ore          at your faction's keep, put into its vault
+  claim                set your faction's marker where you stand
+                       (20 ore from the vault, and 10 a day to keep)
+  forsake              leave your faction: you are an oathbreaker for a
+                       week, and those you left may strike you
+  break                break the marker of a faction not yours, where you
+                       stand: ten minutes, and the land marks you for it
+  faction              how your faction stands
   wait [time]          let time pass: wait, wait 30, wait 10m, wait 2h
   stats                show your skills and attributes
   pack (i)             show what you carry
@@ -113,6 +126,14 @@ eases, it is brought back to half full, and for fifteen minutes it is
 warded: it yields only while it is
 pristine and at least half full. The land will not answer the marked.
 
+A faction is sworn at a house, its keep, by five people of at least
+three bloodlines. Its members are warned when anyone else walks onto
+ground it holds, cannot be robbed asleep there, travel out of it twice
+as fast, and cannot be struck or robbed at the keep. Every marker costs
+the vault every day; a vault that cannot pay ends the faction. So does
+one of the five forsaking it, or the marker at the keep being broken.
+When a faction ends, half its vault spills at the keep for anyone.
+
 What the dead drop lies in a relic. Common things anyone can take. A
 relic holding tide-glass is sealed to all but its owner until the body
 is gone or its guard is brought down.
@@ -137,6 +158,7 @@ pub fn event(event: &Event, game: &Game, viewer: CharacterId) -> Option<String> 
         Event::MoodChanged { to, .. } => Some(mood_changed(*to).into()),
         Event::Storm => Some("A storm comes through. The sea tears at the shore, and everything that can be worked is the poorer for it.".into()),
         Event::Pact { by, with, dealt } => Some(pact_news(game, *by, *with, *dealt)),
+        Event::Faction { name, news, .. } => faction_news(game, name, *news, viewer),
         Event::DepositChanged { place, resource, from, to } if *place == here => {
             Some(deposit_changed(*resource, *from, *to))
         }
@@ -171,6 +193,31 @@ fn own(outcome: &Outcome, game: &Game, viewer: CharacterId) -> String {
         Outcome::Joined => format!("You walk out of the tide at {}, new to the shoreline.", place_name(game, home_of(game, viewer))),
         Outcome::Founded => "Nobody has stood here before you. This land is yours to name (call <name>), and your house with it (house <name>). Those you invite (invite <name>) will arrive here.".into(),
         Outcome::CannotFound { why } => cannot_found(*why),
+        Outcome::CannotSwear { why } => cannot_swear(*why).into(),
+        Outcome::CharterOpened { name } => format!(
+            "You open the charter of {name} here and set your name to it. It becomes a faction once five have signed, of at least three bloodlines (sign {name})."
+        ),
+        Outcome::Signed { name, signatories, bloodlines } => {
+            let formed = game.factions().named(name).is_some_and(crate::faction::Faction::is_formed);
+            if formed {
+                format!("You set your name to the charter of {name}. You are sworn to it.")
+            } else {
+                format!("You set your name to the charter of {name}: {signatories} signed, of {bloodlines} bloodline{}.", if *bloodlines == 1 { "" } else { "s" })
+            }
+        }
+        Outcome::Gave { lot: given } => format!("You put {} into the vault.", lot(*given)),
+        Outcome::Claimed => "You set your faction's marker here. This ground is held now, for as long as the vault pays for it.".into(),
+        Outcome::Forsook { name, formed: false } => format!("You take your name back from the charter of {name}."),
+        Outcome::Forsook { name, formed: true } => format!(
+            "You break your oath to {name}. Nobody will take your oath for a week, and those you turned your back on may strike you wherever there is no haven."
+        ),
+        Outcome::BeganBreaking { faction, done_at } => format!(
+            "You set to breaking the marker of {faction}. It will give at {}, if you are still at it. The land marks you for it, and {faction} knows.",
+            clock(*done_at)
+        ),
+        Outcome::BrokeMarker { faction, spoils } => {
+            format!("The marker of {faction} gives. The ground is nobody's, and {} that went into it is yours.", lot(*spoils))
+        }
         Outcome::HouseRaised => "You raise your house here, out of what you carried. From now on nobody can strike or rob your land's people under its roof. The ground it stands on will never be worked again.".into(),
         Outcome::CannotDeal { why } => cannot_deal(*why).into(),
         Outcome::Offered { land, dealing } => format!(
@@ -442,6 +489,10 @@ fn witnessed(who: CharacterId, outcome: &Outcome, game: &Game, viewer: Character
         Outcome::Moved { from, to } if *from == here => {
             Some(format!("{name} leaves for {}.", place_name(game, *to)))
         }
+        Outcome::BeganBreaking { faction, .. } if actor.place() == here => {
+            Some(format!("{name} sets to breaking the marker of {faction}."))
+        }
+        Outcome::Claimed if actor.place() == here => Some(format!("{name} sets a boundary marker here.")),
         Outcome::Gathered { resource, .. } if actor.place() == here => {
             Some(format!("{name} gathers {}.", resource.name()))
         }
@@ -532,6 +583,15 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     if game.era() != Era::Rebuilding {
         lines.push(format!("It is {}.", game.era().name()));
     }
+    if let Some(faction) = game.factions().holding(character.place()) {
+        let ours = if faction.has(viewer) { ", your faction" } else { "" };
+        lines.push(format!("A boundary marker stands here: {}{ours} holds this ground.", faction.name));
+        if faction.keep == character.place() {
+            lines.push(format!("This house is the keep of {}.", faction.name));
+        }
+    } else if let Some(charter) = game.factions().all().iter().find(|charter| charter.keep == character.place() && !charter.is_formed()) {
+        lines.push(format!("A charter lies open here: {}, {} signed.", charter.name, charter.signatories.len()));
+    }
     for grave in game.graves_at(character.place()) {
         let whose = if grave.owner == viewer { "You lie".into() } else { format!("{} lies", name_of(game, grave.owner)) };
         lines.push(format!("{whose} buried here."));
@@ -608,7 +668,13 @@ pub fn place(game: &Game, viewer: CharacterId, now: Tick) -> String {
     for relic in game.relics_at(character.place()) {
         let tier = relic.tier();
         let article = if tier == RelicTier::Ancient { "An" } else { "A" };
-        let whose = if relic.owner == viewer { "your own".into() } else { format!("{}'s", name_of(game, relic.owner)) };
+        let whose = if relic.owner == viewer {
+            "your own".into()
+        } else if relic.owner == SPILT {
+            "spilt from a broken vault".into()
+        } else {
+            format!("{}'s", name_of(game, relic.owner))
+        };
         lines.push(if game.can_open(viewer, relic) {
             format!("{article} {} lies here, {whose}: {}.", tier.name(), pile(&relic.contents))
         } else {
@@ -940,6 +1006,100 @@ pub fn board(game: &Game, viewer: CharacterId) -> String {
 /// An amount of something, as "30 kelp".
 fn lot(lot: Lot) -> String {
     format!("{} {}", lot.amount, lot.resource.name())
+}
+
+fn cannot_swear(why: FactionRefusal) -> &'static str {
+    match why {
+        FactionRefusal::NotAtAHouse => "A charter is opened in a house, and nowhere else.",
+        FactionRefusal::NotAtKeep => "That is done at the faction's keep, the house its charter was opened in.",
+        FactionRefusal::NoSuchCharter => "There is no charter of that name.",
+        FactionRefusal::Sworn => "You are sworn to a faction already, or have signed a charter. Forsake it first.",
+        FactionRefusal::Oathbreaker => "You broke an oath. Nobody will take yours yet.",
+        FactionRefusal::Name(_) => "That name will not do: it is taken, or too short, too long or not made of words.",
+        FactionRefusal::NotSworn => "You are sworn to no faction.",
+        FactionRefusal::NotFormed => "Your charter has not been signed by enough yet.",
+        FactionRefusal::CannotHoldHere => "A marker cannot stand here: not in a haven, a lair or a house.",
+        FactionRefusal::Held => "A faction holds this ground already.",
+        FactionRefusal::VaultShort => "The vault cannot pay for a marker.",
+        FactionRefusal::NothingToGive => "You are not carrying that much.",
+        FactionRefusal::NothingToBreak => "No faction holds this ground.",
+        FactionRefusal::OwnMarker => "That is your own faction's marker.",
+        FactionRefusal::AlreadyBreaking => "Someone is breaking this marker already.",
+    }
+}
+
+/// What a faction's member hears of it.
+fn faction_news(game: &Game, faction: &str, news: FactionNews, viewer: CharacterId) -> Option<String> {
+    let who = |id: CharacterId| if id == viewer { String::from("You") } else { String::from(name_of(game, id)) };
+    Some(match news {
+        FactionNews::Formed => format!("Enough have signed. {faction} is a faction now, and its keep is held."),
+        FactionNews::Joined(member) if member == viewer => return None,
+        FactionNews::Joined(member) => format!("{} swears to {faction}.", name_of(game, member)),
+        FactionNews::Left(member) if member == viewer => return None,
+        FactionNews::Left(member) => format!("{} has broken their oath to {faction}. You may strike them for it.", name_of(game, member)),
+        FactionNews::Claimed(place) => format!("{faction} holds {} now.", place_name(game, place)),
+        FactionNews::Trespass { who: stranger, place } => {
+            format!("{} has come onto {faction}'s ground at {}.", name_of(game, stranger), place_name(game, place))
+        }
+        FactionNews::Breaking { who: breaker, place } if breaker == viewer => {
+            let _ = place;
+            return None;
+        }
+        FactionNews::Breaking { who: breaker, place } => {
+            format!("{} is breaking {faction}'s marker at {}.", name_of(game, breaker), place_name(game, place))
+        }
+        FactionNews::MarkerBroken { by, place } => {
+            format!("{} broke {faction}'s marker at {}. That ground is nobody's.", who(by), place_name(game, place))
+        }
+        FactionNews::UpkeepPaid { amount } => format!("{faction}'s vault pays {amount} ore for its markers."),
+        FactionNews::Dissolved(Dissolution::Exhausted) => format!(
+            "{faction}'s vault could not pay for its markers. The faction is no more; half the vault spills at its keep, and nobody will take your oath for a week."
+        ),
+        FactionNews::Dissolved(Dissolution::Betrayed(traitor)) if traitor == viewer => return None,
+        FactionNews::Dissolved(Dissolution::Betrayed(traitor)) => format!(
+            "{} has betrayed {faction}, and it is no more. Half the vault spills at its keep. You may strike them for it.",
+            name_of(game, traitor)
+        ),
+        FactionNews::Dissolved(Dissolution::Broken(by)) => format!(
+            "{} broke the marker at {faction}'s keep, and the faction is no more. Half the vault spills there, and nobody will take your oath for a week.",
+            who(by)
+        ),
+    })
+}
+
+/// How a faction stands, as one of its members sees it.
+pub fn faction(game: &Game, viewer: CharacterId) -> String {
+    let Some(faction) = game.factions().of(viewer) else {
+        return match game.factions().oathbreaker(viewer) {
+            Some(broken) => format!("You are sworn to no faction. You broke an oath; nobody will take yours until {}.", clock(broken.until)),
+            None => "You are sworn to no faction.".into(),
+        };
+    };
+    let names: Vec<&str> = faction.members.iter().map(|&member| name_of(game, member)).collect();
+    let mut lines = Vec::new();
+    if faction.is_formed() {
+        lines.push(format!("You are sworn to {}, whose keep is {}.", faction.name, place_name(game, faction.keep)));
+        lines.push(format!("Sworn: {}.", names.join(", ")));
+        let held: Vec<&str> = faction.claims.iter().map(|claim| place_name(game, claim.place)).collect();
+        lines.push(format!("It holds {}.", held.join(", ")));
+        let (_, each) = crate::content::UPKEEP_PER_CLAIM;
+        lines.push(format!(
+            "The vault holds {}. It owes {} ore at {}.",
+            pile(&faction.vault),
+            each * faction.claims.len() as u64,
+            clock(faction.upkeep_due)
+        ));
+    } else {
+        lines.push(format!(
+            "You have signed the charter of {}, at {}: {} signed, of {} bloodlines. It needs five, of three.",
+            faction.name,
+            place_name(game, faction.keep),
+            faction.signatories.len(),
+            faction.bloodlines()
+        ));
+        lines.push(format!("Signed: {}.", names.join(", ")));
+    }
+    lines.join("\n")
 }
 
 fn cannot_found(why: FoundRefusal) -> String {
