@@ -218,11 +218,15 @@ impl Game {
         outcomes.extend(breaker.shift_taint(TAINT_FOR_ROBBING));
     }
 
-    /// Whoever walked onto ground a faction holds, and is not sworn to
-    /// it, is seen by everyone who is.
+    /// Whoever walked onto ground a faction holds, from another land and
+    /// not sworn to it, is seen by everyone who is. People going about
+    /// their own land are nothing to warn of.
     pub(super) fn warn_of_trespass(&self, index: usize, outcomes: &[Outcome], events: &mut Vec<Event>) {
         let who = id_at(index);
         let Some(Outcome::Moved { to, .. }) = outcomes.last() else { return };
+        if self.zone_at(*to).contains(self.characters[index].home()) {
+            return;
+        }
         if let Some(faction) = self.factions.holding(*to).filter(|faction| !faction.has(who)) {
             events.push(faction_event(faction, FactionNews::Trespass { who, place: *to }));
         }
@@ -483,10 +487,14 @@ mod tests {
         assert_eq!(game.factions().named("Saltward").unwrap().held(Resource::Ore), 80);
         assert_eq!(own(&act(&mut game, Command::claim(id(1)), 200), id(1)), refused(FactionRefusal::Held));
 
-        put(&mut game, OUTSIDER, keep);
         let to_next = game.map.exits(keep).iter().find(|exit| exit.to == next).unwrap().label.clone();
-        let walked = act(&mut game, Command::go(OUTSIDER, &to_next), 400);
-        assert_eq!(news(&walked), [FactionNews::Trespass { who: OUTSIDER, place: next }]);
+        // Gus is of this land, going about it: nothing to warn of.
+        put(&mut game, OUTSIDER, keep);
+        assert!(news(&act(&mut game, Command::go(OUTSIDER, &to_next), 400)).is_empty());
+        // Fay is from Cole's land, and sworn to nothing here.
+        put(&mut game, id(5), keep);
+        let walked = act(&mut game, Command::go(id(5), &to_next), 400);
+        assert_eq!(news(&walked), [FactionNews::Trespass { who: id(5), place: next }]);
         assert!(game.audience(walked.last().unwrap()).contains(&id(4)));
         // A member walking in is nothing to warn of.
         put(&mut game, id(4), keep);
