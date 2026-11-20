@@ -76,7 +76,7 @@ There is no encryption and no accounts beyond name and passphrase yet: run it on
 
 ### In the browser
 
-A basic top-down view: the same game compiled to WebAssembly, drawn by four [Zubra](https://github.com/journey-to-code-org/zubra) components.
+A basic top-down view: the same game compiled to WebAssembly, drawn by four [Zubra](https://github.com/zubra-js/zubra) components.
 
 Play it at <https://mnichols08.github.io/equilibrium/>. Every merge to `main` that passes CI is published there.
 
